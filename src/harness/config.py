@@ -18,3 +18,12 @@ class HarnessConfig(BaseSettings):
     max_steps: int = 10
     temperature: float = 0.7
     request_timeout: float = 60.0
+    max_retries: int = 2
+    retry_base_delay: float = 0.5
+    max_tokens_budget: int | None = None
+    max_wall_seconds: float | None = None
+    tool_result_max_chars: int = 8000
+    otel_enabled: bool = False
+    otel_exporter: str = "console"      # console | otlp
+    otel_endpoint: str = ""
+    price_map: dict = {}                 # {model: [in_per_1k, out_per_1k]}
