@@ -42,8 +42,14 @@ class ToolRegistry:
 
 
 class ToolExecutor:
-    def __init__(self, registry: ToolRegistry) -> None:
+    def __init__(self, registry: ToolRegistry, max_chars: int | None = None) -> None:
         self._registry = registry
+        self._max_chars = max_chars
+
+    def _truncate(self, text: str) -> str:
+        if self._max_chars is not None and len(text) > self._max_chars:
+            return text[: self._max_chars] + "…(已截断)"
+        return text
 
     async def execute(self, call: ToolCall) -> ToolResult:
         tool = self._registry.get(call.name)
@@ -55,6 +61,6 @@ class ToolExecutor:
             return ToolResult(call.id, f"参数校验失败: {e}", is_error=True)
         try:
             content = await tool.run(params)
-            return ToolResult(call.id, content, is_error=False)
+            return ToolResult(call.id, self._truncate(content), is_error=False)
         except Exception as e:  # 工具内部异常兜成 is_error，喂回模型自纠正
             return ToolResult(call.id, f"工具执行出错: {e}", is_error=True)

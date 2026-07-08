@@ -85,3 +85,23 @@ async def test_executor_run_exception_wrapped():
     result = await ex.execute(ToolCall(id="c1", name="boom", arguments={}))
     assert result.is_error is True
     assert "kaboom" in result.content
+
+
+async def test_tool_result_truncated_when_too_long():
+    class LongTool(Tool):
+        name = "long"
+        description = "返回超长文本"
+
+        class Params(BaseModel):
+            pass
+
+        async def run(self, params) -> str:
+            return "x" * 100
+
+    reg = ToolRegistry()
+    reg.register(LongTool())
+    ex = ToolExecutor(reg, max_chars=20)
+    result = await ex.execute(ToolCall(id="c1", name="long", arguments={}))
+    assert len(result.content) <= 20 + len("…(已截断)")
+    assert result.content.endswith("…(已截断)")
+    assert result.is_error is False
