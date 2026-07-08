@@ -51,3 +51,12 @@ def test_sandbox_defaults():
     assert cfg.http_block_private is True
     assert cfg.http_max_response_bytes == 5_000_000
     assert cfg.http_max_redirects == 5
+
+
+def test_browser_defaults():
+    cfg = HarnessConfig(api_key="k")
+    assert cfg.browser_headless is True
+    assert cfg.browser_nav_timeout == 30.0
+    assert cfg.browser_wait_until == "networkidle"
+    assert cfg.browser_output_max_chars == 8000
+    assert cfg.browser_user_agent == ""

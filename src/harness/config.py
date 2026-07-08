@@ -55,3 +55,9 @@ class HarnessConfig(BaseSettings):
     http_timeout: float = 30.0
     http_max_response_bytes: int = 5_000_000
     http_max_redirects: int = 5
+    # 浏览器
+    browser_headless: bool = True
+    browser_nav_timeout: float = 30.0
+    browser_wait_until: str = "networkidle"   # load | domcontentloaded | networkidle
+    browser_output_max_chars: int = 8000
+    browser_user_agent: str = ""
