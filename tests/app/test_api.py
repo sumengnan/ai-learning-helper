@@ -8,6 +8,7 @@ from app.main import create_app
 from app.config import AppConfig
 from app.assembly import Harness
 from app.conversations import ConversationStore
+from app.documents import DocumentStore
 from harness.tools.base import ToolRegistry
 from harness.tools.builtins.calculator import CalculatorTool
 from harness.persistence.checkpoint import CheckpointStore
@@ -41,8 +42,49 @@ def _fake_harness(make_mock, turns):
 def _client(make_mock, turns=None):
     store = ConversationStore(":memory:")
     app = create_app(config=AppConfig(api_key="k"),
-                     harness=_fake_harness(make_mock, turns or []), store=store)
+                     harness=_fake_harness(make_mock, turns or []), store=store,
+                     doc_store=DocumentStore(":memory:"))
     return TestClient(app), store
+
+
+def _client_with_kb(make_mock, mock_embedder):
+    from harness.memory.memory import Memory
+    from harness.memory.store import MemoryStore
+    from app.documents import DocumentStore
+    mstore = MemoryStore(":memory:", dimension=64)
+    mem = Memory(mstore, mock_embedder(dimension=64), 1000, 0)
+    traj = TrajectoryStore(":memory:")
+    harness = Harness(client=make_mock([]), registry=ToolRegistry(),
+                      checkpoint_store=CheckpointStore(":memory:"),
+                      trajectory_store=traj, sink=TrajectorySink(traj), system_prompt="s",
+                      memory=mem, memory_store=mstore)
+    store = ConversationStore(":memory:")
+    doc_store = DocumentStore(":memory:")
+    app = create_app(config=AppConfig(api_key="k"), harness=harness, store=store, doc_store=doc_store)
+    return TestClient(app)
+
+
+def test_upload_list_delete(make_mock, mock_embedder):
+    client = _client_with_kb(make_mock, mock_embedder)
+    r = client.post("/api/documents", files={"file": ("bio.txt", "光合作用内容".encode(), "text/plain")})
+    assert r.status_code == 200
+    doc_id = r.json()["id"]
+    assert any(d["id"] == doc_id for d in client.get("/api/documents").json())
+    assert client.delete(f"/api/documents/{doc_id}").status_code == 200
+    assert client.get("/api/documents").json() == []
+
+
+def test_upload_unsupported_400(make_mock, mock_embedder):
+    client = _client_with_kb(make_mock, mock_embedder)
+    r = client.post("/api/documents", files={"file": ("x.pptx", b"data", "application/octet-stream")})
+    assert r.status_code == 400
+
+
+def test_upload_503_without_memory(make_mock):
+    # 默认 _client（无 memory 的 harness）→ 上传 503
+    client, _ = _client(make_mock, [])
+    r = client.post("/api/documents", files={"file": ("a.txt", b"hi", "text/plain")})
+    assert r.status_code == 503
 
 
 def test_conversation_crud(make_mock):
@@ -118,7 +160,8 @@ def test_chat_run_error_persists_clean_message():
                       checkpoint_store=CheckpointStore(":memory:"),
                       trajectory_store=traj, sink=TrajectorySink(traj), system_prompt="你是助手")
     store = ConversationStore(":memory:")
-    app = create_app(config=AppConfig(api_key="k"), harness=harness, store=store)
+    app = create_app(config=AppConfig(api_key="k"), harness=harness, store=store,
+                     doc_store=DocumentStore(":memory:"))
     client = TestClient(app)
     cid = client.post("/api/conversations", json={}).json()["id"]
     with client.stream("POST", "/api/chat",
