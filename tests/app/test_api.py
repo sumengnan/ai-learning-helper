@@ -100,3 +100,29 @@ def test_chat_unknown_conversation_404(make_mock, text_turn):
     client, _ = _client(make_mock, [text_turn("x")])
     resp = client.post("/api/chat", json={"conversation_id": "nope", "message": "hi"})
     assert resp.status_code == 404
+
+
+class _BoomClient:
+    """stream 一开就抛非瞬时异常，让 loop 产出 RunError。"""
+
+    async def stream(self, messages, tools):
+        raise RuntimeError("boom")
+        yield  # 让其成为异步生成器（永不到达）
+
+
+def test_chat_run_error_persists_clean_message():
+    # 即便本轮出错（RunError），也应把用户消息 + 干净提示落库，而非泄漏原始错误
+    reg = ToolRegistry(); reg.register(CalculatorTool())
+    traj = TrajectoryStore(":memory:")
+    harness = Harness(client=_BoomClient(), registry=reg,
+                      checkpoint_store=CheckpointStore(":memory:"),
+                      trajectory_store=traj, sink=TrajectorySink(traj), system_prompt="你是助手")
+    store = ConversationStore(":memory:")
+    app = create_app(config=AppConfig(api_key="k"), harness=harness, store=store)
+    client = TestClient(app)
+    cid = client.post("/api/conversations", json={}).json()["id"]
+    with client.stream("POST", "/api/chat",
+                       json={"conversation_id": cid, "message": "hi"}) as resp:
+        types = [e["type"] for e in _sse_events(resp)]
+    assert "RunError" in types
+    assert [m.content for m in store.messages(cid)] == ["hi", "（本轮未能完成，请重试）"]

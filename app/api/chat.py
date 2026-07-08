@@ -39,16 +39,18 @@ def make_chat_router(harness, store, config) -> APIRouter:
 
         async def gen():
             final = None
-            async for ev in harness.sink.wrap(loop.run(req.message)):
-                if isinstance(ev, RunFinished):
-                    final = ev.message.content
-                elif isinstance(ev, RunError):
-                    final = final or f"[出错] {ev.error}"
-                yield f"data: {json.dumps(event_to_dict(ev), ensure_ascii=False)}\n\n"
-            store.append(req.conversation_id, [
-                Message(role=Role.USER, content=req.message),
-                Message(role=Role.ASSISTANT, content=final or ""),
-            ])
+            try:
+                async for ev in harness.sink.wrap(loop.run(req.message)):
+                    if isinstance(ev, RunFinished):
+                        final = ev.message.content
+                    elif isinstance(ev, RunError):
+                        final = final or "（本轮未能完成，请重试）"
+                    yield f"data: {json.dumps(event_to_dict(ev), ensure_ascii=False)}\n\n"
+            finally:
+                # 客户端断开（GeneratorExit）或异常时仍落库，避免本轮用户消息丢失
+                store.append(req.conversation_id, [
+                    Message(role=Role.USER, content=req.message),
+                    Message(role=Role.ASSISTANT, content=final or "（本轮未完成）")])
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 

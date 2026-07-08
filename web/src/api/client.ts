@@ -14,10 +14,12 @@ export function drainSSE(buffer: string): { events: AgentEvent[]; rest: string }
 
 export async function streamChat(
   conversationId: string, message: string, onEvent: (e: AgentEvent) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const resp = await fetch("/api/chat", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ conversation_id: conversationId, message }),
+    signal,
   });
   if (!resp.ok || !resp.body) throw new Error(`chat 失败：${resp.status}`);
   const reader = resp.body.getReader();

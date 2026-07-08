@@ -33,7 +33,12 @@ uvicorn 调用工厂函数时才装配，避免空 api_key 在 import 期就抛�
 uv run uvicorn --factory app.main:create_app --reload
 ```
 
-默认监听 `127.0.0.1:8000`。
+默认监听 `127.0.0.1:8000`。也可用下面这种方式启动，它会读取 `AppConfig` 的
+`app_host` / `app_port`（`HARNESS_APP_HOST` / `HARNESS_APP_PORT`）：
+
+```bash
+uv run python -m app
+```
 
 生产部署：先 `cd web && npm run build` 产出 `web/dist/`，`app/main.py` 会自动挂载
 静态文件到 `/`（后端单独一个进程即可，无需前端 dev server）。
@@ -63,3 +68,14 @@ cd web && npm run test        # 前端：Vitest（drainSSE 纯函数单测）
    "调用工具 calculator" 进度项、最终结果 60。
 3. 再发一条消息：应能延续上一轮上下文。
 4. 侧栏新建/切换/删除对话应正常工作。
+
+## 已知限制
+
+- **单 worker uvicorn（同线程）假设**：harness 的 `CheckpointStore` / `TrajectoryStore`
+  用默认的 sqlite3 连接（`check_same_thread=True`），本 App 假设以单 worker、单
+  事件循环线程运行，故这些连接可安全共享。若要多线程 / 多 worker 部署，需要另行
+  处理跨线程 sqlite 访问（每线程独立连接或换连接池），否则会抛
+  `sqlite3.ProgrammingError`。
+- **`enable_sandbox` 打开时无并发互斥**：LocalSandbox 共享同一个 workspace，同一
+  对话并发 `/api/chat` 之间没有互斥。单用户自用场景下可接受；多并发写同一
+  workspace 可能相互覆盖。
