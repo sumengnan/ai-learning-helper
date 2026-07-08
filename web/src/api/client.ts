@@ -57,4 +57,43 @@ export const api = {
     remove: (id: string): Promise<void> =>
       fetch(`/api/documents/${id}`, { method: "DELETE" }).then(() => undefined),
   },
+  questions: {
+    generate: (topic: string, count: number, types: string[]) =>
+      fetch("/api/questions/generate", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic, count, types }),
+      }).then(async (r) => {
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "出题失败");
+        return r.json();
+      }),
+    list: () => fetch("/api/questions").then((r) => r.json()),
+    remove: (id: string) =>
+      fetch(`/api/questions/${id}`, { method: "DELETE" }).then(() => undefined),
+    removeMany: (ids: string[]) =>
+      fetch("/api/questions/delete", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      }).then(() => undefined),
+  },
+  exams: {
+    compose: (count: number, types: string[] | null) =>
+      fetch("/api/exams", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ count, types }),
+      }).then((r) => r.json()),
+    submit: (answers: { question_id: string; user_answer: unknown }[]) =>
+      fetch("/api/exams/submit", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answers }),
+      }).then((r) => r.json()),
+    history: () => fetch("/api/exams").then((r) => r.json()),
+  },
+  wrong: {
+    list: () => fetch("/api/wrong-answers").then((r) => r.json()),
+    removeMany: (ids: string[]) =>
+      fetch("/api/wrong-answers/delete", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      }).then(() => undefined),
+  },
 };
