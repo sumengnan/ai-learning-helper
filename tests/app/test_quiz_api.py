@@ -67,10 +67,22 @@ def test_generate_422_without_knowledge(make_mock, mock_embedder):
 
 
 @pytest.mark.asyncio
+async def test_generate_502_on_bad_llm_output(make_mock, mock_embedder):
+    async def complete(s, u): return "这不是 JSON"      # 触发 QuizError
+    client, _, mem = _app(make_mock, mock_embedder, complete=complete)
+    await mem.add_texts(["有内容可检索"], "knowledge", {})
+    r = client.post("/api/questions/generate",
+                    json={"topic": "主题", "count": 1, "types": ["single"]})
+    assert r.status_code == 502
+
+
+@pytest.mark.asyncio
 async def test_full_quiz_flow(make_mock, mock_embedder):
     async def complete(s, u):
         # generate 用 GEN_JSON；grade(short) 用打分 JSON。按提示内容区分。
-        return GEN_JSON if "出" in u or "题型" in u else '{"score": 90, "feedback": "好"}'
+        # 按 system_prompt 区分出题/判分（GEN_SYSTEM 含「出题」，GRADE_SYSTEM 含「阅卷」），
+        # 比按 user prompt 关键字更稳，不受题面文案影响。
+        return GEN_JSON if "出题" in s else '{"score": 90, "feedback": "好"}'
     client, qs, mem = _app(make_mock, mock_embedder, complete=complete)
     await mem.add_texts(["光合作用在叶绿体进行，把光能转化为化学能"], "knowledge", {})
 
@@ -98,7 +110,7 @@ async def test_full_quiz_flow(make_mock, mock_embedder):
 @pytest.mark.asyncio
 async def test_wrong_answer_survives_question_delete(make_mock, mock_embedder):
     async def complete(s, u):
-        return GEN_JSON if "题型" in u or "出" in u else '{"score": 10, "feedback": "错"}'
+        return GEN_JSON if "出题" in s else '{"score": 10, "feedback": "错"}'
     client, qs, mem = _app(make_mock, mock_embedder, complete=complete)
     await mem.add_texts(["光合作用内容"], "knowledge", {})
     # 只限定 single 题型：GEN_JSON 中的 short 题会被 _valid 按 types 过滤掉，

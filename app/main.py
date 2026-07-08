@@ -52,7 +52,7 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
     app.include_router(make_chat_router(harness, store, config))
     app.include_router(make_documents_router(service, doc_store, config))
     app.include_router(make_questions_router(quiz_service, question_store, config))
-    app.include_router(make_exams_router(quiz_service, question_store, exam_store, wrong_store))
+    app.include_router(make_exams_router(quiz_service, question_store, exam_store, wrong_store, config))
 
     if os.path.isdir("web/dist"):  # prod：托管前端静态产物
         app.mount("/", StaticFiles(directory="web/dist", html=True), name="static")

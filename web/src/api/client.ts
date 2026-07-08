@@ -80,12 +80,12 @@ export const api = {
       fetch("/api/exams", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ count, types }),
-      }).then((r) => r.json()),
+      }).then((r) => { if (!r.ok) throw new Error("组卷失败"); return r.json(); }),
     submit: (answers: { question_id: string; user_answer: unknown }[]) =>
       fetch("/api/exams/submit", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ answers }),
-      }).then((r) => r.json()),
+      }).then((r) => { if (!r.ok) throw new Error("交卷失败"); return r.json(); }),
     history: () => fetch("/api/exams").then((r) => r.json()),
   },
   wrong: {

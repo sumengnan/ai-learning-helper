@@ -28,12 +28,13 @@ def _snapshot(q: dict) -> dict:
             "answer": q["answer"], "explanation": q["explanation"]}
 
 
-def make_exams_router(quiz_service, question_store, exam_store, wrong_store) -> APIRouter:
+def make_exams_router(quiz_service, question_store, exam_store, wrong_store, config) -> APIRouter:
     router = APIRouter()
 
     @router.post("/api/exams")
     async def compose(body: ComposeBody):
-        picked = question_store.sample(body.count, body.types)
+        count = max(1, min(body.count, config.quiz_max_count))  # 防负数→LIMIT -1 无限量
+        picked = question_store.sample(count, body.types)
         # 去掉 answer/explanation，防前端偷看
         paper = [{"id": q["id"], "type": q["type"], "stem": q["stem"],
                   "options": q["options"]} for q in picked]

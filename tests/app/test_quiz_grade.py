@@ -25,6 +25,15 @@ async def test_grade_truefalse():
 
 
 @pytest.mark.asyncio
+async def test_grade_truefalse_unanswered_is_wrong():
+    # 未作答(None)不能因 bool(None)==False 误判成答对了 False
+    svc = _svc()
+    q = {"type": "truefalse", "answer": False}
+    assert (await svc.grade(q, None))["correct"] is False
+    assert (await svc.grade(q, False))["correct"] is True   # 真答 False 才算对
+
+
+@pytest.mark.asyncio
 async def test_grade_multiple_set_equality():
     svc = _svc()
     q = {"type": "multiple", "answer": [0, 2]}

@@ -92,7 +92,10 @@ class QuizService:
         if t == "single":
             return {"correct": user_answer == question["answer"], "feedback": None}
         if t == "truefalse":
-            return {"correct": bool(user_answer) == question["answer"], "feedback": None}
+            # 必须严格是 bool：未作答(None)/非 bool 一律判错，避免 bool(None)==False
+            # 把「留空」误判成「答对了 False」。
+            correct = isinstance(user_answer, bool) and user_answer == question["answer"]
+            return {"correct": correct, "feedback": None}
         if t == "multiple":
             correct = sorted(user_answer or []) == sorted(question["answer"])
             return {"correct": correct, "feedback": None}
