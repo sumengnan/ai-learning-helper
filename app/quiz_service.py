@@ -31,6 +31,52 @@ def _strip_fence(raw: str) -> str:
     return s.strip()
 
 
+GEN_SYSTEM = (
+    "你是出题老师。只依据提供的资料出题，覆盖要点，难度适中。"
+    "严格只输出一个 JSON 数组，每个元素形如："
+    "{\"type\":\"single|multiple|truefalse|short\",\"stem\":\"题干\","
+    "\"options\":[\"选项\"]或null,\"answer\":单选为选项索引整数/多选为索引数组/"
+    "判断为true或false/简答为参考答案字符串,\"explanation\":\"解析\"}。"
+    "不要输出 JSON 以外的任何文字。")
+
+
+def _gen_user(topic: str, count: int, types: list[str], context: str) -> str:
+    return (f"资料：\n{context}\n\n请就主题「{topic}」出 {count} 道题，"
+            f"题型限定在 {types} 中。严格输出 JSON 数组。")
+
+
+def _valid(q: dict, types: list[str]) -> bool:
+    if not isinstance(q, dict):
+        return False
+    t = q.get("type")
+    if t not in types or not (q.get("stem") or "").strip():
+        return False
+    a = q.get("answer")
+    opts = q.get("options")
+    if t in ("single", "multiple"):
+        if not isinstance(opts, list) or len(opts) < 2:
+            return False
+        if t == "single":
+            return isinstance(a, int) and not isinstance(a, bool) and 0 <= a < len(opts)
+        return (isinstance(a, list) and len(a) > 0
+                and all(isinstance(i, int) and 0 <= i < len(opts) for i in a))
+    if t == "truefalse":
+        return isinstance(a, bool)
+    if t == "short":
+        return isinstance(a, str) and bool(a.strip())
+    return False
+
+
+def _parse_questions(raw: str) -> list:
+    try:
+        data = json.loads(_strip_fence(raw))
+    except (ValueError, TypeError):
+        raise QuizError("生成结果不是合法 JSON")
+    if not isinstance(data, list):
+        raise QuizError("生成结果不是 JSON 数组")
+    return data
+
+
 class QuizService:
     def __init__(self, memory, question_store, complete, collection="knowledge",
                  retrieve_k=6, short_pass_score=60) -> None:
@@ -60,3 +106,18 @@ class QuizService:
             return {"correct": score >= self._short_pass_score,
                     "score": score, "feedback": verdict.get("feedback")}
         raise QuizError(f"未知题型 {t}")
+
+    async def generate(self, topic: str, count: int, types: list[str]) -> list[dict]:
+        hits = await self._memory.search(topic, self._collection, self._retrieve_k)
+        if not hits:
+            raise NoKnowledge(topic)
+        context = "\n\n".join(h.text for h in hits)
+        raw = await self._complete(GEN_SYSTEM, _gen_user(topic, count, types, context))
+        valid = [q for q in _parse_questions(raw) if _valid(q, types)]
+        if not valid:
+            raise QuizError("生成结果无有效题目")
+        for q in valid:
+            q["source"] = topic
+            q["explanation"] = q.get("explanation", "")
+            q["id"] = self._store.create(q)
+        return valid
