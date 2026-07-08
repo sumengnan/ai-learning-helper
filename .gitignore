@@ -15,3 +15,7 @@ venv/
 .idea/
 .vscode/
 .DS_Store
+
+# 前端
+web/node_modules/
+web/dist/
