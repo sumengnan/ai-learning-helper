@@ -9,6 +9,8 @@ from harness.events import (
     RunStarted, TextDelta, ToolCallRequested, ToolStarted, ToolFinished,
     RunFinished, RunError, StepStarted,
 )
+from harness.reliability.budget import BudgetTracker
+from harness.events import ModelUsage
 
 
 def _build_loop(client, max_steps=10):
@@ -23,24 +25,6 @@ def _build_loop(client, max_steps=10):
 
 async def _collect(loop, msg):
     return [ev async for ev in loop.run(msg)]
-
-
-def test_finalize_handles_interleaved_multi_tool_deltas():
-    # 两个 tool_call（index 0/1）的参数分片交错到达，验证按 index 各自累加
-    acc: dict[int, dict] = {}
-    _accumulate(acc, ToolCallDelta(index=0, id="c0", name="calculator", arguments='{"expr'))
-    _accumulate(acc, ToolCallDelta(index=1, id="c1", name="echo", arguments='{"te'))
-    _accumulate(acc, ToolCallDelta(index=0, arguments='ession": "1+1"}'))
-    _accumulate(acc, ToolCallDelta(index=1, arguments='xt": "hi"}'))
-
-    calls = _finalize(acc)
-    assert len(calls) == 2
-    assert calls[0].id == "c0"
-    assert calls[0].name == "calculator"
-    assert calls[0].arguments == {"expression": "1+1"}
-    assert calls[1].id == "c1"
-    assert calls[1].name == "echo"
-    assert calls[1].arguments == {"text": "hi"}
 
 
 async def test_plain_chat_terminates_without_tools(make_mock, text_turn):
@@ -105,3 +89,77 @@ async def test_bad_tool_args_feed_back_is_error(make_mock, text_turn, tool_turn)
     finished = [e for e in events if isinstance(e, ToolFinished)]
     assert finished[0].result.is_error is True
     assert isinstance(events[-1], RunFinished)
+
+
+def _build_loop_with_budget(client, budget, max_steps=10):
+    reg = ToolRegistry()
+    reg.register(CalculatorTool())
+    ctx = ContextManager(system_prompt="s")
+    return AgentLoop(client=client, registry=reg, context=ctx, max_steps=max_steps,
+                     run_id_factory=lambda: "run-test", budget=budget)
+
+
+def test_finalize_returns_calls_and_parse_error():
+    # 交错双工具 + 一个非法 JSON，验证新的 _Finalized 返回
+    acc = {}
+    _accumulate(acc, ToolCallDelta(index=0, id="a", name="calculator", arguments='{"expression":'))
+    _accumulate(acc, ToolCallDelta(index=1, id="b", name="echo", arguments='{"text":"hi"}'))
+    _accumulate(acc, ToolCallDelta(index=0, arguments='"1+1"}'))
+    out = _finalize(acc)
+    assert [f.call.name for f in out] == ["calculator", "echo"]
+    assert out[0].call.arguments == {"expression": "1+1"}
+    assert out[0].parse_error is None
+
+
+def test_finalize_flags_invalid_json():
+    acc = {}
+    _accumulate(acc, ToolCallDelta(index=0, id="a", name="echo", arguments="not-json"))
+    out = _finalize(acc)
+    assert out[0].parse_error is not None
+    assert out[0].call.arguments == {}
+
+
+async def test_invalid_json_tool_args_self_correct(make_mock, text_turn):
+    # 第一轮吐非法 JSON 工具参数 → loop 应回填 is_error 错误消息，不崩溃；第二轮作答
+    from harness.llm.base import StreamChunk
+    bad_tool_turn = [
+        StreamChunk(type="tool_call", tool_call_delta=ToolCallDelta(
+            index=0, id="c1", name="calculator", arguments="not-json")),
+        StreamChunk(type="done"),
+    ]
+    loop = _build_loop(make_mock([bad_tool_turn, text_turn("抱歉，我重发")]))
+    from harness.events import ToolFinished, RunFinished
+    events = [e async for e in loop.run("算点啥")]
+    finished = [e for e in events if isinstance(e, ToolFinished)]
+    assert finished[0].result.is_error is True
+    assert "JSON" in finished[0].result.content
+    assert isinstance(events[-1], RunFinished)
+
+
+async def test_token_budget_breach_emits_run_error(make_mock):
+    # 预算 50，每轮请求工具且 usage=40：step1 后累计 40，step2 后 80，step3 步边界拦截
+    from harness.events import RunError
+    from harness.usage import Usage
+    from harness.llm.base import StreamChunk
+
+    def tool_usage_turn(i):
+        return [
+            StreamChunk(type="tool_call", tool_call_delta=ToolCallDelta(
+                index=0, id=f"c{i}", name="calculator", arguments='{"expression":"1+1"}')),
+            StreamChunk(type="done", usage=Usage(20, 20, 40)),
+        ]
+
+    loop = _build_loop_with_budget(make_mock([tool_usage_turn(i) for i in range(5)]),
+                                   BudgetTracker(max_tokens=50))
+    events = [e async for e in loop.run("go")]
+    assert isinstance(events[-1], RunError)
+    assert "token" in events[-1].error
+
+
+async def test_model_usage_event_emitted(make_mock, text_turn_usage):
+    from harness.events import ModelUsage
+    loop = _build_loop(make_mock([text_turn_usage("你好", prompt=10, completion=5)]))
+    events = [e async for e in loop.run("hi")]
+    mu = [e for e in events if isinstance(e, ModelUsage)]
+    assert len(mu) == 1
+    assert mu[0].usage.total_tokens == 15
