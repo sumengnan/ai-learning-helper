@@ -72,3 +72,8 @@ def test_episodic_defaults():
     cfg = HarnessConfig(api_key="k")
     assert cfg.episode_collection == "episodes"
     assert cfg.episode_recall_k == 3
+
+
+def test_persistence_defaults():
+    cfg = HarnessConfig(api_key="k")
+    assert cfg.persistence_db_path == "harness.db"

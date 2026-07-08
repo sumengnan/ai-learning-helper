@@ -67,3 +67,5 @@ class HarnessConfig(BaseSettings):
     # 情景记忆
     episode_collection: str = "episodes"
     episode_recall_k: int = 3
+    # 持久化
+    persistence_db_path: str = "harness.db"
