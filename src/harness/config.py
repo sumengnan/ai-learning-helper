@@ -37,3 +37,21 @@ class HarnessConfig(BaseSettings):
     chunk_overlap: int = 200
     search_top_k: int = 5
     memory_collection: str = "knowledge"
+    # 容器沙箱
+    sandbox_backend: str = "local"          # local | docker
+    sandbox_docker_host: str = ""           # ssh://user@host
+    sandbox_image: str = "python:3.12-slim"
+    sandbox_workspace: str = "/workspace"
+    sandbox_user: str = "1000:1000"
+    sandbox_network: str = "none"
+    sandbox_mem_limit: str = "512m"
+    sandbox_cpus: float = 1.0
+    sandbox_pids_limit: int = 128
+    sandbox_exec_timeout: float = 30.0
+    sandbox_output_max_chars: int = 8000
+    # 外部 API/HTTP
+    http_allowed_domains: list = []         # 空=放行公网；非空=仅白名单
+    http_block_private: bool = True         # SSRF：拦截内网/元数据
+    http_timeout: float = 30.0
+    http_max_response_bytes: int = 5_000_000
+    http_max_redirects: int = 5

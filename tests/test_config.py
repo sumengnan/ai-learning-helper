@@ -38,3 +38,16 @@ def test_memory_defaults():
     assert cfg.chunk_overlap == 200
     assert cfg.search_top_k == 5
     assert cfg.memory_collection == "knowledge"
+
+
+def test_sandbox_defaults():
+    cfg = HarnessConfig(api_key="k")
+    assert cfg.sandbox_backend == "local"
+    assert cfg.sandbox_image == "python:3.12-slim"
+    assert cfg.sandbox_network == "none"
+    assert cfg.sandbox_exec_timeout == 30.0
+    assert cfg.sandbox_output_max_chars == 8000
+    assert cfg.http_allowed_domains == []
+    assert cfg.http_block_private is True
+    assert cfg.http_max_response_bytes == 5_000_000
+    assert cfg.http_max_redirects == 5
