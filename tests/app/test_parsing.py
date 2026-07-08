@@ -1,6 +1,6 @@
 import io
 import pytest
-from app.parsing import parse_file, UnsupportedFormat
+from app.parsing import parse_file, ParseError, UnsupportedFormat
 
 
 def test_parse_txt_and_md():
@@ -21,3 +21,19 @@ def test_parse_docx_roundtrip():
 def test_unsupported_format_raises():
     with pytest.raises(UnsupportedFormat):
         parse_file("x.pptx", b"data")
+
+
+def test_none_filename_raises_unsupported():
+    # UploadFile.filename 可能为 None，应干净抛 UnsupportedFormat 而非 TypeError
+    with pytest.raises(UnsupportedFormat):
+        parse_file(None, b"data")
+
+
+def test_corrupt_pdf_raises_parse_error():
+    with pytest.raises(ParseError):
+        parse_file("broken.pdf", b"not a real pdf")
+
+
+def test_corrupt_docx_raises_parse_error():
+    with pytest.raises(ParseError):
+        parse_file("broken.docx", b"not a real docx")

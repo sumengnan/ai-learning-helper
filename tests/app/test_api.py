@@ -80,6 +80,20 @@ def test_upload_unsupported_400(make_mock, mock_embedder):
     assert r.status_code == 400
 
 
+def test_upload_oversize_413(make_mock, mock_embedder):
+    client = _client_with_kb(make_mock, mock_embedder)
+    # AppConfig 默认 app_max_upload_mb=20；构造 >20MB 的假文件
+    big = b"x" * (21 * 1024 * 1024)
+    r = client.post("/api/documents", files={"file": ("big.txt", big, "text/plain")})
+    assert r.status_code == 413
+
+
+def test_upload_corrupt_pdf_400(make_mock, mock_embedder):
+    client = _client_with_kb(make_mock, mock_embedder)
+    r = client.post("/api/documents", files={"file": ("x.pdf", b"not a pdf", "application/pdf")})
+    assert r.status_code == 400
+
+
 def test_upload_503_without_memory(make_mock):
     # 默认 _client（无 memory 的 harness）→ 上传 503
     client, _ = _client(make_mock, [])
