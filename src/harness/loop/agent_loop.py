@@ -74,6 +74,7 @@ class AgentLoop:
         model_name: str = "",
         price_map: dict | None = None,
         tool_result_max_chars: int | None = None,
+        checkpoint_store=None,
     ) -> None:
         self._client = client
         self._registry = registry
@@ -85,18 +86,35 @@ class AgentLoop:
         self._tracer = tracer or get_tracer()
         self._model_name = model_name
         self._price_map = price_map or {}
+        self._checkpoint_store = checkpoint_store
 
     async def run(self, user_message: str) -> AsyncIterator[Event]:
         state = RunState(run_id=self._new_run_id())
         state.append(Message(role=Role.USER, content=user_message))
+        async for ev in self._run_from(state, resuming=False):
+            yield ev
+
+    async def resume(self, run_id: str) -> AsyncIterator[Event]:
+        if self._checkpoint_store is None:
+            yield RunError(error="未配置 checkpoint_store，无法 resume")
+            return
+        state = self._checkpoint_store.load(run_id)
+        if state is None:
+            yield RunError(error=f"无 checkpoint：{run_id}")
+            return
+        async for ev in self._run_from(state, resuming=True):
+            yield ev
+
+    async def _run_from(self, state: RunState, resuming: bool) -> AsyncIterator[Event]:
         if self._budget:
             self._budget.start()
-        yield RunStarted(run_id=state.run_id)
+        if not resuming:
+            yield RunStarted(run_id=state.run_id)
 
         with self._tracer.start_as_current_span("run") as run_span:
             run_span.set_attribute("harness.run_id", state.run_id)
 
-            for step in range(1, self._max_steps + 1):
+            for step in range(state.step + 1, self._max_steps + 1):
                 state.step = step
 
                 if self._budget:  # 步边界预算检查
@@ -156,6 +174,8 @@ class AgentLoop:
 
                     if not tool_calls:
                         yield RunFinished(message=assistant)
+                        if self._checkpoint_store:
+                            self._checkpoint_store.delete(state.run_id)
                         return
 
                     yield ToolCallRequested(tool_calls=tool_calls)
@@ -178,5 +198,7 @@ class AgentLoop:
                         state.append(Message(role=Role.TOOL, content=result.content, tool_call_id=tc.id))
                         yield ToolFinished(result=result)
                     yield StepFinished(step=step)
+                    if self._checkpoint_store:  # 步边界存快照
+                        self._checkpoint_store.save(state)
 
             yield RunError(error=f"达到 max_steps 上限 ({self._max_steps})")
