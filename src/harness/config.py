@@ -61,3 +61,6 @@ class HarnessConfig(BaseSettings):
     browser_wait_until: str = "networkidle"   # load | domcontentloaded | networkidle
     browser_output_max_chars: int = 8000
     browser_user_agent: str = ""
+    # 多 Agent 编排
+    max_dispatch_depth: int = 2       # agent 树最大层数（防无限递归）
+    sub_agent_max_steps: int = 10     # 子 agent 单次 run 步数上限

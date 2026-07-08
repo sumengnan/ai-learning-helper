@@ -60,3 +60,9 @@ def test_browser_defaults():
     assert cfg.browser_wait_until == "networkidle"
     assert cfg.browser_output_max_chars == 8000
     assert cfg.browser_user_agent == ""
+
+
+def test_multiagent_defaults():
+    cfg = HarnessConfig(api_key="k")
+    assert cfg.max_dispatch_depth == 2
+    assert cfg.sub_agent_max_steps == 10
