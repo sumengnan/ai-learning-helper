@@ -53,3 +53,22 @@ async def test_browse_empty_content_message():
                  resolve=lambda h: ["93.184.216.34"])
     out = await tool.run(tool.Params(url="http://example.com/e"))
     assert "无可提取正文" in out
+
+
+LONG_ARTICLE = (
+    "<html><head><title>长文</title></head><body>"
+    "<header><nav>首页 关于 联系我们 登录 注册</nav></header>"
+    "<article><p>"
+    + "光合作用是绿色植物利用光能把二氧化碳和水转化为储存能量的有机物并释放氧气的过程" * 20
+    + "</p></article>"
+    "<footer>版权所有 2026 隐私政策 网站地图</footer></body></html>"
+)
+
+
+async def test_browse_truncates_long_text():
+    fb = FakeBrowser({"http://example.com/long": ("长文", LONG_ARTICLE)})
+    tool = BrowseTool(fb, allowed_domains=[], block_private=True, timeout=5,
+                      wait_until="load", max_chars=50,
+                      resolve=lambda h: ["93.184.216.34"])
+    out = await tool.run(tool.Params(url="http://example.com/long"))
+    assert out.endswith("…(已截断)")
