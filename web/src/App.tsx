@@ -2,8 +2,14 @@
 import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
 import { ChatPage } from "./pages/ChatPage";
 import { KnowledgeView } from "./pages/KnowledgeView";
+import QuestionBankView from "./pages/QuestionBankView";
+import ExamView from "./pages/ExamView";
+import WrongAnswersView from "./pages/WrongAnswersView";
 
-const NAV: [string, string][] = [["/", "聊天"], ["/knowledge", "知识库"]];
+const NAV: [string, string][] = [
+  ["/", "聊天"], ["/knowledge", "知识库"], ["/questions", "题库"],
+  ["/exam", "考试"], ["/wrong", "错题集"],
+];
 
 export default function App() {
   return (
@@ -22,6 +28,9 @@ export default function App() {
           <Routes>
             <Route path="/" element={<ChatPage />} />
             <Route path="/knowledge" element={<KnowledgeView />} />
+            <Route path="/questions" element={<QuestionBankView />} />
+            <Route path="/exam" element={<ExamView />} />
+            <Route path="/wrong" element={<WrongAnswersView />} />
           </Routes>
         </div>
       </div>
