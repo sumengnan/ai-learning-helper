@@ -39,9 +39,16 @@ def _fake_harness(make_mock, turns):
                    trajectory_store=traj, sink=TrajectorySink(traj), system_prompt="你是助手")
 
 
+def _cfg():
+    # quiz 三个 store 未在这些测试里注入，走 create_app 默认路径；用 :memory: 免得
+    # 在 cwd 落下 questions.db/exams.db/wrong_answers.db。
+    return AppConfig(api_key="k", questions_db_path=":memory:",
+                     exams_db_path=":memory:", wrong_answers_db_path=":memory:")
+
+
 def _client(make_mock, turns=None):
     store = ConversationStore(":memory:")
-    app = create_app(config=AppConfig(api_key="k"),
+    app = create_app(config=_cfg(),
                      harness=_fake_harness(make_mock, turns or []), store=store,
                      doc_store=DocumentStore(":memory:"))
     return TestClient(app), store
@@ -60,7 +67,7 @@ def _client_with_kb(make_mock, mock_embedder):
                       memory=mem, memory_store=mstore)
     store = ConversationStore(":memory:")
     doc_store = DocumentStore(":memory:")
-    app = create_app(config=AppConfig(api_key="k"), harness=harness, store=store, doc_store=doc_store)
+    app = create_app(config=_cfg(), harness=harness, store=store, doc_store=doc_store)
     return TestClient(app)
 
 
@@ -174,7 +181,7 @@ def test_chat_run_error_persists_clean_message():
                       checkpoint_store=CheckpointStore(":memory:"),
                       trajectory_store=traj, sink=TrajectorySink(traj), system_prompt="你是助手")
     store = ConversationStore(":memory:")
-    app = create_app(config=AppConfig(api_key="k"), harness=harness, store=store,
+    app = create_app(config=_cfg(), harness=harness, store=store,
                      doc_store=DocumentStore(":memory:"))
     client = TestClient(app)
     cid = client.post("/api/conversations", json={}).json()["id"]
