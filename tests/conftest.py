@@ -77,3 +77,31 @@ def done_with_usage():
 @pytest.fixture
 def text_turn_usage():
     return _text_turn_usage
+
+
+class FlakyModelClient:
+    """前 fail_times 次调用 stream 抛 transient_exc，之后正常吐 turn。
+
+    mid_stream=True 时改为：先 yield 一个 chunk 再抛（模拟流中途断裂，不可重试）。
+    """
+
+    def __init__(self, transient_exc, turn, fail_times=1, mid_stream=False):
+        self._exc = transient_exc
+        self._turn = turn
+        self._fail_times = fail_times
+        self._mid_stream = mid_stream
+        self.calls = 0
+
+    async def stream(self, messages, tools):
+        self.calls += 1
+        if self.calls <= self._fail_times:
+            if self._mid_stream:
+                yield StreamChunk(type="text", text="半截")
+            raise self._exc
+        for chunk in self._turn:
+            yield chunk
+
+
+@pytest.fixture
+def flaky_client():
+    return FlakyModelClient
