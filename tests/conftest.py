@@ -1,9 +1,37 @@
 from __future__ import annotations
 
+import hashlib
+import math
+
 import pytest
 
 from harness.llm.base import StreamChunk, ToolCallDelta
 from harness.usage import Usage
+
+
+class MockEmbeddingClient:
+    """确定性 embedder：按空白分词哈希到固定维度并归一化。
+    共享词的文本向量更接近，便于断言近邻。不打网络。
+    """
+
+    def __init__(self, dimension: int = 64):
+        self.dimension = dimension
+
+    async def embed(self, texts):
+        return [self._vec(t) for t in texts]
+
+    def _vec(self, text: str):
+        v = [0.0] * self.dimension
+        for token in text.lower().split():
+            h = int(hashlib.md5(token.encode()).hexdigest(), 16)
+            v[h % self.dimension] += 1.0
+        norm = math.sqrt(sum(x * x for x in v)) or 1.0
+        return [x / norm for x in v]
+
+
+@pytest.fixture
+def mock_embedder():
+    return MockEmbeddingClient
 
 
 class MockModelClient:
