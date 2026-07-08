@@ -58,6 +58,16 @@ async def test_executor_param_validation_error_feeds_back():
     assert result.tool_call_id == "c1"
 
 
+async def test_executor_non_dict_arguments_feed_back_is_error():
+    # arguments 是合法 JSON 但非 dict（字符串）→ 应优雅降级为 is_error 而非抛异常
+    reg = ToolRegistry()
+    reg.register(EchoTool())
+    ex = ToolExecutor(reg)
+    result = await ex.execute(ToolCall(id="c1", name="echo", arguments="not-a-dict"))
+    assert result.is_error is True
+    assert result.tool_call_id == "c1"
+
+
 async def test_executor_run_exception_wrapped():
     class BoomTool(Tool):
         name = "boom"

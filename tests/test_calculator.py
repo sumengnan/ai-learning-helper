@@ -14,6 +14,8 @@ def test_safe_eval_rejects_code():
         safe_eval("__import__('os').system('ls')")
     with pytest.raises(ValueError):
         safe_eval("open('x')")
+    with pytest.raises(ValueError):
+        safe_eval("True")
 
 
 async def test_calculator_tool_run():

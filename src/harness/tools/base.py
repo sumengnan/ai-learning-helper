@@ -50,7 +50,7 @@ class ToolExecutor:
         if tool is None:
             return ToolResult(call.id, f"未知工具: {call.name}", is_error=True)
         try:
-            params = tool.Params(**call.arguments)
+            params = tool.Params.model_validate(call.arguments)
         except ValidationError as e:
             return ToolResult(call.id, f"参数校验失败: {e}", is_error=True)
         try:

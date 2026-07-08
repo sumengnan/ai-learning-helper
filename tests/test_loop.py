@@ -1,6 +1,7 @@
 import pytest
 
-from harness.loop.agent_loop import AgentLoop
+from harness.loop.agent_loop import AgentLoop, _accumulate, _finalize
+from harness.llm.base import ToolCallDelta
 from harness.context.manager import ContextManager
 from harness.tools.base import ToolRegistry
 from harness.tools.builtins.calculator import CalculatorTool
@@ -22,6 +23,24 @@ def _build_loop(client, max_steps=10):
 
 async def _collect(loop, msg):
     return [ev async for ev in loop.run(msg)]
+
+
+def test_finalize_handles_interleaved_multi_tool_deltas():
+    # 两个 tool_call（index 0/1）的参数分片交错到达，验证按 index 各自累加
+    acc: dict[int, dict] = {}
+    _accumulate(acc, ToolCallDelta(index=0, id="c0", name="calculator", arguments='{"expr'))
+    _accumulate(acc, ToolCallDelta(index=1, id="c1", name="echo", arguments='{"te'))
+    _accumulate(acc, ToolCallDelta(index=0, arguments='ession": "1+1"}'))
+    _accumulate(acc, ToolCallDelta(index=1, arguments='xt": "hi"}'))
+
+    calls = _finalize(acc)
+    assert len(calls) == 2
+    assert calls[0].id == "c0"
+    assert calls[0].name == "calculator"
+    assert calls[0].arguments == {"expression": "1+1"}
+    assert calls[1].id == "c1"
+    assert calls[1].name == "echo"
+    assert calls[1].arguments == {"text": "hi"}
 
 
 async def test_plain_chat_terminates_without_tools(make_mock, text_turn):
