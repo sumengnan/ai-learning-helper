@@ -20,3 +20,9 @@ class AppConfig(HarnessConfig):
     cors_origins: list = ["http://localhost:5173"]
     app_max_upload_mb: int = 20
     documents_db_path: str = "documents.db"
+    questions_db_path: str = "questions.db"
+    exams_db_path: str = "exams.db"
+    wrong_answers_db_path: str = "wrong_answers.db"
+    quiz_max_count: int = 20
+    quiz_retrieve_k: int = 6
+    short_pass_score: int = 60
