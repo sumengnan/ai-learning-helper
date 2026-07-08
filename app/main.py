@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from .api.chat import make_chat_router
 from .api.conversations import make_conversations_router
 from .api.documents import make_documents_router
+from .api.downloads import make_downloads_router
 from .api.exams import make_exams_router
 from .api.questions import make_questions_router
 from .assembly import build_harness
@@ -51,6 +52,11 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
     app.include_router(make_conversations_router(store))
     app.include_router(make_chat_router(harness, store, config))
     app.include_router(make_documents_router(service, doc_store, config))
+
+    dstore = getattr(harness, "download_store", None)
+    if dstore is not None:
+        app.include_router(make_downloads_router(dstore))
+
     app.include_router(make_questions_router(quiz_service, question_store, config))
     app.include_router(make_exams_router(quiz_service, question_store, exam_store, wrong_store, config))
 

@@ -1,9 +1,13 @@
+import tempfile
 from app.config import AppConfig
 from app.assembly import build_harness, Harness
 
+_DL_DIR = tempfile.mkdtemp()
+
 
 def _cfg(**kw):
-    return AppConfig(api_key="k", persistence_db_path=":memory:", memory_db_path=":memory:", **kw)
+    return AppConfig(api_key="k", persistence_db_path=":memory:", memory_db_path=":memory:",
+                     downloads_dir=_DL_DIR, downloads_db_path=":memory:", **kw)
 
 
 def test_core_tools_registered_heavy_gated_off():
@@ -31,3 +35,9 @@ def test_build_harness_exposes_memory():
     h = build_harness(_cfg())        # _cfg 已设 api_key + :memory: dbs
     assert h.memory is not None
     assert h.memory_store is not None
+
+
+def test_build_harness_registers_save_download():
+    h = build_harness(_cfg())
+    assert h.registry.get("save_download") is not None
+    assert h.download_store is not None

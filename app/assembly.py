@@ -22,6 +22,7 @@ class Harness:
     system_prompt: str
     memory: object | None = None
     memory_store: object | None = None
+    download_store: object | None = None
 
 
 def build_harness(config) -> Harness:
@@ -101,10 +102,15 @@ def build_harness(config) -> Harness:
                 max_depth=config.max_dispatch_depth, sub_max_steps=config.sub_agent_max_steps,
                 model_name=config.model, price_map=config.price_map))
 
+    from .downloads import DownloadStore
+    from .tools.save_download import SaveDownloadTool
+    dstore = DownloadStore(config.downloads_dir, config.downloads_db_path)
+    _reg(SaveDownloadTool(dstore, config.download_max_mb * 1024 * 1024))
+
     traj = TrajectoryStore(config.persistence_db_path)
     return Harness(
         client=client, registry=reg,
         checkpoint_store=CheckpointStore(config.persistence_db_path),
         trajectory_store=traj, sink=TrajectorySink(traj),
         system_prompt=config.app_system_prompt,
-        memory=memory, memory_store=memory_store)
+        memory=memory, memory_store=memory_store, download_store=dstore)
