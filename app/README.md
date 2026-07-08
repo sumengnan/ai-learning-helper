@@ -116,6 +116,22 @@ cd web && npm run test        # 前端：Vitest（drainSSE 纯函数单测）
 8. 故意答错后到错题集页：错题在列；回题库删除该原题；错题集里的该题快照仍可查看；
    勾选批量删除可清空。
 
+## 下载管理（App-4）
+
+让 agent 把聊天中整理好的产物存成可下载文件。
+
+- **来源**：agent 调用 `save_download(filename, content, encoding)` 工具（应用核心工具，始终注册）。
+  `content` 为文本内容；保存图片等二进制时先 base64 编码并令 `encoding=base64`。文件按
+  内部 id 落 `downloads/` 目录（原文件名仅作元数据，杜绝路径穿越），元数据登记在 `downloads.db`。
+- **上限**：单文件超过 `download_max_mb`（默认 25MB）时工具拒绝并返回提示。
+- **下载页**：列表（文件名 · 类型 · 大小 · 时间）；图片类型显示缩略预览（轻量图库）；「下载」
+  链接直接取 `/api/downloads/{id}`；「删除」同时删磁盘文件与登记。
+
+### 验收方式（手动，接前）
+
+9. 聊天中让助手「把这段整理成 markdown 并用 save_download 保存为 note.md」：下载页出现该文件，
+   点「下载」得到内容；让助手保存一张 base64 图片：下载页显示缩略图；点「删除」后消失。
+
 ## 已知限制
 
 - **单 worker uvicorn（同线程）假设**：harness 的 `CheckpointStore` / `TrajectoryStore`
