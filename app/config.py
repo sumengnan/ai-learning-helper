@@ -26,3 +26,6 @@ class AppConfig(HarnessConfig):
     quiz_max_count: int = 20
     quiz_retrieve_k: int = 6
     short_pass_score: int = 60
+    downloads_dir: str = "downloads"
+    downloads_db_path: str = "downloads.db"
+    download_max_mb: int = 25
