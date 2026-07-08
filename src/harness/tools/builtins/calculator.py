@@ -18,12 +18,18 @@ _OPS = {
     ast.UAdd: operator.pos,
 }
 
+_MAX_POW_EXPONENT = 1000  # 防 9**99999999 类 DoS
+
 
 def _eval(node: ast.AST):
     if isinstance(node, ast.Constant) and type(node.value) in (int, float):
         return node.value
     if isinstance(node, ast.BinOp) and type(node.op) in _OPS:
-        return _OPS[type(node.op)](_eval(node.left), _eval(node.right))
+        left = _eval(node.left)
+        right = _eval(node.right)
+        if isinstance(node.op, ast.Pow) and abs(right) > _MAX_POW_EXPONENT:
+            raise ValueError(f"幂运算指数过大（|{right}| > {_MAX_POW_EXPONENT}）")
+        return _OPS[type(node.op)](left, right)
     if isinstance(node, ast.UnaryOp) and type(node.op) in _OPS:
         return _OPS[type(node.op)](_eval(node.operand))
     raise ValueError("不支持的表达式（仅允许数字与 + - * / ** % 和括号）")
