@@ -26,7 +26,12 @@ class EpisodicMemory:
         self._collection = collection
 
     async def record(self, task: str, outcome: str, success: bool) -> list[int]:
+        # 局限：超长 outcome/task 会被 Memory.add_texts 按 chunk_size 分块存储，
+        # recall 可能只召回其中一个碎片。v1 假定 episode 简短；更完整的方案是先用
+        # LLM 摘要成短经验再入库（规格列为 OUT of scope）。
         ep = Episode(task, outcome, success)
+        # metadata 预留给未来"按 success 过滤召回"（如只看失败案例复盘）；
+        # 当前 RecallEpisodesTool 尚未读取 metadata，仅纯语义检索。
         return await self._memory.add_texts(
             [ep.to_text()], self._collection, {"success": success, "task": task[:200]})
 
@@ -42,11 +47,18 @@ class EpisodeRecorder:
 
     async def wrap(self, events, task: str):
         outcome, success, terminal = "", False, False
-        async for ev in events:
-            if isinstance(ev, RunFinished):
-                outcome, success, terminal = ev.message.content or "", True, True
-            elif isinstance(ev, RunError):
-                outcome, success, terminal = ev.error, False, True
-            yield ev
-        if terminal:   # 只记录跑完（有终止事件）的 run
-            await self._episodic.record(task, outcome, success)
+        try:
+            async for ev in events:
+                if isinstance(ev, RunFinished):
+                    # 注意：RunFinished 只代表 run 正常结束，不等于内容真的成功——
+                    # 模型自称"做不到"也会被记成 success=True。真正判成败需未来的
+                    # LLM-judge（规格列为 OUT of scope）。
+                    outcome, success, terminal = ev.message.content or "", True, True
+                elif isinstance(ev, RunError):
+                    outcome, success, terminal = ev.error, False, True
+                yield ev
+        finally:
+            # 放进 finally：消费者在收到终止事件后 break（生成器被 aclose/GC finalize，
+            # GeneratorExit 在 yield 处抛出）时，落库逻辑仍会执行，不丢记录。
+            if terminal:   # 只记录跑完（有终止事件）的 run；无终止事件 terminal=False 不落库
+                await self._episodic.record(task, outcome, success)

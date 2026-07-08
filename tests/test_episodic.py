@@ -48,6 +48,18 @@ async def test_recorder_records_failure_on_error(mock_embedder):
     assert any("失败" in h.text for h in hits)
 
 
+async def test_recorder_records_even_when_consumer_breaks_after_terminal(mock_embedder):
+    ep = _episodic(mock_embedder)
+    rec = EpisodeRecorder(ep)
+    gen = rec.wrap(_gen([RunFinished(message=Message(role=Role.ASSISTANT, content="done"))]), task="任务X")
+    async for ev in gen:
+        if isinstance(ev, RunFinished):
+            break
+    await gen.aclose()
+    hits = await ep.recall("任务X", 3)
+    assert any("成功" in h.text for h in hits)   # break-after-terminal 仍记录
+
+
 async def test_recorder_no_terminal_no_record(mock_embedder):
     ep = _episodic(mock_embedder)
     rec = EpisodeRecorder(ep)
