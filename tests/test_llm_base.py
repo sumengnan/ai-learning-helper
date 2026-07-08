@@ -18,3 +18,14 @@ def test_stream_chunk_tool_call():
 def test_model_client_is_protocol():
     # Protocol 的替代验证：接口方法存在
     assert hasattr(ModelClient, "stream")
+
+
+def test_stream_chunk_done_carries_usage_and_attempts():
+    from harness.usage import Usage
+    c = StreamChunk(type="done", usage=Usage(1, 2, 3), attempts=2)
+    assert c.usage.total_tokens == 3
+    assert c.attempts == 2
+
+
+def test_stream_chunk_defaults_attempts_one():
+    assert StreamChunk(type="text", text="x").attempts == 1

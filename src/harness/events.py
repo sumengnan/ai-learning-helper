@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .types import Message, ToolCall, ToolResult
+from .usage import Usage
 
 
 class Event:
@@ -52,3 +53,11 @@ class RunFinished(Event):
 @dataclass
 class RunError(Event):
     error: str
+
+
+@dataclass
+class ModelUsage(Event):
+    usage: Usage
+    cost_usd: float | None
+    attempts: int
+    latency_ms: float

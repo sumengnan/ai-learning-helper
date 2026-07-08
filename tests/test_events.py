@@ -20,3 +20,13 @@ def test_event_payloads():
     m = Message(role=Role.ASSISTANT, content="done")
     assert RunFinished(message=m).message is m
     assert RunError(error="boom").error == "boom"
+
+
+def test_model_usage_event():
+    from harness.events import ModelUsage
+    from harness.usage import Usage
+    ev = ModelUsage(usage=Usage(1, 2, 3), cost_usd=0.5, attempts=1, latency_ms=12.0)
+    assert ev.usage.total_tokens == 3
+    assert ev.cost_usd == 0.5
+    assert ev.attempts == 1
+    assert ev.latency_ms == 12.0

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import AsyncIterator, Protocol, runtime_checkable
 
 from ..types import Message
+from ..usage import Usage
 
 
 @dataclass
@@ -19,6 +20,8 @@ class StreamChunk:
     type: str  # "text" | "tool_call" | "done"
     text: str | None = None
     tool_call_delta: ToolCallDelta | None = None
+    usage: Usage | None = None      # 仅 done chunk 携带
+    attempts: int = 1               # 仅 done chunk 携带（重试次数）
 
 
 @runtime_checkable

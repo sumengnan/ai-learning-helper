@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from harness.llm.base import StreamChunk, ToolCallDelta
+from harness.usage import Usage
 
 
 class MockModelClient:
@@ -58,3 +59,21 @@ def text_turn():
 @pytest.fixture
 def tool_turn():
     return _tool_turn
+
+
+def _done_with_usage(prompt=10, completion=5, attempts=1):
+    return StreamChunk(type="done", usage=Usage(prompt, completion, prompt + completion), attempts=attempts)
+
+
+def _text_turn_usage(text: str, prompt=10, completion=5):
+    return [StreamChunk(type="text", text=text), _done_with_usage(prompt, completion)]
+
+
+@pytest.fixture
+def done_with_usage():
+    return _done_with_usage
+
+
+@pytest.fixture
+def text_turn_usage():
+    return _text_turn_usage
