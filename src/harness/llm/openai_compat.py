@@ -6,6 +6,7 @@ from openai import AsyncOpenAI
 
 from ..config import HarnessConfig
 from ..types import Message
+from ..usage import Usage, estimate_usage
 from .base import StreamChunk, ToolCallDelta
 
 
@@ -32,16 +33,22 @@ class OpenAICompatibleClient:
             "messages": [m.to_openai() for m in messages],
             "temperature": self._config.temperature,
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
         if tools:
             kwargs["tools"] = tools
 
+        completion_parts: list[str] = []
+        captured = None
         stream = await self._client.chat.completions.create(**kwargs)
         async for event in stream:
+            if getattr(event, "usage", None):
+                captured = event.usage
             if not event.choices:
                 continue
             delta = event.choices[0].delta
             if getattr(delta, "content", None):
+                completion_parts.append(delta.content)
                 yield StreamChunk(type="text", text=delta.content)
             for tc in (getattr(delta, "tool_calls", None) or []):
                 fn = getattr(tc, "function", None)
@@ -51,4 +58,9 @@ class OpenAICompatibleClient:
                     name=getattr(fn, "name", None) if fn else None,
                     arguments=getattr(fn, "arguments", None) if fn else None,
                 ))
-        yield StreamChunk(type="done")
+
+        if captured is not None:
+            usage = Usage(captured.prompt_tokens, captured.completion_tokens, captured.total_tokens)
+        else:
+            usage = estimate_usage(messages, "".join(completion_parts), self._config.model)
+        yield StreamChunk(type="done", usage=usage)

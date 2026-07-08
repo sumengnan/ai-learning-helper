@@ -55,3 +55,50 @@ async def test_stream_normalizes_text_and_tool_and_done(monkeypatch):
     assert out[1].type == "tool_call" and out[1].tool_call_delta.name == "calculator"
     assert out[2].tool_call_delta.arguments == 'xp": "1+1"}'
     assert out[-1].type == "done"
+
+
+class _FakeUsage:
+    def __init__(self, p, c, t):
+        self.prompt_tokens = p
+        self.completion_tokens = c
+        self.total_tokens = t
+
+
+class _FakeEventUsage:
+    """带 usage、无 choices 的尾 chunk（include_usage 行为）。"""
+    def __init__(self, usage):
+        self.choices = []
+        self.usage = usage
+
+
+async def test_done_chunk_uses_real_usage(monkeypatch):
+    cfg = HarnessConfig(api_key="k")
+    client = OpenAICompatibleClient(cfg)
+    events = [
+        _FakeEvent(_FakeDelta(content="你好")),
+        _FakeEventUsage(_FakeUsage(11, 7, 18)),
+    ]
+
+    async def fake_create(**kwargs):
+        assert kwargs["stream_options"] == {"include_usage": True}
+        return _fake_stream(events)
+
+    monkeypatch.setattr(client._client.chat.completions, "create", fake_create)
+    out = [c async for c in client.stream([Message(role=Role.USER, content="hi")], [])]
+    done = [c for c in out if c.type == "done"][0]
+    assert (done.usage.prompt_tokens, done.usage.completion_tokens, done.usage.total_tokens) == (11, 7, 18)
+
+
+async def test_done_chunk_falls_back_to_tiktoken(monkeypatch):
+    cfg = HarnessConfig(api_key="k")
+    client = OpenAICompatibleClient(cfg)
+    events = [_FakeEvent(_FakeDelta(content="hello world"))]  # 无 usage 尾 chunk
+
+    async def fake_create(**kwargs):
+        return _fake_stream(events)
+
+    monkeypatch.setattr(client._client.chat.completions, "create", fake_create)
+    out = [c async for c in client.stream([Message(role=Role.USER, content="hi")], [])]
+    done = [c for c in out if c.type == "done"][0]
+    assert done.usage is not None
+    assert done.usage.total_tokens > 0   # tiktoken 估算
