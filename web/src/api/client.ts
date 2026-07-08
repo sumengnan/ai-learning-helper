@@ -44,4 +44,17 @@ export const api = {
     fetch(`/api/conversations/${id}/messages`).then((r) => r.json()),
   remove: (id: string): Promise<void> =>
     fetch(`/api/conversations/${id}`, { method: "DELETE" }).then(() => undefined),
+  documents: {
+    list: (): Promise<{ id: string; filename: string; num_chunks: number; uploaded_at: string }[]> =>
+      fetch("/api/documents").then((r) => r.json()),
+    upload: (file: File) => {
+      const fd = new FormData(); fd.append("file", file);
+      return fetch("/api/documents", { method: "POST", body: fd }).then(async (r) => {
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `上传失败：${r.status}`);
+        return r.json();
+      });
+    },
+    remove: (id: string): Promise<void> =>
+      fetch(`/api/documents/${id}`, { method: "DELETE" }).then(() => undefined),
+  },
 };

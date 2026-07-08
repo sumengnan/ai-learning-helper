@@ -1,33 +1,30 @@
-import { useEffect, useState } from "react";
-import type { Conversation, ChatMessage } from "./types";
-import { api } from "./api/client";
-import { ConversationList } from "./components/ConversationList";
-import { ChatView } from "./components/ChatView";
+// web/src/App.tsx
+import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
+import { ChatPage } from "./pages/ChatPage";
+import { KnowledgeView } from "./pages/KnowledgeView";
+
+const NAV: [string, string][] = [["/", "聊天"], ["/knowledge", "知识库"]];
 
 export default function App() {
-  const [convs, setConvs] = useState<Conversation[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [initial, setInitial] = useState<ChatMessage[]>([]);
-
-  const refresh = () => api.list().then(setConvs);
-  useEffect(() => { refresh(); }, []);
-
-  async function select(id: string) {
-    setActiveId(id);
-    const msgs = await api.messages(id);
-    setInitial(msgs.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })));
-  }
-  async function newConv() { const { id } = await api.create(); await refresh(); await select(id); }
-  async function del(id: string) { await api.remove(id); await refresh(); if (id === activeId) { setActiveId(null); setInitial([]); } }
-
   return (
-    <div className="flex h-full">
-      <ConversationList items={convs} activeId={activeId} onSelect={select} onNew={newConv} onDelete={del} />
-      <div className="flex-1">
-        {activeId
-          ? <ChatView key={activeId} conversationId={activeId} initial={initial} />
-          : <div className="h-full flex items-center justify-center text-gray-400">新建或选择一个对话开始</div>}
+    <BrowserRouter>
+      <div className="flex h-full">
+        <nav className="w-20 bg-gray-800 text-white flex flex-col shrink-0">
+          {NAV.map(([to, label]) => (
+            <NavLink key={to} to={to} end={to === "/"}
+              className={({ isActive }) =>
+                `px-2 py-3 text-center text-sm ${isActive ? "bg-gray-600" : "hover:bg-gray-700"}`}>
+              {label}
+            </NavLink>
+          ))}
+        </nav>
+        <div className="flex-1 min-w-0">
+          <Routes>
+            <Route path="/" element={<ChatPage />} />
+            <Route path="/knowledge" element={<KnowledgeView />} />
+          </Routes>
+        </div>
       </div>
-    </div>
+    </BrowserRouter>
   );
 }
