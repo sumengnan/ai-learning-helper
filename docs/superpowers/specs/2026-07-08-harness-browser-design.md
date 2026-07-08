@@ -61,7 +61,7 @@ src/harness/config.py          [改] browser_* 配置
 - `extract.py` 纯函数（HTML→正文），独立单测。
 - `net/policy` 复用——浏览器与 HTTP 共享 SSRF/白名单策略（DRY）。
 - `BrowseTool` 持有 `Browser`，与①`CalculatorTool` 同构。
-- **安全说明**：SSRF 由 `check_url` 拦（同 ③b-1 的 DNS rebinding 已知限制，白名单为强控制）；本地 chromium 自带渲染沙箱；不可信渲染的更强隔离靠未来"远程容器浏览器"（协议已留口）。
+- **安全说明**：SSRF 由 `check_url` 拦（同 ③b-1 的 DNS rebinding 已知限制，白名单为强控制）；浏览器导航现对**每跳重定向**做 SSRF 校验（context.route 拦截导航请求，不合规即 abort），杜绝"公网页 302/JS 跳内网"绕过；子资源请求（img/script/xhr）不做策略校验（其内容不回传给 agent，属较低风险）；本地 chromium 自带渲染沙箱；不可信渲染的更强隔离靠未来"远程容器浏览器"（协议已留口）。
 
 ---
 

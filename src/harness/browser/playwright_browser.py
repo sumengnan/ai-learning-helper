@@ -1,24 +1,33 @@
 # src/harness/browser/playwright_browser.py
 from __future__ import annotations
 
+import asyncio
+
 from .base import PageResult
 
 
 class PlaywrightBrowser:
-    """本地 chromium headless。每次 fetch 用独立 context/page、无跨页状态。"""
+    """本地 chromium headless。每次 fetch 用独立 context/page、无跨页状态。
+
+    安全：传入 url_validator 时，对每一跳导航请求（含重定向）逐跳做 SSRF 校验
+    （route 拦截），不合规即 abort 导航（→ 工具 is_error）。子资源请求
+    （img/script/xhr 等）不做策略校验——属较低风险，其内容不回传给 agent。
+    """
 
     def __init__(self, headless: bool = True, user_agent: str = "") -> None:
         self._headless = headless
         self._user_agent = user_agent or None
         self._pw = None
         self._browser = None
+        self._lock = asyncio.Lock()
 
     async def start(self) -> None:
-        if self._browser is not None:
-            return
-        from playwright.async_api import async_playwright
-        self._pw = await async_playwright().start()
-        self._browser = await self._pw.chromium.launch(headless=self._headless)
+        async with self._lock:
+            if self._browser is not None:
+                return
+            from playwright.async_api import async_playwright
+            self._pw = await async_playwright().start()
+            self._browser = await self._pw.chromium.launch(headless=self._headless)
 
     async def close(self) -> None:
         try:
@@ -30,10 +39,22 @@ class PlaywrightBrowser:
                 await self._pw.stop()
                 self._pw = None
 
-    async def fetch(self, url: str, timeout: float, wait_until: str) -> PageResult:
+    async def fetch(self, url: str, timeout: float, wait_until: str,
+                    url_validator=None) -> PageResult:
         await self.start()
         context = await self._browser.new_context(
             accept_downloads=False, user_agent=self._user_agent)
+        if url_validator is not None:
+            async def _route(route):
+                req = route.request
+                if req.is_navigation_request():
+                    try:
+                        url_validator(req.url)
+                    except Exception:
+                        await route.abort()
+                        return
+                await route.continue_()
+            await context.route("**/*", _route)
         page = await context.new_page()
         try:
             await page.goto(url, wait_until=wait_until, timeout=timeout * 1000)

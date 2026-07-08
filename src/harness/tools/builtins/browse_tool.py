@@ -30,7 +30,12 @@ class BrowseTool(Tool):
 
     async def run(self, params: "BrowseTool.Params") -> str:
         check_url(params.url, self._allowed, self._block_private, **self._resolve_kw)  # PolicyError→is_error
-        page = await self._browser.fetch(params.url, self._timeout, self._wait_until)
+
+        def _validator(u: str) -> None:
+            check_url(u, self._allowed, self._block_private, **self._resolve_kw)
+
+        page = await self._browser.fetch(params.url, self._timeout, self._wait_until,
+                                         url_validator=_validator)
         text = extract_main_text(page.html)
         if not text.strip():
             return f"（页面无可提取正文）标题：{page.title}"

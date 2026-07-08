@@ -48,6 +48,20 @@ async def test_browse_metadata_ip_literal_blocked():
     assert r.is_error is True
 
 
+async def test_browse_redirect_to_internal_blocked():
+    # 初始 example.com 公网、重定向跳到元数据地址 → 逐跳校验应拦截
+    fb = FakeBrowser({"http://example.com/a": ("落地", ARTICLE)},
+                     redirects={"http://example.com/a": "http://169.254.169.254/"})
+    tool = BrowseTool(fb, allowed_domains=[], block_private=True, timeout=5,
+                      wait_until="load", max_chars=8000,
+                      resolve=lambda h: ["93.184.216.34"] if h == "example.com" else [h])
+    reg = ToolRegistry(); reg.register(tool)
+    ex = ToolExecutor(reg)
+    r = await ex.execute(ToolCall(id="c1", name="browse",
+                                  arguments={"url": "http://example.com/a"}))
+    assert r.is_error is True   # 重定向跳被策略拦截
+
+
 async def test_browse_empty_content_message():
     tool = _tool({"http://example.com/e": ("空页", "<html><body></body></html>")},
                  resolve=lambda h: ["93.184.216.34"])
