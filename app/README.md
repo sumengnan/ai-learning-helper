@@ -1,7 +1,8 @@
-# AI 学习助手 · App-1（聊天脊柱）
+# AI 学习助手 · App-1/App-2（聊天脊柱 + 知识库）
 
 FastAPI 后端把 `src/harness`（作为库导入，零改动）装配成一个可通过网页多轮对话、
-实时看到 agent 干活的服务；`web/` 是配套的 React SPA。
+实时看到 agent 干活的服务，并支持上传文件建知识库供检索；`web/` 是配套的 React SPA
+（左侧导航：聊天 / 知识库）。
 
 ## 运行
 
@@ -24,7 +25,24 @@ HARNESS_ENABLE_DISPATCH=false    # 多 agent 编排（App-1 暂不使用）
 HARNESS_EMBEDDING_API_KEY=       # 留空则回退用 HARNESS_API_KEY；配了才注册 search_memory/remember
 HARNESS_CONVERSATIONS_DB_PATH=conversations.db
 HARNESS_CORS_ORIGINS=["http://localhost:5173"]
+HARNESS_APP_MAX_UPLOAD_MB=20             # 知识库上传大小上限（MB）
+HARNESS_DOCUMENTS_DB_PATH=documents.db   # 文档登记表存储位置
 ```
+
+### 知识库（App-2）
+
+知识库页（前端 `/knowledge`）支持上传 **PDF / docx / txt / md** 文件：解析正文后
+分块 embedding 写入 harness `Memory` 的 `knowledge` collection，agent 聊天时可通过
+`search_memory` 工具检索到；文档管理页可查看已上传文档（文件名/块数/时间）并删除
+（删除会同时清掉对应的 embedding chunk）。
+
+- **需要 embedding 端点**：`HARNESS_API_KEY`/`HARNESS_EMBEDDING_API_KEY` 未配置时，
+  `build_harness` 不会装配 `Memory`，此时上传接口 `POST /api/documents` 返回
+  **503**（知识库未启用），列表/查询仍可用（返回空列表）。
+- **支持格式**：`.pdf`、`.docx`、`.txt`、`.md`；其他扩展名返回 **400**（不支持的格式）。
+- **上传大小上限**：默认 20MB（`HARNESS_APP_MAX_UPLOAD_MB` 可调），超限返回 **413**。
+- **不支持**：pptx/xlsx/html/epub、后台异步解析大文件、rerank、按文档过滤检索——
+  见规格 `docs/superpowers/specs/2026-07-08-app-knowledge-base-design.md` 的 OUT 范围。
 
 启动（**必须** `--factory`：`app.main` 不在模块级构造真实 harness，延迟到
 uvicorn 调用工厂函数时才装配，避免空 api_key 在 import 期就抛错）：
@@ -68,6 +86,9 @@ cd web && npm run test        # 前端：Vitest（drainSSE 纯函数单测）
    "调用工具 calculator" 进度项、最终结果 60。
 3. 再发一条消息：应能延续上一轮上下文。
 4. 侧栏新建/切换/删除对话应正常工作。
+5. 切到知识库页，上传一个 txt/pdf：列表出现该文档（含块数）；回聊天页问该文档
+   内容：agent 应通过 `search_memory` 召回并作答；回知识库页删除该文档：再问
+   同样内容应召回不到。
 
 ## 已知限制
 
