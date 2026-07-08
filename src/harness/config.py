@@ -23,6 +23,7 @@ class HarnessConfig(BaseSettings):
     max_tokens_budget: int | None = None
     max_wall_seconds: float | None = None
     tool_result_max_chars: int = 8000
+    include_usage: bool = True
     otel_enabled: bool = False
     otel_exporter: str = "console"      # console | otlp
     otel_endpoint: str = ""

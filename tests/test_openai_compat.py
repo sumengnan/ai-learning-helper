@@ -102,3 +102,19 @@ async def test_done_chunk_falls_back_to_tiktoken(monkeypatch):
     done = [c for c in out if c.type == "done"][0]
     assert done.usage is not None
     assert done.usage.total_tokens > 0   # tiktoken 估算
+
+
+async def test_include_usage_disabled_omits_stream_options(monkeypatch):
+    cfg = HarnessConfig(api_key="k", include_usage=False)
+    client = OpenAICompatibleClient(cfg)
+    events = [_FakeEvent(_FakeDelta(content="hello world"))]  # 无 usage 尾 chunk
+
+    async def fake_create(**kwargs):
+        assert "stream_options" not in kwargs
+        return _fake_stream(events)
+
+    monkeypatch.setattr(client._client.chat.completions, "create", fake_create)
+    out = [c async for c in client.stream([Message(role=Role.USER, content="hi")], [])]
+    done = [c for c in out if c.type == "done"][0]
+    assert done.usage is not None
+    assert done.usage.total_tokens > 0   # tiktoken 兜底

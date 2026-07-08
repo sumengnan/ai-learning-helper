@@ -17,6 +17,9 @@ class BudgetTracker:
     """纯累计器：累计 token 与墙钟时间，check() 超限即抛 BudgetExceeded。
 
     clock 可注入以便测试（默认 time.monotonic）。
+
+    注意：未调用 start() 时，max_wall_seconds 检查会被静默跳过（无起始时刻可比较）；
+    请在使用前先调用 start()。
     """
 
     def __init__(

@@ -1,7 +1,7 @@
 import pytest
 
 from harness.loop.agent_loop import AgentLoop, _accumulate, _finalize
-from harness.llm.base import ToolCallDelta
+from harness.llm.base import ToolCallDelta, StreamChunk
 from harness.context.manager import ContextManager
 from harness.tools.base import ToolRegistry
 from harness.tools.builtins.calculator import CalculatorTool
@@ -163,3 +163,63 @@ async def test_model_usage_event_emitted(make_mock, text_turn_usage):
     mu = [e for e in events if isinstance(e, ModelUsage)]
     assert len(mu) == 1
     assert mu[0].usage.total_tokens == 15
+
+
+def test_finalize_flags_non_dict_json():
+    # 合法 JSON 但不是对象（数组）→ parse_error 非空、arguments 降级为空 dict
+    acc = {}
+    _accumulate(acc, ToolCallDelta(index=0, id="a", name="echo", arguments="[1,2]"))
+    out = _finalize(acc)
+    assert out[0].parse_error is not None
+    assert out[0].call.arguments == {}
+
+
+async def test_retry_exhausted_becomes_run_error(flaky_client, text_turn):
+    # 重试耗尽 → RetryingModelClient 抛瞬时错误 → loop 的 except → RunError（不外泄异常）
+    from harness.reliability.retry import RetryingModelClient
+
+    class Transient(Exception):
+        pass
+
+    async def fake_sleep(d):
+        pass
+
+    inner = flaky_client(Transient("timeout"), text_turn("never"), fail_times=99)
+    client = RetryingModelClient(inner, max_retries=2, base_delay=0.01,
+                                 sleep=fake_sleep, transient=(Transient,))
+    loop = _build_loop(client)
+    events = [e async for e in loop.run("hi")]
+    assert isinstance(events[-1], RunError)
+    assert "模型调用失败" in events[-1].error
+
+
+class _FakeClock:
+    """按调用次数返回序列值；越界后返回最后一个值，避免 StopIteration。"""
+
+    def __init__(self, seq):
+        self._seq = seq
+        self._i = 0
+
+    def __call__(self):
+        v = self._seq[min(self._i, len(self._seq) - 1)]
+        self._i += 1
+        return v
+
+
+async def test_wall_budget_breach_emits_run_error(make_mock):
+    from harness.usage import Usage
+
+    def tool_usage_turn(i):
+        return [
+            StreamChunk(type="tool_call", tool_call_delta=ToolCallDelta(
+                index=0, id=f"c{i}", name="calculator", arguments='{"expression":"1+1"}')),
+            StreamChunk(type="done", usage=Usage(1, 1, 2)),
+        ]
+
+    # 时钟调用序列：start()=0.0, step1 check=1.0（未超）, step2 check=5.0（>3.0 超限）
+    clock = _FakeClock([0.0, 1.0, 5.0])
+    budget = BudgetTracker(max_wall_seconds=3.0, clock=clock)
+    loop = _build_loop_with_budget(make_mock([tool_usage_turn(i) for i in range(5)]), budget)
+    events = [e async for e in loop.run("go")]
+    assert isinstance(events[-1], RunError)
+    assert "时间" in events[-1].error

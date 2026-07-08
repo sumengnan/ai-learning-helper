@@ -33,8 +33,9 @@ class OpenAICompatibleClient:
             "messages": [m.to_openai() for m in messages],
             "temperature": self._config.temperature,
             "stream": True,
-            "stream_options": {"include_usage": True},
         }
+        if self._config.include_usage:
+            kwargs["stream_options"] = {"include_usage": True}
         if tools:
             kwargs["tools"] = tools
 
