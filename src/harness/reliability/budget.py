@@ -20,6 +20,9 @@ class BudgetTracker:
 
     注意：未调用 start() 时，max_wall_seconds 检查会被静默跳过（无起始时刻可比较）；
     请在使用前先调用 start()。
+
+    start() 幂等，全树只在根 run 设一次墙钟基准；每个顶层 run 应用新的
+    BudgetTracker 实例。
     """
 
     def __init__(
@@ -35,7 +38,8 @@ class BudgetTracker:
         self._total_tokens = 0
 
     def start(self) -> None:
-        self._start = self._clock()
+        if self._start is None:   # 幂等：只在首次设墙钟基准（多 agent 共享 budget）
+            self._start = self._clock()
 
     def add_usage(self, usage: Usage) -> None:
         self._total_tokens += usage.total_tokens

@@ -48,3 +48,18 @@ def test_depth_limit_controls_dispatch_injection(make_mock, text_turn):
 async def test_dispatch_description_lists_roles(make_mock, text_turn):
     tool = _dispatch(make_mock([text_turn("x")]))
     assert "researcher" in tool.description
+
+
+async def test_subagent_no_result_is_error(make_mock, tool_turn):
+    # 子 agent 只吐工具调用、sub_max_steps=1 → 永不 RunFinished → 达上限 RunError
+    # → DispatchTool.run final=None → 抛 RuntimeError → ToolExecutor 兜成 is_error
+    roster = AgentRoster([AgentSpec("researcher", "研究员", "你是研究员", ["calculator"])])
+    pool = {"calculator": CalculatorTool()}
+    client = make_mock([tool_turn("calculator", '{"expression": "1+1"}')])
+    tool = DispatchTool(roster, pool, client, depth=0, max_depth=2, sub_max_steps=1)
+    reg = ToolRegistry(); reg.register(tool)
+    ex = ToolExecutor(reg)
+    r = await ex.execute(ToolCall(id="c1", name="dispatch",
+                                  arguments={"agent": "researcher", "task": "t"}))
+    assert r.is_error is True
+    assert "未产出结果" in r.content

@@ -10,6 +10,13 @@ from .spec import AgentRoster, AgentSpec
 
 
 class DispatchTool(Tool):
+    """把子任务派给专职子 agent 的工具。
+
+    深度语义：顶层 DispatchTool 由调用方直接构造并注册到主 loop，不受 max_depth
+    约束；`depth` 从调用方传入的值起计数。仅当 `depth + 1 < max_depth` 时才向子
+    registry 注入下一层 dispatch，从而限制 agent 树的最大层数。
+    """
+
     name = "dispatch"
 
     class Params(BaseModel):
