@@ -96,4 +96,9 @@ export const api = {
         body: JSON.stringify({ ids }),
       }).then(() => undefined),
   },
+  downloads: {
+    list: () => fetch("/api/downloads").then((r) => r.json()),
+    remove: (id: string) =>
+      fetch(`/api/downloads/${id}`, { method: "DELETE" }).then(() => undefined),
+  },
 };

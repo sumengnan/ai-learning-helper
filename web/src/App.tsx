@@ -5,10 +5,11 @@ import { KnowledgeView } from "./pages/KnowledgeView";
 import QuestionBankView from "./pages/QuestionBankView";
 import ExamView from "./pages/ExamView";
 import WrongAnswersView from "./pages/WrongAnswersView";
+import DownloadsView from "./pages/DownloadsView";
 
 const NAV: [string, string][] = [
   ["/", "聊天"], ["/knowledge", "知识库"], ["/questions", "题库"],
-  ["/exam", "考试"], ["/wrong", "错题集"],
+  ["/exam", "考试"], ["/wrong", "错题集"], ["/downloads", "下载"],
 ];
 
 export default function App() {
@@ -31,6 +32,7 @@ export default function App() {
             <Route path="/questions" element={<QuestionBankView />} />
             <Route path="/exam" element={<ExamView />} />
             <Route path="/wrong" element={<WrongAnswersView />} />
+            <Route path="/downloads" element={<DownloadsView />} />
           </Routes>
         </div>
       </div>
