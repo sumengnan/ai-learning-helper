@@ -25,3 +25,9 @@ def test_browser_gated_on():
 def test_dispatch_gated_on():
     h = build_harness(_cfg(enable_dispatch=True, enable_browser=True))
     assert h.registry.get("dispatch") is not None
+
+
+def test_build_harness_exposes_memory():
+    h = build_harness(_cfg())        # _cfg 已设 api_key + :memory: dbs
+    assert h.memory is not None
+    assert h.memory_store is not None

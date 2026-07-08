@@ -20,6 +20,8 @@ class Harness:
     trajectory_store: TrajectoryStore
     sink: TrajectorySink
     system_prompt: str
+    memory: object | None = None
+    memory_store: object | None = None
 
 
 def build_harness(config) -> Harness:
@@ -29,6 +31,8 @@ def build_harness(config) -> Harness:
 
     reg = ToolRegistry()
     pool: dict = {}   # 工具池：name -> Tool，供 dispatch 组装子 agent registry
+    memory = None
+    memory_store = None
 
     def _reg(tool):
         reg.register(tool)
@@ -51,8 +55,10 @@ def build_harness(config) -> Harness:
         embedder = OpenAICompatibleEmbeddingClient(
             config.embedding_base_url, config.embedding_api_key or config.api_key,
             config.embedding_model, config.embedding_dimension)
-        mem = Memory(MemoryStore(config.memory_db_path, config.embedding_dimension), embedder,
-                     config.chunk_size, config.chunk_overlap)
+        mem_store = MemoryStore(config.memory_db_path, config.embedding_dimension)
+        mem = Memory(mem_store, embedder, config.chunk_size, config.chunk_overlap)
+        memory = mem
+        memory_store = mem_store
         _reg(SearchMemoryTool(mem, default_k=config.search_top_k))
         _reg(RememberTool(mem))
         _reg(RecallEpisodesTool(EpisodicMemory(mem), default_k=config.episode_recall_k))
@@ -100,4 +106,5 @@ def build_harness(config) -> Harness:
         client=client, registry=reg,
         checkpoint_store=CheckpointStore(config.persistence_db_path),
         trajectory_store=traj, sink=TrajectorySink(traj),
-        system_prompt=config.app_system_prompt)
+        system_prompt=config.app_system_prompt,
+        memory=memory, memory_store=memory_store)
