@@ -10,6 +10,7 @@ dependencies = [
     "opentelemetry-api>=1.25",
     "opentelemetry-sdk>=1.25",
     "tiktoken>=0.7",
+    "sqlite-vec>=0.1.6",
 ]
 
 [dependency-groups]

@@ -28,3 +28,12 @@ class HarnessConfig(BaseSettings):
     otel_exporter: str = "console"      # console | otlp
     otel_endpoint: str = ""
     price_map: dict = {}                 # {model: [in_per_1k, out_per_1k]}
+    embedding_base_url: str = "https://api.openai.com/v1"
+    embedding_api_key: str = ""          # 空则回退用 api_key
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dimension: int = 1536
+    memory_db_path: str = "memory.db"
+    chunk_size: int = 1000
+    chunk_overlap: int = 200
+    search_top_k: int = 5
+    memory_collection: str = "knowledge"

@@ -26,3 +26,15 @@ def test_reliability_defaults():
     assert cfg.otel_enabled is False
     assert cfg.otel_exporter == "console"
     assert cfg.price_map == {}
+
+
+def test_memory_defaults():
+    cfg = HarnessConfig(api_key="k")
+    assert cfg.embedding_base_url.endswith("/v1")
+    assert cfg.embedding_model == "text-embedding-3-small"
+    assert cfg.embedding_dimension == 1536
+    assert cfg.memory_db_path == "memory.db"
+    assert cfg.chunk_size == 1000
+    assert cfg.chunk_overlap == 200
+    assert cfg.search_top_k == 5
+    assert cfg.memory_collection == "knowledge"
