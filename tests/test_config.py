@@ -66,3 +66,9 @@ def test_multiagent_defaults():
     cfg = HarnessConfig(api_key="k")
     assert cfg.max_dispatch_depth == 2
     assert cfg.sub_agent_max_steps == 10
+
+
+def test_episodic_defaults():
+    cfg = HarnessConfig(api_key="k")
+    assert cfg.episode_collection == "episodes"
+    assert cfg.episode_recall_k == 3

@@ -64,3 +64,6 @@ class HarnessConfig(BaseSettings):
     # 多 Agent 编排
     max_dispatch_depth: int = 2       # agent 树最大层数（防无限递归）
     sub_agent_max_steps: int = 10     # 子 agent 单次 run 步数上限
+    # 情景记忆
+    episode_collection: str = "episodes"
+    episode_recall_k: int = 3
