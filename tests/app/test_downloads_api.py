@@ -58,6 +58,15 @@ def test_download_404(tmp_path):
     assert client.get("/api/downloads/nope").status_code == 404
 
 
+def test_download_404_when_disk_file_missing(tmp_path):
+    # 登记在但磁盘文件被外部删 → 404（而非 FileResponse os.stat 抛 500）
+    import os
+    client, dstore = _client(tmp_path)
+    rec = dstore.create("x.txt", b"x", "text/plain")
+    os.remove(dstore.path(rec["id"]))
+    assert client.get(f"/api/downloads/{rec['id']}").status_code == 404
+
+
 def test_delete_removes_file_and_row(tmp_path):
     import os
     client, dstore = _client(tmp_path)

@@ -1,8 +1,17 @@
-import tempfile
+import pytest
+
 from app.config import AppConfig
 from app.assembly import build_harness, Harness
 
-_DL_DIR = tempfile.mkdtemp()
+_DL_DIR = ""
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _dl_dir(tmp_path_factory):
+    # 由 pytest 托管的临时目录（会自动清理），供 build_harness 的 DownloadStore 落盘，
+    # 不在 cwd、也不像 tempfile.mkdtemp 那样泄漏残留目录。
+    global _DL_DIR
+    _DL_DIR = str(tmp_path_factory.mktemp("dl"))
 
 
 def _cfg(**kw):
