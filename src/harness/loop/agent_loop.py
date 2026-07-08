@@ -162,16 +162,19 @@ class AgentLoop:
                     for f in finalized:
                         tc = f.call
                         yield ToolStarted(tool_call=tc)
-                        if f.parse_error:  # 自纠正：回填明确错误，让模型下一步重发
-                            result = ToolResult(
-                                tc.id,
-                                f"工具调用参数不是合法 JSON：{f.parse_error}，请重新调用。",
-                                is_error=True,
-                            )
-                        else:
-                            with self._tracer.start_as_current_span(f"tool_call:{tc.name}") as ts:
+                        with self._tracer.start_as_current_span(f"tool_call:{tc.name}") as ts:
+                            if f.parse_error:  # 自纠正：回填明确错误，让模型下一步重发
+                                result = ToolResult(
+                                    tc.id,
+                                    f"工具调用参数不是合法 JSON：{f.parse_error}，请重新调用。",
+                                    is_error=True,
+                                )
+                            else:
                                 result = await self._executor.execute(tc)
-                                ts.set_attribute("harness.tool.is_error", result.is_error)
+                            ts.set_attribute("harness.tool.is_error", result.is_error)
+                            if result.is_error:
+                                ts.set_status(Status(StatusCode.ERROR, result.content[:200]))
+                                ts.add_event("tool.error", {"content": result.content[:200]})
                         state.append(Message(role=Role.TOOL, content=result.content, tool_call_id=tc.id))
                         yield ToolFinished(result=result)
                     yield StepFinished(step=step)

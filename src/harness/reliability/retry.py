@@ -5,6 +5,8 @@ import asyncio
 import random
 from typing import AsyncIterator, Awaitable, Callable
 
+from opentelemetry import trace
+
 from ..llm.base import ModelClient, StreamChunk
 from ..types import Message
 
@@ -40,14 +42,12 @@ class RetryingModelClient:
         base_delay: float = 0.5,
         transient: tuple[type[BaseException], ...] = _DEFAULT_TRANSIENT,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-        tracer=None,
     ) -> None:
         self._inner = inner
         self._max_retries = max_retries
         self._base_delay = base_delay
         self._transient = transient
         self._sleep = sleep
-        self._tracer = tracer
 
     async def stream(
         self, messages: list[Message], tools: list[dict]
@@ -61,9 +61,13 @@ class RetryingModelClient:
                         chunk.attempts = attempt
                     yield chunk
                 return
-            except self._transient:
+            except self._transient as e:
                 if produced or attempt > self._max_retries:
                     raise
+                trace.get_current_span().add_event(
+                    "model_call.retry",
+                    {"attempt": attempt, "error": type(e).__name__},
+                )
                 delay = self._base_delay * 2 ** (attempt - 1)
                 delay += random.uniform(0, self._base_delay * 0.1)  # 抖动
                 await self._sleep(delay)
