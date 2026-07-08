@@ -35,12 +35,18 @@ class HttpRequestTool(Tool):
         async with self._client_factory() as client:
             for _ in range(self._max_redirects + 1):
                 check_url(url, self._allowed, self._block_private, **self._resolve_kw)  # PolicyError→is_error
-                resp = await client.request(params.method, url,
-                                            headers=params.headers, content=params.body)
-                if resp.is_redirect and "location" in resp.headers:
-                    url = str(httpx.URL(url).join(resp.headers["location"]))
-                    continue
-                body = resp.text
-                suffix = "…(已截断)" if len(body) > self._max_bytes else ""
-                return f"HTTP {resp.status_code}\n{body[: self._max_bytes]}{suffix}"
+                async with client.stream(params.method, url,
+                                         headers=params.headers, content=params.body) as resp:
+                    if resp.is_redirect and "location" in resp.headers:
+                        url = str(httpx.URL(url).join(resp.headers["location"]))
+                        continue
+                    chunks, total = [], 0
+                    async for b in resp.aiter_bytes():
+                        chunks.append(b)
+                        total += len(b)
+                        if total > self._max_bytes:
+                            break
+                    body = b"".join(chunks).decode(errors="replace")
+                    suffix = "…(已截断)" if total > self._max_bytes else ""
+                    return f"HTTP {resp.status_code}\n{body[: self._max_bytes]}{suffix}"
         raise RuntimeError(f"超过最大重定向次数（{self._max_redirects}）")
