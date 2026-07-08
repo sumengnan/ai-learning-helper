@@ -30,4 +30,5 @@ class OpenAICompatibleEmbeddingClient:
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         resp = await self._client.embeddings.create(model=self._model, input=texts)
-        return [d.embedding for d in resp.data]
+        # 第三方兼容端点未必保证顺序，按 index 归位
+        return [d.embedding for d in sorted(resp.data, key=lambda d: d.index)]

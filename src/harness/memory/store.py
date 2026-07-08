@@ -20,6 +20,9 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_OVERFETCH_MULTIPLIER = 4
+
+
 class MemoryStore:
     """sqlite-vec 向量存储。向量表 rowid 与元数据表 id 对齐。"""
 
@@ -43,6 +46,10 @@ class MemoryStore:
     def add(self, items: list[tuple[str, str, dict, list[float]]]) -> list[int]:
         ids: list[int] = []
         for collection, text, metadata, embedding in items:
+            if len(embedding) != self._dim:
+                raise ValueError(
+                    f"向量维度不符：期望 {self._dim}，收到 {len(embedding)}"
+                )
             cur = self._conn.execute(
                 "INSERT INTO memory_items(collection, text, metadata, created_at) "
                 "VALUES (?, ?, ?, ?)",
@@ -58,11 +65,29 @@ class MemoryStore:
         return ids
 
     def search(self, collection: str, query_embedding: list[float], k: int) -> list[MemoryHit]:
-        over = k * 4  # over-fetch 后按 collection 过滤
+        total = self._conn.execute(
+            "SELECT COUNT(*) FROM memory_vectors"
+        ).fetchone()[0]
+        if total == 0:
+            return []
+        serialized = sqlite_vec.serialize_float32(query_embedding)
+        # 自适应 over-fetch：其他 collection 可能挤占前排，命中不足时逐步扩大
+        fetch = min(total, max(k, 1) * _OVERFETCH_MULTIPLIER)
+        hits: list[MemoryHit] = []
+        while True:
+            hits = self._knn_filtered(collection, serialized, fetch, k)
+            if len(hits) >= k or fetch >= total:
+                break
+            fetch = min(total, fetch * _OVERFETCH_MULTIPLIER)
+        return hits
+
+    def _knn_filtered(
+        self, collection: str, serialized: bytes, fetch: int, k: int
+    ) -> list[MemoryHit]:
         rows = self._conn.execute(
             "SELECT rowid, distance FROM memory_vectors "
             "WHERE embedding MATCH ? AND k = ? ORDER BY distance",
-            (sqlite_vec.serialize_float32(query_embedding), over),
+            (serialized, fetch),
         ).fetchall()
         hits: list[MemoryHit] = []
         for rowid, distance in rows:

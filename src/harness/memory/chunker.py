@@ -17,4 +17,8 @@ def chunk(text: str, chunk_size: int, overlap: int) -> list[str]:
     while start < len(text):
         chunks.append(text[start : start + chunk_size])
         start += step
+    # 末块若不超过 overlap，则已被前一块的重叠区完整覆盖，属冗余，丢弃。
+    # overlap=0 时条件为 <=0 永不触发，真实尾块保留。
+    if len(chunks) > 1 and len(chunks[-1]) <= overlap:
+        chunks.pop()
     return chunks

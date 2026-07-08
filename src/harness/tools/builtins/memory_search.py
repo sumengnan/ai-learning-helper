@@ -12,14 +12,18 @@ class SearchMemoryTool(Tool):
 
     class Params(BaseModel):
         query: str
-        k: int = 5
+        k: int | None = None
 
-    def __init__(self, memory: Memory, collection: str = "knowledge") -> None:
+    def __init__(
+        self, memory: Memory, collection: str = "knowledge", default_k: int = 5
+    ) -> None:
         self._memory = memory
         self._collection = collection
+        self._default_k = default_k
 
     async def run(self, params: "SearchMemoryTool.Params") -> str:
-        hits = await self._memory.search(params.query, self._collection, params.k)
+        k = params.k if params.k is not None else self._default_k
+        hits = await self._memory.search(params.query, self._collection, k)
         if not hits:
             return "（未在知识库中检索到相关内容）"
         lines = []

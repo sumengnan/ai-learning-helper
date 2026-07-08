@@ -36,3 +36,21 @@ def test_delete():
     ids = s.add([("knowledge", "x", {}, [1.0, 0.0, 0.0, 0.0])])
     s.delete(ids)
     assert s.search("knowledge", [1.0, 0.0, 0.0, 0.0], k=5) == []
+
+
+def test_adaptive_overfetch_recalls_target_collection():
+    # 其他 collection 挤占前 k*4：固定 over-fetch 会零召回，自适应应仍返回 k 条 knowledge
+    s = _store()
+    items = [("knowledge", f"k{i}", {}, [1.0, 0.0, 0.0, 0.0]) for i in range(3)]
+    # other 向量更接近 query（完全相同方向），会排在最前挤占名额
+    items += [("other", f"o{i}", {}, [1.0, 0.0, 0.0, 0.0]) for i in range(20)]
+    s.add(items)
+    hits = s.search("knowledge", [1.0, 0.0, 0.0, 0.0], k=3)
+    assert len(hits) == 3
+    assert all(h.collection == "knowledge" for h in hits)
+
+
+def test_add_dimension_mismatch_raises_value_error():
+    s = _store()
+    with pytest.raises(ValueError):
+        s.add([("knowledge", "bad", {}, [1.0, 0.0, 0.0])])  # 只有 3 维，期望 4 维

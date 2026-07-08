@@ -36,7 +36,7 @@ async def main() -> None:
         cfg.memory_collection, {"source": "生物笔记"})
 
     registry = ToolRegistry()
-    registry.register(SearchMemoryTool(memory, cfg.memory_collection))
+    registry.register(SearchMemoryTool(memory, cfg.memory_collection, default_k=cfg.search_top_k))
     registry.register(RememberTool(memory, cfg.memory_collection))
 
     loop = AgentLoop(
