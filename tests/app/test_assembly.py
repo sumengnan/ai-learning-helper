@@ -14,8 +14,14 @@ def test_core_tools_registered_heavy_gated_off():
     assert h.registry.get("search_memory") is not None    # api_key 有 → 记忆注册
     assert h.registry.get("browse") is None                # 未启用
     assert h.registry.get("run_python") is None             # 未启用沙箱
+    assert h.registry.get("dispatch") is None               # 未启用派发
 
 
 def test_browser_gated_on():
     h = build_harness(_cfg(enable_browser=True))
     assert h.registry.get("browse") is not None
+
+
+def test_dispatch_gated_on():
+    h = build_harness(_cfg(enable_dispatch=True, enable_browser=True))
+    assert h.registry.get("dispatch") is not None
