@@ -95,6 +95,12 @@ class AgentLoop:
             yield ev
 
     async def resume(self, run_id: str) -> AsyncIterator[Event]:
+        """从 checkpoint 续跑 run_id。
+
+        已知限制：从上一个完整步的下一步重跑；若中断发生在某步执行到一半，该步
+        整步重跑，其中的**有副作用工具**（write_file / run_shell 等）可能被**重复
+        执行**。调用方需保证工具幂等或自行去重。
+        """
         if self._checkpoint_store is None:
             yield RunError(error="未配置 checkpoint_store，无法 resume")
             return

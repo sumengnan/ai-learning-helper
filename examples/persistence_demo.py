@@ -31,22 +31,25 @@ async def main(msg: str) -> None:
                      context=ContextManager("你可以用 calculator 计算。"),
                      max_steps=cfg.max_steps, model_name=cfg.model, checkpoint_store=ckpt)
 
-    run_id = None
-    async for ev in sink.wrap(loop.run(msg)):
-        if isinstance(ev, TextDelta):
-            print(ev.text, end="", flush=True)
-        elif isinstance(ev, RunFinished):
-            print("\n[完成]")
-        elif isinstance(ev, RunError):
-            print(f"\n[出错] {ev.error}")
+    try:
+        async for ev in sink.wrap(loop.run(msg)):
+            if isinstance(ev, TextDelta):
+                print(ev.text, end="", flush=True)
+            elif isinstance(ev, RunFinished):
+                print("\n[完成]")
+            elif isinstance(ev, RunError):
+                print(f"\n[出错] {ev.error}")
 
-    # 展示落库的轨迹（取任一已存 run 的事件类型序列）
-    rows = traj._conn.execute("SELECT DISTINCT run_id FROM trajectory_events").fetchall()
-    if rows:
-        rid = rows[-1][0]
-        print(f"\n=== 轨迹已落库 run_id={rid} ===")
-        for e in traj.load(rid):
-            print(" ", e["type"])
+        # 展示落库的轨迹（取任一已存 run 的事件类型序列）
+        run_ids = traj.list_run_ids()
+        if run_ids:
+            rid = run_ids[-1]
+            print(f"\n=== 轨迹已落库 run_id={rid} ===")
+            for e in traj.load(rid):
+                print(" ", e["type"])
+    finally:
+        traj.close()
+        ckpt.close()
 
 
 if __name__ == "__main__":

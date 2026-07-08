@@ -27,6 +27,27 @@ def test_runstate_roundtrip():
     assert st2.messages[2].tool_call_id == "c1"
 
 
+def test_roundtrip_unicode_nested_and_none():
+    st = RunState(run_id="r1"); st.step = 5
+    # 含中文、嵌套 dict/list 的工具参数
+    st.append(Message(role=Role.ASSISTANT, content=None,
+                      tool_calls=[ToolCall(id="c1", name="搜索",
+                                           arguments={"查询": "北京天气",
+                                                      "过滤": {"城市": ["北京", "上海"], "天数": 3}})]))
+    # content=None / tool_call_id=None 的消息
+    st.append(Message(role=Role.USER, content="你好，世界", tool_call_id=None))
+    st.append(Message(role=Role.TOOL, content="42", tool_call_id="c1"))
+    st2 = runstate_from_dict(runstate_to_dict(st))
+    assert st2.run_id == "r1" and st2.step == 5
+    assert st2.messages[0].content is None
+    assert st2.messages[0].tool_calls[0].name == "搜索"
+    assert st2.messages[0].tool_calls[0].arguments == {
+        "查询": "北京天气", "过滤": {"城市": ["北京", "上海"], "天数": 3}}
+    assert st2.messages[1].content == "你好，世界"
+    assert st2.messages[1].tool_call_id is None
+    assert st2.messages[2].tool_call_id == "c1"
+
+
 def test_event_to_dict_variants():
     assert event_to_dict(TextDelta(text="hi")) == {"type": "TextDelta", "data": {"text": "hi"}}
     tf = event_to_dict(ToolFinished(result=ToolResult("c1", "ok", False)))

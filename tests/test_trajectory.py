@@ -15,6 +15,23 @@ def test_store_append_load_ordered():
     assert [e["type"] for e in s.load("r1")] == ["A", "B"]
 
 
+def test_next_seq():
+    s = TrajectoryStore(":memory:")
+    assert s.next_seq("r1") == 0                # 空 → 0
+    s.append("r1", 0, {"type": "A", "data": {}})
+    s.append("r1", 1, {"type": "B", "data": {}})
+    assert s.next_seq("r1") == 2                # MAX(seq)+1
+    assert s.next_seq("other") == 0            # 按 run_id 隔离
+
+
+def test_list_run_ids():
+    s = TrajectoryStore(":memory:")
+    s.append("r1", 0, {"type": "A", "data": {}})
+    s.append("r2", 0, {"type": "A", "data": {}})
+    s.append("r1", 1, {"type": "B", "data": {}})
+    assert sorted(s.list_run_ids()) == ["r1", "r2"]
+
+
 async def test_sink_records_and_passes_through():
     store = TrajectoryStore(":memory:")
     sink = TrajectorySink(store)

@@ -3,17 +3,21 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
 
 from ..state import RunState
+from ._util import now_iso
 from .serialize import runstate_from_dict, runstate_to_dict
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 class CheckpointStore:
+    """RunState 快照存取，供断点续跑（resume）。
+
+    已知限制：快照在步边界（StepFinished 之后）保存，resume 从上一个完整步的
+    下一步重跑。若中断发生在某步执行到一半，该步会被整步重跑——其中的**有副作用
+    工具**（如 write_file / run_shell）可能被**重复执行**。调用方需保证工具幂等，
+    或自行去重。
+    """
+
     def __init__(self, db_path: str) -> None:
         self._conn = sqlite3.connect(db_path)
         self._conn.execute(
@@ -24,7 +28,7 @@ class CheckpointStore:
     def save(self, state: RunState) -> None:
         self._conn.execute(
             "INSERT OR REPLACE INTO checkpoints(run_id, state, step, updated_at) VALUES (?, ?, ?, ?)",
-            (state.run_id, json.dumps(runstate_to_dict(state), ensure_ascii=False), state.step, _now()))
+            (state.run_id, json.dumps(runstate_to_dict(state), ensure_ascii=False), state.step, now_iso()))
         self._conn.commit()
 
     def load(self, run_id: str) -> RunState | None:
