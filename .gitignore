@@ -19,3 +19,7 @@ venv/
 # 前端
 web/node_modules/
 web/dist/
+
+# 运行时数据（应用启动/测试时生成，非源码）
+*.db
+downloads/
