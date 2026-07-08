@@ -1,0 +1,50 @@
+import pytest
+
+from harness.orchestration.spec import AgentSpec, AgentRoster
+from harness.orchestration.dispatch import DispatchTool
+from harness.tools.base import ToolRegistry, ToolExecutor
+from harness.tools.builtins.calculator import CalculatorTool
+from harness.types import ToolCall
+
+
+def _dispatch(client, depth=0, max_depth=2, tools=("calculator",)):
+    roster = AgentRoster([AgentSpec("researcher", "研究员", "你是研究员", list(tools))])
+    pool = {"calculator": CalculatorTool()}
+    return DispatchTool(roster, pool, client, depth=depth, max_depth=max_depth, sub_max_steps=5)
+
+
+async def test_dispatch_runs_subagent_and_returns_answer(make_mock, text_turn):
+    tool = _dispatch(make_mock([text_turn("子结果")]))
+    out = await tool.run(tool.Params(agent="researcher", task="做点研究"))
+    assert out == "子结果"
+
+
+async def test_unknown_agent_is_error(make_mock, text_turn):
+    tool = _dispatch(make_mock([text_turn("x")]))
+    reg = ToolRegistry(); reg.register(tool)
+    ex = ToolExecutor(reg)
+    r = await ex.execute(ToolCall(id="c1", name="dispatch",
+                                  arguments={"agent": "nobody", "task": "t"}))
+    assert r.is_error is True
+    assert "未知角色" in r.content
+
+
+def test_sub_registry_only_spec_tools(make_mock, text_turn):
+    tool = _dispatch(make_mock([text_turn("x")]), tools=("calculator",))
+    spec = tool._roster.get("researcher")
+    reg = tool._build_sub_registry(spec)
+    assert reg.get("calculator") is not None
+    assert reg.get("browse") is None            # 未列的工具不在
+
+
+def test_depth_limit_controls_dispatch_injection(make_mock, text_turn):
+    spec = AgentSpec("researcher", "r", "p", ["calculator"])
+    d0 = _dispatch(make_mock([text_turn("x")]), depth=0, max_depth=2)
+    assert d0._build_sub_registry(spec).get("dispatch") is not None   # depth+1=1<2 → 含
+    d1 = _dispatch(make_mock([text_turn("x")]), depth=1, max_depth=2)
+    assert d1._build_sub_registry(spec).get("dispatch") is None       # depth+1=2 不<2 → 不含
+
+
+async def test_dispatch_description_lists_roles(make_mock, text_turn):
+    tool = _dispatch(make_mock([text_turn("x")]))
+    assert "researcher" in tool.description

@@ -1,0 +1,68 @@
+from __future__ import annotations
+
+from pydantic import BaseModel
+
+from ..context.manager import ContextManager
+from ..events import RunError, RunFinished
+from ..loop.agent_loop import AgentLoop
+from ..tools.base import Tool, ToolRegistry
+from .spec import AgentRoster, AgentSpec
+
+
+class DispatchTool(Tool):
+    name = "dispatch"
+
+    class Params(BaseModel):
+        agent: str
+        task: str
+
+    def __init__(self, roster: AgentRoster, tool_pool: dict, client, budget=None,
+                 tracer=None, depth: int = 0, max_depth: int = 2,
+                 sub_max_steps: int = 10, model_name: str = "", price_map=None) -> None:
+        self._roster = roster
+        self._tool_pool = tool_pool
+        self._client = client
+        self._budget = budget
+        self._tracer = tracer
+        self._depth = depth
+        self._max_depth = max_depth
+        self._sub_max_steps = sub_max_steps
+        self._model_name = model_name
+        self._price_map = price_map
+        self.description = (
+            "把一个子任务派发给专职子 agent 执行，返回其最终结果。\n"
+            + roster.describe())
+
+    def _build_sub_registry(self, spec: AgentSpec) -> ToolRegistry:
+        reg = ToolRegistry()
+        for tname in spec.tool_names:
+            tool = self._tool_pool.get(tname)
+            if tool is not None:
+                reg.register(tool)
+        if self._depth + 1 < self._max_depth:   # 未达深度上限才给下一层派发能力
+            reg.register(DispatchTool(
+                self._roster, self._tool_pool, self._client, self._budget, self._tracer,
+                depth=self._depth + 1, max_depth=self._max_depth,
+                sub_max_steps=self._sub_max_steps, model_name=self._model_name,
+                price_map=self._price_map))
+        return reg
+
+    async def run(self, params: "DispatchTool.Params") -> str:
+        spec = self._roster.get(params.agent)
+        if spec is None:
+            raise ValueError(f"未知角色：{params.agent}。可用：{self._roster.names()}")
+        sub_loop = AgentLoop(
+            client=self._client, registry=self._build_sub_registry(spec),
+            context=ContextManager(spec.system_prompt),
+            max_steps=self._sub_max_steps, budget=self._budget,
+            tracer=self._tracer, model_name=self._model_name, price_map=self._price_map)
+        final = None
+        error = None
+        async for ev in sub_loop.run(params.task):
+            if isinstance(ev, RunFinished):
+                final = ev.message.content
+            elif isinstance(ev, RunError):
+                error = ev.error
+        if final is None:
+            raise RuntimeError(f"子 agent[{params.agent}] 未产出结果：{error or '未知'}")
+        return final
