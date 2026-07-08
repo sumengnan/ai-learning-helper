@@ -18,3 +18,5 @@ class AppConfig(HarnessConfig):
     enable_sandbox: bool = False
     enable_dispatch: bool = False
     cors_origins: list = ["http://localhost:5173"]
+    app_max_upload_mb: int = 20
+    documents_db_path: str = "documents.db"
