@@ -1,16 +1,18 @@
 import type { ReactNode } from "react";
 import {
-  Accordion, AccordionSummary, AccordionDetails, Typography, CircularProgress,
+  Accordion, AccordionSummary, AccordionDetails, Typography, CircularProgress, Box,
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
 
 // 可折叠的过程块（工具调用 / 沙箱执行 / 子代理执行 统一外观）
-export function CollapsibleBlock({ icon, title, status, defaultExpanded = true, children }: {
+// summary：标题右侧显示的“最后一步进度”预览；给了就用它替代整体状态图标
+export function CollapsibleBlock({ icon, title, status, summary, defaultExpanded = true, children }: {
   icon: ReactNode;
   title: string;
   status: "running" | "ok" | "error";
+  summary?: ReactNode;
   defaultExpanded?: boolean;
   children: ReactNode;
 }) {
@@ -31,15 +33,19 @@ export function CollapsibleBlock({ icon, title, status, defaultExpanded = true, 
         }}
       >
         {icon}
-        <Typography variant="caption" sx={{ fontWeight: 700, flexGrow: 1 }}>
+        <Typography variant="caption" sx={{ fontWeight: 700, flexShrink: 0, mr: 1 }}>
           {title}
         </Typography>
-        {status === "running" ? (
-          <CircularProgress size={14} />
+        {summary ? (
+          <Box sx={{ ml: "auto", minWidth: 0, display: "flex", alignItems: "center" }}>
+            {summary}
+          </Box>
+        ) : status === "running" ? (
+          <CircularProgress size={14} sx={{ ml: "auto" }} />
         ) : status === "error" ? (
-          <CancelIcon sx={{ fontSize: 16 }} color="error" />
+          <CancelIcon sx={{ fontSize: 16, ml: "auto" }} color="error" />
         ) : (
-          <CheckCircleIcon sx={{ fontSize: 16 }} color="success" />
+          <CheckCircleIcon sx={{ fontSize: 16, ml: "auto" }} color="success" />
         )}
       </AccordionSummary>
       <AccordionDetails sx={{ px: 1, pt: 0, pb: 1 }}>

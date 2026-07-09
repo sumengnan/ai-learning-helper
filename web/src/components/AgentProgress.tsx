@@ -14,11 +14,29 @@ export function AgentProgress({ steps }: { steps: NonNullable<ChatMessage["steps
   const pending = steps.some((s) => s.result === undefined);
   const anyError = steps.some((s) => s.isError);
   const status = pending ? "running" : anyError ? "error" : "ok";
+  // 标题右侧显示最后一步（工具名 + 其状态）
+  const last = steps[steps.length - 1];
+  const lastPending = last.result === undefined;
+  const summary = (
+    <>
+      {lastPending ? (
+        <CircularProgress size={11} />
+      ) : last.isError ? (
+        <CancelIcon sx={{ fontSize: 14 }} color="error" />
+      ) : (
+        <CheckCircleIcon sx={{ fontSize: 14 }} color="success" />
+      )}
+      <Typography variant="caption" color="text.secondary" noWrap sx={{ ml: 0.5, maxWidth: 200 }}>
+        {last.tool}
+      </Typography>
+    </>
+  );
   return (
     <CollapsibleBlock
       icon={<BuildIcon sx={{ fontSize: 15 }} color="action" />}
       title="工具调用"
       status={status}
+      summary={summary}
     >
       {steps.map((s, i) => {
         const sp = s.result === undefined;
