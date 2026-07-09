@@ -42,7 +42,7 @@ def test_memory_defaults():
 
 
 def test_sandbox_defaults():
-    cfg = HarnessConfig(api_key="k")
+    cfg = HarnessConfig(api_key="k", _env_file=None)
     assert cfg.sandbox_backend == "local"
     assert cfg.sandbox_image == "python:3.12-slim"
     assert cfg.sandbox_network == "none"

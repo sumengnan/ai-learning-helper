@@ -23,7 +23,7 @@ def _mock_docker_sandbox():
 
 
 def test_factory_local_default():
-    cfg = HarnessConfig(api_key="k")
+    cfg = HarnessConfig(api_key="k", _env_file=None)   # 断言源码默认，不受本地 .env 影响
     assert isinstance(build_sandbox(cfg), LocalSandbox)
 
 
