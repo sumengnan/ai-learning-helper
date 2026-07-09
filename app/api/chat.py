@@ -17,6 +17,7 @@ from harness.types import Message, Role
 from ..auth import current_user
 from ..context import ConversationContextManager
 from ..tools.exam_tools import SampleQuestionsTool, SaveWrongAnswerTool
+from ..tools.save_download import SaveDownloadTool
 
 EXAM_GUIDE = (
     "\n\n你具备「模拟考试」能力：\n"
@@ -44,6 +45,11 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         reg = ToolRegistry()
         for t in harness.registry.tools():
             reg.register(t)
+        # 用用户级 save_download 覆盖全局那个（同名），使下载文件按用户隔离
+        dstore = getattr(harness, "download_store", None)
+        if dstore is not None:
+            reg.register(SaveDownloadTool(
+                dstore, config.download_max_mb * 1024 * 1024, user_id))
         if question_store is not None:
             reg.register(SampleQuestionsTool(question_store, user_id))
             if save_wrong and wrong_store is not None:

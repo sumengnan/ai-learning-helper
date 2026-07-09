@@ -32,7 +32,9 @@ def _cfg():
 
 def _auth_headers(client, username="u"):
     r = client.post("/api/auth/register", json={"username": username, "password": "pw1234"})
-    return {"Authorization": f"Bearer {r.json()['token']}"}
+    token = r.json()["token"]
+    uid = client.app.state.auth.verify_token(token)[0]
+    return {"Authorization": f"Bearer {token}"}, uid
 
 
 def _client(tmp_path):
@@ -51,8 +53,8 @@ def _client(tmp_path):
 
 def test_list_and_download(tmp_path):
     client, dstore = _client(tmp_path)
-    h = _auth_headers(client)
-    rec = dstore.create("hello.txt", b"hello world", "text/plain")
+    h, uid = _auth_headers(client)
+    rec = dstore.create(uid, "hello.txt", b"hello world", "text/plain")
     listing = client.get("/api/downloads", headers=h).json()
     assert any(d["id"] == rec["id"] for d in listing)
     r = client.get(f"/api/downloads/{rec['id']}", headers=h)
@@ -62,7 +64,7 @@ def test_list_and_download(tmp_path):
 
 def test_download_404(tmp_path):
     client, _ = _client(tmp_path)
-    h = _auth_headers(client)
+    h, _ = _auth_headers(client)
     assert client.get("/api/downloads/nope", headers=h).status_code == 404
 
 
@@ -70,8 +72,8 @@ def test_download_404_when_disk_file_missing(tmp_path):
     # 登记在但磁盘文件被外部删 → 404（而非 FileResponse os.stat 抛 500）
     import os
     client, dstore = _client(tmp_path)
-    h = _auth_headers(client)
-    rec = dstore.create("x.txt", b"x", "text/plain")
+    h, uid = _auth_headers(client)
+    rec = dstore.create(uid, "x.txt", b"x", "text/plain")
     os.remove(dstore.path(rec["id"]))
     assert client.get(f"/api/downloads/{rec['id']}", headers=h).status_code == 404
 
@@ -79,10 +81,23 @@ def test_download_404_when_disk_file_missing(tmp_path):
 def test_delete_removes_file_and_row(tmp_path):
     import os
     client, dstore = _client(tmp_path)
-    h = _auth_headers(client)
-    rec = dstore.create("x.txt", b"x", "text/plain")
+    h, uid = _auth_headers(client)
+    rec = dstore.create(uid, "x.txt", b"x", "text/plain")
     path = dstore.path(rec["id"])
     assert client.delete(f"/api/downloads/{rec['id']}", headers=h).status_code == 200
     assert not os.path.exists(path)
     assert client.get(f"/api/downloads/{rec['id']}", headers=h).status_code == 404
     assert client.delete(f"/api/downloads/{rec['id']}", headers=h).status_code == 404
+
+
+def test_download_isolation_between_users(tmp_path):
+    client, dstore = _client(tmp_path)
+    ha, uida = _auth_headers(client, "downA")
+    hb, _ = _auth_headers(client, "downB")
+    rec = dstore.create(uida, "a.txt", "A 的文件".encode("utf-8"), "text/plain")
+    # B 看不到、取不到、删不掉 A 的下载
+    assert all(d["id"] != rec["id"] for d in client.get("/api/downloads", headers=hb).json())
+    assert client.get(f"/api/downloads/{rec['id']}", headers=hb).status_code == 404
+    assert client.delete(f"/api/downloads/{rec['id']}", headers=hb).status_code == 404
+    # A 仍能取到
+    assert client.get(f"/api/downloads/{rec['id']}", headers=ha).status_code == 200
