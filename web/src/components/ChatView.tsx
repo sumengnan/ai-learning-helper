@@ -6,6 +6,7 @@ import type { ChatMessage } from "../types";
 import { streamChat } from "../api/client";
 import { AgentProgress } from "./AgentProgress";
 import { EmptyHint } from "./EmptyHint";
+import { ProgressLog } from "./ProgressLog";
 
 const SHOW_TOOLS_KEY = "chat_show_tools";
 const SAVE_WRONG_KEY = "chat_save_wrong";
@@ -74,6 +75,7 @@ export function ChatView({ conversationId, initial, autoSend }:
       const copy = [...m];
       const last = { ...copy[copy.length - 1] };
       if (last.steps) last.steps = last.steps.map((s) => ({ ...s }));
+      if (last.progress) last.progress = [...last.progress];
       fn(last);
       copy[copy.length - 1] = last;
       return copy;
@@ -96,6 +98,7 @@ export function ChatView({ conversationId, initial, autoSend }:
         if (s) { s.result = e.data.result.content; s.isError = e.data.result.is_error; }
       });
       else if (e.type === "ModelUsage") upd((a) => { a.usage = { tokens: e.data.usage.total, cost: e.data.cost_usd }; });
+      else if (e.type === "Progress") upd((a) => { (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text }); });
       else if (e.type === "RunError") upd((a) => { a.content += `\n[出错] ${e.data.error}`; });
     };
     try {
@@ -126,6 +129,9 @@ export function ChatView({ conversationId, initial, autoSend }:
                 color: m.role === "user" ? "primary.contrastText" : "text.primary",
               }}
             >
+              {showTools && m.role === "assistant" && m.progress && m.progress.length > 0 && (
+                <ProgressLog items={m.progress} busy={busy && i === messages.length - 1} />
+              )}
               {showTools && m.role === "assistant" && m.steps && m.steps.length > 0 && (
                 <AgentProgress steps={m.steps} />
               )}

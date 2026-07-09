@@ -3,8 +3,9 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from ..context.manager import ContextManager
-from ..events import RunError, RunFinished
+from ..events import Progress, RunError, RunFinished, ToolStarted
 from ..loop.agent_loop import AgentLoop
+from ..progress import emit
 from ..tools.base import Tool, ToolRegistry
 from .spec import AgentRoster, AgentSpec
 
@@ -65,11 +66,17 @@ class DispatchTool(Tool):
             tracer=self._tracer, model_name=self._model_name, price_map=self._price_map)
         final = None
         error = None
+        scope = f"subagent:{params.agent}"
+        emit(Progress(scope, f"开始任务：{params.task}"))
         async for ev in sub_loop.run(params.task):
-            if isinstance(ev, RunFinished):
+            if isinstance(ev, ToolStarted):
+                emit(Progress(scope, f"调用工具 {ev.tool_call.name}"))
+            elif isinstance(ev, RunFinished):
                 final = ev.message.content
             elif isinstance(ev, RunError):
                 error = ev.error
         if final is None:
+            emit(Progress(scope, f"未产出结果：{error or '未知'}"))
             raise RuntimeError(f"子 agent[{params.agent}] 未产出结果：{error or '未知'}")
+        emit(Progress(scope, "任务完成"))
         return final

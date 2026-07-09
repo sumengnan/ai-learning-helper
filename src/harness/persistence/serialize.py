@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from ..events import (
-    ModelUsage, RunError, RunFinished, RunStarted, StepFinished, StepStarted,
+    ModelUsage, Progress, RunError, RunFinished, RunStarted, StepFinished, StepStarted,
     TextDelta, ToolCallRequested, ToolFinished, ToolStarted,
 )
 from ..state import RunState
@@ -66,6 +66,8 @@ def event_to_dict(ev) -> dict:
         data = {"message": message_to_dict(ev.message)}
     elif isinstance(ev, RunError):
         data = {"error": ev.error}
+    elif isinstance(ev, Progress):
+        data = {"scope": ev.scope, "text": ev.text}
     elif isinstance(ev, ModelUsage):
         u = ev.usage
         data = {"usage": {"prompt": u.prompt_tokens, "completion": u.completion_tokens, "total": u.total_tokens},

@@ -8,6 +8,8 @@ import os
 import tarfile
 
 from .base import ExecResult, resolve_in_workspace
+from ..events import Progress
+from ..progress import emit
 
 
 class DockerSandbox:
@@ -56,8 +58,17 @@ class DockerSandbox:
         if self._container is not None:
             return
         import docker
+        emit(Progress("sandbox", "连接沙箱 Docker daemon…"))
         self._client = await asyncio.to_thread(
             docker.DockerClient, base_url=self._docker_host, tls=self._tls_config())
+        # 镜像缺失则显式拉取，让"拉取镜像"这一步在前端可见
+        try:
+            await asyncio.to_thread(self._client.images.get, self._image)
+        except docker.errors.ImageNotFound:
+            emit(Progress("sandbox", f"拉取镜像 {self._image}…（首次较慢）"))
+            await asyncio.to_thread(self._client.images.pull, self._image)
+            emit(Progress("sandbox", f"镜像 {self._image} 拉取完成"))
+        emit(Progress("sandbox", "启动沙箱容器…"))
         self._container = await asyncio.to_thread(
             self._client.containers.run,
             self._image, command="sleep infinity", detach=True,
@@ -66,6 +77,7 @@ class DockerSandbox:
             mem_limit=self._mem_limit, nano_cpus=int(self._cpus * 1e9),
             pids_limit=self._pids_limit, cap_drop=["ALL"],
             security_opt=["no-new-privileges"], auto_remove=False)
+        emit(Progress("sandbox", "沙箱容器已就绪"))
 
     async def close(self) -> None:
         try:

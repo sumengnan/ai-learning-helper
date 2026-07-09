@@ -3,6 +3,7 @@ export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   steps?: { tool: string; args: any; result?: string; isError?: boolean }[];
+  progress?: { scope: string; text: string }[];
   usage?: { tokens: number; cost: number | null };
 };
 export type Conversation = { id: string; title: string; created_at: string };

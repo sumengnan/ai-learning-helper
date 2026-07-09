@@ -56,6 +56,13 @@ class RunError(Event):
 
 
 @dataclass
+class Progress(Event):
+    """执行过程中的进度旁路事件：沙箱初始化、子 agent 派发进度等。"""
+    scope: str   # "sandbox" | f"subagent:{agent}"
+    text: str
+
+
+@dataclass
 class ModelUsage(Event):
     usage: Usage
     cost_usd: float | None

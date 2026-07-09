@@ -1,6 +1,7 @@
 # app/api/chat.py
 from __future__ import annotations
 
+import asyncio
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,6 +11,7 @@ from pydantic import BaseModel
 from harness.events import RunError, RunFinished, ToolFinished, ToolStarted
 from harness.loop.agent_loop import AgentLoop
 from harness.persistence.serialize import event_to_dict
+from harness.progress import reset_emitter, set_emitter
 from harness.reliability.budget import BudgetTracker
 from harness.tools.base import ToolRegistry
 from harness.types import Message, Role
@@ -75,8 +77,27 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             # 工具调用轨迹（纯 UI 用途），随助手消息落库，切换对话回来后仍可还原
             steps: list[dict] = []
             step_by_id: dict[str, dict] = {}
+            # 工具执行中的进度事件（沙箱初始化 / 子 agent 派发）经 emitter 并入同一队列
+            queue: asyncio.Queue = asyncio.Queue()
+            sentinel = object()
+
+            async def pump():
+                token = set_emitter(queue.put_nowait)
+                try:
+                    async for ev in harness.sink.wrap(loop.run(req.message)):
+                        queue.put_nowait(ev)
+                except Exception as e:  # 兜底成 RunError，避免流卡死
+                    queue.put_nowait(RunError(error=str(e)))
+                finally:
+                    reset_emitter(token)
+                    queue.put_nowait(sentinel)
+
+            task = asyncio.create_task(pump())
             try:
-                async for ev in harness.sink.wrap(loop.run(req.message)):
+                while True:
+                    ev = await queue.get()
+                    if ev is sentinel:
+                        break
                     if isinstance(ev, RunFinished):
                         final = ev.message.content
                     elif isinstance(ev, RunError):
@@ -94,6 +115,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     yield f"data: {json.dumps(event_to_dict(ev), ensure_ascii=False)}\n\n"
             finally:
                 # 客户端断开（GeneratorExit）或异常时仍落库，避免本轮用户消息丢失
+                if not task.done():
+                    task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
                 store.append(req.conversation_id, [
                     Message(role=Role.USER, content=req.message),
                     Message(role=Role.ASSISTANT, content=final or "（本轮未完成）")],
