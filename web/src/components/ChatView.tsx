@@ -5,6 +5,7 @@ import {
 import type { ChatMessage } from "../types";
 import { streamChat } from "../api/client";
 import { AgentProgress } from "./AgentProgress";
+import { EmptyHint } from "./EmptyHint";
 
 const SHOW_TOOLS_KEY = "chat_show_tools";
 const SAVE_WRONG_KEY = "chat_save_wrong";
@@ -93,6 +94,7 @@ export function ChatView({ conversationId, initial, autoSend }:
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <Box ref={scrollRef} onScroll={onScroll}
         sx={{ flex: 1, overflowY: "auto", p: 2, display: "flex", flexDirection: "column", gap: 2 }}>
+        {messages.length === 0 && <EmptyHint onAsk={(q) => send(q)} />}
         {messages.map((m, i) => (
           <Box key={i} sx={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
             <Paper

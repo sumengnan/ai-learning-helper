@@ -6,6 +6,7 @@ import {
   Toolbar, Typography, IconButton, Tooltip, Divider, AppBar,
   Button, Menu, MenuItem, Avatar,
 } from "@mui/material";
+import type { Theme } from "@mui/material/styles";
 import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutlined";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
 import QuizIcon from "@mui/icons-material/Quiz";
@@ -14,10 +15,15 @@ import DownloadIcon from "@mui/icons-material/Download";
 import Brightness4Icon from "@mui/icons-material/Brightness4";
 import Brightness7Icon from "@mui/icons-material/Brightness7";
 import LogoutIcon from "@mui/icons-material/Logout";
+import MenuIcon from "@mui/icons-material/Menu";
 import { useColorMode } from "../ThemeModeProvider";
 import { useAuth } from "../auth/AuthProvider";
 
 const WIDTH = 220;
+const MINI = 68;
+
+// 菜单/历史等“外壳”统一的浅色背景，与白色内容区拉开层次
+export const chromeBg = (t: Theme) => (t.palette.mode === "light" ? "#eceef2" : "#181a1f");
 
 const NAV: { to: string; label: string; icon: ReactNode }[] = [
   { to: "/", label: "AI聊天", icon: <ChatBubbleOutlineIcon /> },
@@ -33,6 +39,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { mode, toggleMode } = useColorMode();
   const { user, logout } = useAuth();
   const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
+  const [navOpen, setNavOpen] = useState(true);
+  const width = navOpen ? WIDTH : MINI;
 
   const isActive = (to: string) =>
     to === "/" ? location.pathname === "/" : location.pathname.startsWith(to);
@@ -44,72 +52,95 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <Box sx={{ display: "flex", height: "100%" }}>
-        <Drawer
-          variant="permanent"
-          sx={{
-            width: WIDTH,
-            flexShrink: 0,
-            "& .MuiDrawer-paper": { width: WIDTH, boxSizing: "border-box" },
-          }}
-        >
-          <Toolbar sx={{ px: 2 }}>
+      <Drawer
+        variant="permanent"
+        sx={{
+          width,
+          flexShrink: 0,
+          whiteSpace: "nowrap",
+          "& .MuiDrawer-paper": {
+            width,
+            boxSizing: "border-box",
+            overflowX: "hidden",
+            bgcolor: chromeBg,
+            transition: (t) => t.transitions.create("width", {
+              easing: t.transitions.easing.sharp,
+              duration: t.transitions.duration.standard,
+            }),
+          },
+        }}
+      >
+        <Toolbar sx={{ px: 2, overflow: "hidden" }}>
+          {navOpen && (
             <Typography variant="h6" noWrap sx={{ fontWeight: 700 }}>
               AI 学习助手
             </Typography>
-          </Toolbar>
-          <Divider />
-          <List sx={{ flex: 1, px: 1 }}>
-            {NAV.map((n) => (
+          )}
+        </Toolbar>
+        <Divider />
+        <List sx={{ flex: 1, px: navOpen ? 1 : 0.5 }}>
+          {NAV.map((n) => (
+            <Tooltip key={n.to} title={navOpen ? "" : n.label} placement="right">
               <ListItemButton
-                key={n.to}
                 selected={isActive(n.to)}
                 onClick={() => navigate(n.to)}
                 sx={{
                   borderRadius: 1.5, mb: 0.5,
+                  justifyContent: navOpen ? "initial" : "center",
+                  px: navOpen ? 2 : 1.5,
                   "&.Mui-selected": {
                     "& .MuiListItemIcon-root": { color: "primary.main" },
                     "& .MuiListItemText-primary": { fontWeight: 600, color: "primary.main" },
                   },
                 }}
               >
-                <ListItemIcon sx={{ minWidth: 40 }}>{n.icon}</ListItemIcon>
-                <ListItemText primary={n.label} />
+                <ListItemIcon sx={{ minWidth: 0, mr: navOpen ? 2 : 0, justifyContent: "center" }}>
+                  {n.icon}
+                </ListItemIcon>
+                {navOpen && <ListItemText primary={n.label} />}
               </ListItemButton>
-            ))}
-          </List>
-        </Drawer>
+            </Tooltip>
+          ))}
+        </List>
+      </Drawer>
 
-        <Box sx={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column" }}>
-          <AppBar position="static" color="default" elevation={0}
-            sx={{ borderBottom: 1, borderColor: "divider" }}>
-            <Toolbar sx={{ gap: 1 }}>
-              <Box sx={{ flex: 1 }} />
-              <Tooltip title={mode === "light" ? "切换到暗色" : "切换到亮色"}>
-                <IconButton onClick={toggleMode} aria-label="切换明暗主题">
-                  {mode === "light" ? <Brightness4Icon /> : <Brightness7Icon />}
-                </IconButton>
-              </Tooltip>
-              <Button color="inherit" onClick={(e) => setMenuAnchor(e.currentTarget)}
-                startIcon={<Avatar sx={{ width: 24, height: 24, fontSize: 14 }}>
-                  {user?.username?.[0]?.toUpperCase() || "?"}
-                </Avatar>}>
-                {user?.username || "未登录"}
-              </Button>
-              <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)}
-                onClose={() => setMenuAnchor(null)}
-                anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-                transformOrigin={{ vertical: "top", horizontal: "right" }}>
-                <MenuItem onClick={onLogout}>
-                  <ListItemIcon><LogoutIcon fontSize="small" /></ListItemIcon>
-                  退出登录
-                </MenuItem>
-              </Menu>
-            </Toolbar>
-          </AppBar>
-          <Box component="main" sx={{ flex: 1, minWidth: 0, overflow: "auto" }}>
-            {children}
-          </Box>
+      <Box sx={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column" }}>
+        <AppBar position="static" color="default" elevation={0}
+          sx={{ borderBottom: 1, borderColor: "divider" }}>
+          <Toolbar sx={{ gap: 1 }}>
+            <Tooltip title={navOpen ? "折叠菜单" : "展开菜单"}>
+              <IconButton edge="start" onClick={() => setNavOpen((o) => !o)}
+                aria-label={navOpen ? "折叠菜单" : "展开菜单"}>
+                <MenuIcon />
+              </IconButton>
+            </Tooltip>
+            <Box sx={{ flex: 1 }} />
+            <Tooltip title={mode === "light" ? "切换到暗色" : "切换到亮色"}>
+              <IconButton onClick={toggleMode} aria-label="切换明暗主题">
+                {mode === "light" ? <Brightness4Icon /> : <Brightness7Icon />}
+              </IconButton>
+            </Tooltip>
+            <Button color="inherit" onClick={(e) => setMenuAnchor(e.currentTarget)}
+              startIcon={<Avatar sx={{ width: 24, height: 24, fontSize: 14 }}>
+                {user?.username?.[0]?.toUpperCase() || "?"}
+              </Avatar>}>
+              {user?.username || "未登录"}
+            </Button>
+            <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)}
+              onClose={() => setMenuAnchor(null)}
+              anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+              transformOrigin={{ vertical: "top", horizontal: "right" }}>
+              <MenuItem onClick={onLogout}>
+                <ListItemIcon><LogoutIcon fontSize="small" /></ListItemIcon>
+                退出登录
+              </MenuItem>
+            </Menu>
+          </Toolbar>
+        </AppBar>
+        <Box component="main" sx={{ flex: 1, minWidth: 0, overflow: "auto" }}>
+          {children}
         </Box>
+      </Box>
     </Box>
   );
 }

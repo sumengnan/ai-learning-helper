@@ -8,6 +8,7 @@ import {
 import AddIcon from "@mui/icons-material/Add";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
 import EditIcon from "@mui/icons-material/Edit";
+import { chromeBg } from "./AppShell";
 
 // 依据创建时间与今天的自然日差，归入「今天 / 昨天 / 3天前 / …」分组
 function dayDiff(iso: string): number {
@@ -63,7 +64,7 @@ export function ConversationList({ items, activeId, onSelect, onNew, onDelete, o
     <Box sx={{
       width: 260, borderRight: 1, borderColor: "divider",
       display: "flex", flexDirection: "column", height: "100%",
-      bgcolor: "background.paper",
+      bgcolor: chromeBg,
     }}>
       <Box sx={{ p: 1.5 }}>
         <Button fullWidth startIcon={<AddIcon />} variant="contained" disableElevation onClick={onNew}>
