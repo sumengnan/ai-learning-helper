@@ -1,4 +1,8 @@
 import { useState } from "react";
+import {
+  Box, Typography, Card, CardContent, TextField, ToggleButton, ToggleButtonGroup,
+  Button, Alert, Chip, Radio, RadioGroup, FormControlLabel, Checkbox, Stack,
+} from "@mui/material";
 import { api } from "../api/client";
 
 interface PaperQ { id: string; type: string; stem: string; options: string[] | null; }
@@ -24,9 +28,6 @@ export default function ExamView() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const toggleType = (k: string) =>
-    setTypes((ts) => (ts.includes(k) ? ts.filter((t) => t !== k) : [...ts, k]));
-
   const start = async () => {
     setBusy(true); setResult(null); setAnswers({}); setError("");
     try {
@@ -44,7 +45,6 @@ export default function ExamView() {
   };
 
   const setAns = (id: string, v: unknown) => setAnswers((a) => ({ ...a, [id]: v }));
-
   const toggleMulti = (id: string, idx: number) =>
     setAnswers((a) => {
       const cur = (a[id] as number[] | undefined) || [];
@@ -65,84 +65,110 @@ export default function ExamView() {
 
   if (result) {
     return (
-      <div className="p-6 space-y-3">
-        <h2 className="text-xl font-bold">成绩：{result.correct}/{result.total}（{result.score} 分）</h2>
-        <ul className="space-y-2">
+      <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2 }}>
+        <Typography variant="h5" component="div" sx={{ fontWeight: 700 }}>
+          成绩：{result.correct}/{result.total}
+          <Chip label={`${result.score} 分`} color="primary" sx={{ ml: 1 }} />
+        </Typography>
+        <Stack spacing={1.5}>
           {result.detail.map((d, i) => (
-            <li key={i} className={`border rounded p-3 ${d.correct ? "border-green-400" : "border-red-400"}`}>
-              <div>{d.correct ? "✅" : "❌"} {d.stem}</div>
-              {!d.correct && <div className="text-sm text-gray-600">正确答案：{JSON.stringify(d.correct_answer)}</div>}
-              {d.explanation && <div className="text-sm text-gray-500">解析：{d.explanation}</div>}
-              {d.feedback && <div className="text-sm text-blue-600">点评：{d.feedback}</div>}
-            </li>
+            <Card key={i} variant="outlined" sx={{ borderColor: d.correct ? "success.main" : "error.main" }}>
+              <CardContent>
+                <Typography>{d.correct ? "✅" : "❌"} {d.stem}</Typography>
+                {!d.correct && (
+                  <Typography variant="body2" color="text.secondary">
+                    正确答案：{JSON.stringify(d.correct_answer)}
+                  </Typography>
+                )}
+                {d.explanation && (
+                  <Typography variant="body2" color="text.secondary">解析：{d.explanation}</Typography>
+                )}
+                {d.feedback && (
+                  <Typography variant="body2" color="primary">点评：{d.feedback}</Typography>
+                )}
+              </CardContent>
+            </Card>
           ))}
-        </ul>
-        <button onClick={() => { setPaper([]); setResult(null); }}
-          className="bg-blue-600 text-white px-3 py-1 rounded">再考一次</button>
-      </div>
+        </Stack>
+        <Box>
+          <Button variant="contained" onClick={() => { setPaper([]); setResult(null); }}>
+            再考一次
+          </Button>
+        </Box>
+      </Box>
     );
   }
 
   if (paper.length === 0) {
     return (
-      <div className="p-6 space-y-3">
-        <h2 className="text-xl font-bold">模拟考试</h2>
-        <div className="flex items-center gap-3 flex-wrap">
-          <label>题数
-            <input type="number" min={1} max={20} value={count}
-              onChange={(e) => setCount(Number(e.target.value))}
-              className="border rounded px-2 py-1 w-16 ml-1" />
-          </label>
-          {TYPES.map((t) => (
-            <label key={t.key} className="flex items-center gap-1">
-              <input type="checkbox" checked={types.includes(t.key)}
-                onChange={() => toggleType(t.key)} />{t.label}
-            </label>
-          ))}
-          <button onClick={start} disabled={busy}
-            className="bg-blue-600 text-white px-3 py-1 rounded disabled:opacity-50">
-            {busy ? "组卷中…" : "开始考试"}
-          </button>
-        </div>
-        <p className="text-gray-500 text-sm">不勾题型=全部题型。若无题，请先到题库出题。</p>
-        {error && <p className="text-red-600 text-sm">{error}</p>}
-      </div>
+      <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2 }}>
+        <Typography variant="h5" sx={{ fontWeight: 700 }}>模拟考试</Typography>
+        <Card variant="outlined">
+          <CardContent>
+            <Stack direction="row" spacing={2} sx={{ alignItems: "center", flexWrap: "wrap" }}>
+              <TextField
+                type="number" size="small" label="题数" sx={{ width: 96 }}
+                slotProps={{ htmlInput: { min: 1, max: 20 } }}
+                value={count} onChange={(e) => setCount(Number(e.target.value))}
+              />
+              <ToggleButtonGroup size="small" value={types} onChange={(_, v: string[]) => setTypes(v)}>
+                {TYPES.map((t) => (
+                  <ToggleButton key={t.key} value={t.key}>{t.label}</ToggleButton>
+                ))}
+              </ToggleButtonGroup>
+              <Button variant="contained" onClick={start} disabled={busy}>
+                {busy ? "组卷中…" : "开始考试"}
+              </Button>
+            </Stack>
+          </CardContent>
+        </Card>
+        <Typography variant="body2" color="text.secondary">
+          不勾题型=全部题型。若无题，请先到题库出题。
+        </Typography>
+        {error && <Alert severity="error">{error}</Alert>}
+      </Box>
     );
   }
 
   return (
-    <div className="p-6 space-y-4">
-      <h2 className="text-xl font-bold">答题（{paper.length} 题）</h2>
+    <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2 }}>
+      <Typography variant="h5" sx={{ fontWeight: 700 }}>答题（{paper.length} 题）</Typography>
       {paper.map((q, qi) => (
-        <div key={q.id} className="border rounded p-3 space-y-1">
-          <div>{qi + 1}. {q.stem}</div>
-          {q.type === "single" && q.options?.map((o, i) => (
-            <label key={i} className="block">
-              <input type="radio" name={q.id} onChange={() => setAns(q.id, i)} /> {o}
-            </label>
-          ))}
-          {q.type === "multiple" && q.options?.map((o, i) => (
-            <label key={i} className="block">
-              <input type="checkbox" onChange={() => toggleMulti(q.id, i)} /> {o}
-            </label>
-          ))}
-          {q.type === "truefalse" && (
-            <div>
-              <label className="mr-3"><input type="radio" name={q.id} onChange={() => setAns(q.id, true)} /> 对</label>
-              <label><input type="radio" name={q.id} onChange={() => setAns(q.id, false)} /> 错</label>
-            </div>
-          )}
-          {q.type === "short" && (
-            <textarea className="border rounded w-full p-1"
-              onChange={(e) => setAns(q.id, e.target.value)} />
-          )}
-        </div>
+        <Card key={q.id} variant="outlined">
+          <CardContent>
+            <Typography gutterBottom>{qi + 1}. {q.stem}</Typography>
+            {q.type === "single" && (
+              <RadioGroup onChange={(e) => setAns(q.id, Number(e.target.value))}>
+                {q.options?.map((o, i) => (
+                  <FormControlLabel key={i} value={i} control={<Radio />} label={o} />
+                ))}
+              </RadioGroup>
+            )}
+            {q.type === "multiple" && q.options?.map((o, i) => (
+              <FormControlLabel
+                key={i}
+                control={<Checkbox onChange={() => toggleMulti(q.id, i)} />}
+                label={o}
+              />
+            ))}
+            {q.type === "truefalse" && (
+              <RadioGroup row onChange={(e) => setAns(q.id, e.target.value === "true")}>
+                <FormControlLabel value="true" control={<Radio />} label="对" />
+                <FormControlLabel value="false" control={<Radio />} label="错" />
+              </RadioGroup>
+            )}
+            {q.type === "short" && (
+              <TextField fullWidth multiline minRows={2} onChange={(e) => setAns(q.id, e.target.value)} />
+            )}
+          </CardContent>
+        </Card>
       ))}
-      <button onClick={submit} disabled={busy}
-        className="bg-green-600 text-white px-4 py-1 rounded disabled:opacity-50">
-        {busy ? "判分中…" : "交卷"}
-      </button>
-      {error && <p className="text-red-600 text-sm">{error}</p>}
-    </div>
+      <Box>
+        <Button variant="contained" color="success" onClick={submit} disabled={busy}>
+          {busy ? "判分中…" : "交卷"}
+        </Button>
+      </Box>
+      {error && <Alert severity="error">{error}</Alert>}
+    </Box>
   );
 }
