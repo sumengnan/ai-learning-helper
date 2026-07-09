@@ -1,5 +1,6 @@
 // web/src/pages/ChatPage.tsx
 import { useEffect, useState } from "react";
+import { Box } from "@mui/material";
 import type { Conversation, ChatMessage } from "../types";
 import { api } from "../api/client";
 import { ConversationList } from "../components/ConversationList";
@@ -22,13 +23,17 @@ export function ChatPage() {
     if (id === activeId) { setActiveId(null); setInitial([]); }
   }
   return (
-    <div className="flex h-full">
+    <Box sx={{ display: "flex", height: "100%" }}>
       <ConversationList items={convs} activeId={activeId} onSelect={select} onNew={newConv} onDelete={del} />
-      <div className="flex-1">
+      <Box sx={{ flex: 1, minWidth: 0 }}>
         {activeId
           ? <ChatView key={activeId} conversationId={activeId} initial={initial} />
-          : <div className="h-full flex items-center justify-center text-gray-400">新建或选择一个对话开始</div>}
-      </div>
-    </div>
+          : (
+            <Box sx={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "text.secondary" }}>
+              新建或选择一个对话开始
+            </Box>
+          )}
+      </Box>
+    </Box>
   );
 }

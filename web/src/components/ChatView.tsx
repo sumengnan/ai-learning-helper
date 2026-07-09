@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Box, Paper, TextField, Button, Typography } from "@mui/material";
 import type { ChatMessage } from "../types";
 import { streamChat } from "../api/client";
 import { AgentProgress } from "./AgentProgress";
@@ -48,26 +49,40 @@ export function ChatView({ conversationId, initial }: { conversationId: string; 
   }
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+    <Box sx={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      <Box sx={{ flex: 1, overflowY: "auto", p: 2, display: "flex", flexDirection: "column", gap: 2 }}>
         {messages.map((m, i) => (
-          <div key={i} className={m.role === "user" ? "text-right" : "text-left"}>
-            <div className={`inline-block max-w-[80%] rounded-lg px-3 py-2 whitespace-pre-wrap ${
-              m.role === "user" ? "bg-blue-500 text-white" : "bg-gray-200"}`}>
-              {m.content || (m.role === "assistant" ? "…" : "")}
+          <Box key={i} sx={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
+            <Paper
+              elevation={0}
+              sx={{
+                maxWidth: "80%", px: 1.5, py: 1, borderRadius: 2,
+                bgcolor: m.role === "user" ? "primary.main" : "action.hover",
+                color: m.role === "user" ? "primary.contrastText" : "text.primary",
+              }}
+            >
+              <Typography component="div" sx={{ whiteSpace: "pre-wrap" }}>
+                {m.content || (m.role === "assistant" ? "…" : "")}
+              </Typography>
               {m.role === "assistant" && m.steps && <AgentProgress steps={m.steps} />}
-              {m.usage && <div className="mt-1 text-xs text-gray-500">tokens {m.usage.tokens}{m.usage.cost != null ? ` · $${m.usage.cost.toFixed(4)}` : ""}</div>}
-            </div>
-          </div>
+              {m.usage && (
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+                  tokens {m.usage.tokens}{m.usage.cost != null ? ` · $${m.usage.cost.toFixed(4)}` : ""}
+                </Typography>
+              )}
+            </Paper>
+          </Box>
         ))}
-      </div>
-      <div className="p-3 border-t flex gap-2">
-        <input className="flex-1 border rounded px-3 py-2" value={input}
+      </Box>
+      <Box sx={{ p: 1.5, borderTop: 1, borderColor: "divider", display: "flex", gap: 1 }}>
+        <TextField
+          fullWidth size="small" value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && send()} placeholder="问点什么…" />
-        <button className="bg-blue-500 text-white rounded px-4 disabled:opacity-50"
-          onClick={send} disabled={busy}>发送</button>
-      </div>
-    </div>
+          onKeyDown={(e) => { if (e.key === "Enter") send(); }}
+          placeholder="问点什么…"
+        />
+        <Button variant="contained" onClick={send} disabled={busy}>发送</Button>
+      </Box>
+    </Box>
   );
 }
