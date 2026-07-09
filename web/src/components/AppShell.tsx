@@ -16,6 +16,7 @@ import Brightness4Icon from "@mui/icons-material/Brightness4";
 import Brightness7Icon from "@mui/icons-material/Brightness7";
 import LogoutIcon from "@mui/icons-material/Logout";
 import MenuIcon from "@mui/icons-material/Menu";
+import SmartToyIcon from "@mui/icons-material/SmartToy";
 import { useColorMode } from "../ThemeModeProvider";
 import { useAuth } from "../auth/AuthProvider";
 
@@ -70,7 +71,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           },
         }}
       >
-        <Toolbar sx={{ px: 2, overflow: "hidden" }}>
+        <Toolbar sx={{ px: 2, overflow: "hidden", gap: 1,
+          justifyContent: navOpen ? "flex-start" : "center" }}>
+          <SmartToyIcon sx={{ color: "primary.main", fontSize: 28, flexShrink: 0 }} />
           {navOpen && (
             <Typography variant="h6" noWrap sx={{ fontWeight: 700 }}>
               AI 学习助手

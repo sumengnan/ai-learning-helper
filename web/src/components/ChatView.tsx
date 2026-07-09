@@ -14,6 +14,27 @@ const readBool = (k: string, dflt: boolean) => {
   return v === null ? dflt : v === "1";
 };
 
+// 等待 AI 回复时的“正在输入”三点动画
+function TypingDots() {
+  const dot = {
+    width: 6, height: 6, borderRadius: "50%", bgcolor: "text.secondary",
+    animation: "chat-typing 1.2s infinite ease-in-out",
+  };
+  return (
+    <Box sx={{
+      display: "flex", gap: 0.6, alignItems: "center", py: 0.75,
+      "@keyframes chat-typing": {
+        "0%, 80%, 100%": { transform: "scale(0.6)", opacity: 0.3 },
+        "40%": { transform: "scale(1)", opacity: 1 },
+      },
+    }}>
+      <Box sx={dot} />
+      <Box sx={{ ...dot, animationDelay: "0.15s" }} />
+      <Box sx={{ ...dot, animationDelay: "0.3s" }} />
+    </Box>
+  );
+}
+
 export function ChatView({ conversationId, initial, autoSend }:
   { conversationId: string; initial: ChatMessage[]; autoSend?: string | null }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initial);
@@ -108,9 +129,17 @@ export function ChatView({ conversationId, initial, autoSend }:
               {showTools && m.role === "assistant" && m.steps && m.steps.length > 0 && (
                 <AgentProgress steps={m.steps} />
               )}
-              <Typography component="div" sx={{ whiteSpace: "pre-wrap" }}>
-                {m.content || (m.role === "assistant" ? "…" : "")}
-              </Typography>
+              {m.content ? (
+                <Typography component="div" sx={{ whiteSpace: "pre-wrap" }}>
+                  {m.content}
+                </Typography>
+              ) : m.role === "assistant" && busy && i === messages.length - 1 ? (
+                <TypingDots />
+              ) : (
+                <Typography component="div" sx={{ whiteSpace: "pre-wrap" }}>
+                  {m.role === "assistant" ? "…" : ""}
+                </Typography>
+              )}
               {showTools && m.usage && (
                 <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
                   tokens {m.usage.tokens}{m.usage.cost != null ? ` · $${m.usage.cost.toFixed(4)}` : ""}

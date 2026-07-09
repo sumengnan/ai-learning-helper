@@ -22,7 +22,7 @@ class DockerSandbox:
 
     def __init__(self, docker_host: str, image: str, workspace: str = "/workspace",
                  user: str = "1000:1000", network: str = "none", mem_limit: str = "512m",
-                 cpus: float = 1.0, pids_limit: int = 128,
+                 cpus: float = 1.0, pids_limit: int = 128, read_only: bool = False,
                  tls_ca_cert: str = "", tls_client_cert: str = "",
                  tls_client_key: str = "", tls_verify: bool = True) -> None:
         self.workspace = workspace
@@ -33,6 +33,7 @@ class DockerSandbox:
         self._mem_limit = mem_limit
         self._cpus = cpus
         self._pids_limit = pids_limit
+        self._read_only = read_only
         self._tls_ca_cert = tls_ca_cert
         self._tls_client_cert = tls_client_cert
         self._tls_client_key = tls_client_key
@@ -61,7 +62,7 @@ class DockerSandbox:
             self._client.containers.run,
             self._image, command="sleep infinity", detach=True,
             working_dir=self.workspace, user=self._user, network_mode=self._network,
-            read_only=True, tmpfs={self.workspace: "rw,size=64m"},
+            read_only=self._read_only, tmpfs={self.workspace: "rw,size=64m"},
             mem_limit=self._mem_limit, nano_cpus=int(self._cpus * 1e9),
             pids_limit=self._pids_limit, cap_drop=["ALL"],
             security_opt=["no-new-privileges"], auto_remove=False)

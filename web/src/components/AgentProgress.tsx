@@ -2,6 +2,7 @@ import type { ChatMessage } from "../types";
 import {
   Accordion, AccordionSummary, AccordionDetails, Typography, Box, CircularProgress,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
@@ -49,19 +50,43 @@ export function AgentProgress({ steps }: { steps: NonNullable<ChatMessage["steps
               </Typography>
             </AccordionSummary>
             <AccordionDetails sx={{ px: 0, pt: 0 }}>
-              <Typography
-                variant="caption" color="text.secondary"
-                sx={{ display: "block", wordBreak: "break-all" }}
-              >
-                参数：{JSON.stringify(s.args)}
-              </Typography>
-              {s.result !== undefined && (
-                <Typography
-                  variant="caption" color={s.isError ? "error" : "text.secondary"}
-                  sx={{ display: "block", wordBreak: "break-all" }}
-                >
-                  结果：{s.result}
+              {/* 参数：蓝色左边框；结果：绿色成功 / 红色失败——两块明显区分 */}
+              <Box sx={{
+                mb: 0.5, px: 1, py: 0.5, borderRadius: 0.5,
+                borderLeft: 3, borderColor: "info.main",
+                bgcolor: (t) => alpha(t.palette.info.main, 0.08),
+              }}>
+                <Typography variant="caption" sx={{ fontWeight: 700, color: "info.main" }}>
+                  参数
                 </Typography>
+                <Typography
+                  variant="caption" component="pre"
+                  sx={{ m: 0, fontFamily: "monospace", whiteSpace: "pre-wrap", wordBreak: "break-all" }}
+                >
+                  {JSON.stringify(s.args, null, 2)}
+                </Typography>
+              </Box>
+              {s.result !== undefined && (
+                <Box sx={{
+                  px: 1, py: 0.5, borderRadius: 0.5,
+                  borderLeft: 3, borderColor: s.isError ? "error.main" : "success.main",
+                  bgcolor: (t) => alpha(
+                    (s.isError ? t.palette.error : t.palette.success).main, 0.1),
+                }}>
+                  <Typography
+                    variant="caption"
+                    sx={{ fontWeight: 700, color: s.isError ? "error.main" : "success.main" }}
+                  >
+                    {s.isError ? "结果 · 失败" : "结果 · 成功"}
+                  </Typography>
+                  <Typography
+                    variant="caption" component="pre"
+                    sx={{ m: 0, fontFamily: "monospace", whiteSpace: "pre-wrap", wordBreak: "break-all",
+                          color: "text.primary" }}
+                  >
+                    {s.result}
+                  </Typography>
+                </Box>
               )}
             </AccordionDetails>
           </Accordion>

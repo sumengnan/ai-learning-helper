@@ -12,13 +12,13 @@ def test_defaults():
 def test_env_override(monkeypatch):
     monkeypatch.setenv("HARNESS_MODEL", "deepseek-chat")
     monkeypatch.setenv("HARNESS_MAX_STEPS", "3")
-    cfg = HarnessConfig(api_key="k")
+    cfg = HarnessConfig(api_key="k", _env_file=None)
     assert cfg.model == "deepseek-chat"
     assert cfg.max_steps == 3
 
 
 def test_reliability_defaults():
-    cfg = HarnessConfig(api_key="k")
+    cfg = HarnessConfig(api_key="k", _env_file=None)
     assert cfg.max_retries == 2
     assert cfg.retry_base_delay == 0.5
     assert cfg.max_tokens_budget is None
@@ -55,7 +55,7 @@ def test_sandbox_defaults():
 
 
 def test_browser_defaults():
-    cfg = HarnessConfig(api_key="k")
+    cfg = HarnessConfig(api_key="k", _env_file=None)
     assert cfg.browser_headless is True
     assert cfg.browser_nav_timeout == 30.0
     assert cfg.browser_wait_until == "networkidle"
@@ -64,17 +64,17 @@ def test_browser_defaults():
 
 
 def test_multiagent_defaults():
-    cfg = HarnessConfig(api_key="k")
+    cfg = HarnessConfig(api_key="k", _env_file=None)
     assert cfg.max_dispatch_depth == 2
     assert cfg.sub_agent_max_steps == 10
 
 
 def test_episodic_defaults():
-    cfg = HarnessConfig(api_key="k")
+    cfg = HarnessConfig(api_key="k", _env_file=None)
     assert cfg.episode_collection == "episodes"
     assert cfg.episode_recall_k == 3
 
 
 def test_persistence_defaults():
-    cfg = HarnessConfig(api_key="k")
+    cfg = HarnessConfig(api_key="k", _env_file=None)
     assert cfg.persistence_db_path == "harness.db"

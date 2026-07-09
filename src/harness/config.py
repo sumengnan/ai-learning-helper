@@ -52,6 +52,7 @@ class HarnessConfig(BaseSettings):
     sandbox_mem_limit: str = "512m"
     sandbox_cpus: float = 1.0
     sandbox_pids_limit: int = 128
+    sandbox_read_only: bool = False         # 容器根文件系统是否只读（默认可写）
     sandbox_exec_timeout: float = 30.0
     sandbox_output_max_chars: int = 8000
     # 外部 API/HTTP

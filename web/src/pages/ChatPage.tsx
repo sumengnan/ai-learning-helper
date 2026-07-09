@@ -1,6 +1,8 @@
 // web/src/pages/ChatPage.tsx
 import { useEffect, useState } from "react";
-import { Box } from "@mui/material";
+import {
+  Box, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Button,
+} from "@mui/material";
 import type { Conversation, ChatMessage } from "../types";
 import { api } from "../api/client";
 import { ConversationList } from "../components/ConversationList";
@@ -12,6 +14,8 @@ export function ChatPage() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [initial, setInitial] = useState<ChatMessage[]>([]);
   const [autoSend, setAutoSend] = useState<string | null>(null);
+  const [newOpen, setNewOpen] = useState(false);
+  const [newName, setNewName] = useState("");
 
   const refresh = () => api.list().then(setConvs);
 
@@ -37,19 +41,17 @@ export function ChatPage() {
     })));
     setActiveId(id);
   }
-  async function newConv() {
-    // 最近一个对话若还没有任何问答，直接复用它，避免堆积空对话
-    const recent = convs[0];
-    if (recent) {
-      const msgs = await api.messages(recent.id);
-      if (msgs.length === 0) {
-        setAutoSend(null); setInitial([]); setActiveId(recent.id);
-        return;
-      }
-    }
-    const { id } = await api.create();
+  // 新建对话：弹窗输入名称
+  function newConv() {
+    setNewName("");
+    setNewOpen(true);
+  }
+  async function createNamed() {
+    const title = newName.trim() || "新对话";
+    const { id } = await api.create(title);
     await refresh();
     setAutoSend(null); setInitial([]); setActiveId(id);
+    setNewOpen(false);
   }
   async function ask(question: string) {
     const { id } = await api.create();
@@ -73,6 +75,25 @@ export function ChatPage() {
           ? <ChatView key={activeId} conversationId={activeId} initial={initial} autoSend={autoSend} />
           : <EmptyHint onAsk={ask} />}
       </Box>
+
+      <Dialog open={newOpen} onClose={() => setNewOpen(false)}
+        slotProps={{ paper: { sx: { width: 360 } } }}>
+        <DialogTitle>新建对话</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus fullWidth variant="standard" value={newName}
+            placeholder="新对话"
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void createNamed(); }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setNewOpen(false)}>取消</Button>
+          <Button variant="contained" disableElevation onClick={() => void createNamed()}>
+            创建
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
