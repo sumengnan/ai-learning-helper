@@ -28,7 +28,13 @@ export function ChatPage() {
   async function select(id: string) {
     const msgs = await api.messages(id);
     setAutoSend(null);
-    setInitial(msgs.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })));
+    setInitial(msgs.map((m) => ({
+      role: m.role as "user" | "assistant",
+      content: m.content,
+      steps: m.steps
+        ? m.steps.map((s) => ({ tool: s.tool, args: s.args, result: s.result, isError: s.is_error }))
+        : undefined,
+    })));
     setActiveId(id);
   }
   async function newConv() {

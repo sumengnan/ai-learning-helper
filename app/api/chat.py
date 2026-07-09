@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from harness.events import RunError, RunFinished
+from harness.events import RunError, RunFinished, ToolFinished, ToolStarted
 from harness.loop.agent_loop import AgentLoop
 from harness.persistence.serialize import event_to_dict
 from harness.reliability.budget import BudgetTracker
@@ -72,18 +72,32 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
 
         async def gen():
             final = None
+            # 工具调用轨迹（纯 UI 用途），随助手消息落库，切换对话回来后仍可还原
+            steps: list[dict] = []
+            step_by_id: dict[str, dict] = {}
             try:
                 async for ev in harness.sink.wrap(loop.run(req.message)):
                     if isinstance(ev, RunFinished):
                         final = ev.message.content
                     elif isinstance(ev, RunError):
                         final = final or "（本轮未能完成，请重试）"
+                    elif isinstance(ev, ToolStarted):
+                        tc = ev.tool_call
+                        st = {"tool": tc.name, "args": tc.arguments}
+                        steps.append(st)
+                        step_by_id[tc.id] = st
+                    elif isinstance(ev, ToolFinished):
+                        st = step_by_id.get(ev.result.tool_call_id)
+                        if st is not None:
+                            st["result"] = ev.result.content
+                            st["is_error"] = ev.result.is_error
                     yield f"data: {json.dumps(event_to_dict(ev), ensure_ascii=False)}\n\n"
             finally:
                 # 客户端断开（GeneratorExit）或异常时仍落库，避免本轮用户消息丢失
                 store.append(req.conversation_id, [
                     Message(role=Role.USER, content=req.message),
-                    Message(role=Role.ASSISTANT, content=final or "（本轮未完成）")])
+                    Message(role=Role.ASSISTANT, content=final or "（本轮未完成）")],
+                    steps=steps or None)
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 

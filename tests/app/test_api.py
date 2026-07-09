@@ -159,6 +159,12 @@ def test_chat_tool_call_in_stream(make_mock, text_turn, tool_turn):
         events = _sse_events(resp)
     tfs = [e for e in events if e["type"] == "ToolFinished"]
     assert tfs and tfs[0]["data"]["result"]["content"] == "60"
+    # 工具调用轨迹落库：切换对话回来后 get_messages 仍能还原 steps
+    msgs = client.get(f"/api/conversations/{cid}/messages", headers=h).json()
+    assistant = next(m for m in msgs if m["role"] == "assistant")
+    assert assistant["steps"] == [
+        {"tool": "calculator", "args": {"expression": "(12+8)*3"},
+         "result": "60", "is_error": False}]
 
 
 def test_two_turns_accumulate_history(make_mock, text_turn):

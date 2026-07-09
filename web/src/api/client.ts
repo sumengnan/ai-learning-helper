@@ -95,7 +95,10 @@ export const api = {
   rename: (id: string, title: string): Promise<void> =>
     authFetch(`/api/conversations/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title }) }).then(() => undefined),
-  messages: (id: string): Promise<{ role: string; content: string }[]> =>
+  messages: (id: string): Promise<{
+    role: string; content: string;
+    steps?: { tool: string; args: unknown; result?: string; is_error?: boolean }[] | null;
+  }[]> =>
     authFetch(`/api/conversations/${id}/messages`).then((r) => r.json()),
   remove: (id: string): Promise<void> =>
     authFetch(`/api/conversations/${id}`, { method: "DELETE" }).then(() => undefined),

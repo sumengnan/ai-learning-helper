@@ -12,7 +12,7 @@ _SCHEMA = (
          id TEXT PRIMARY KEY, user_id TEXT, title TEXT, created_at TEXT)""",
     """CREATE TABLE IF NOT EXISTS conversation_messages(
          conv_id TEXT, seq INTEGER, role TEXT, content TEXT, tool_calls TEXT,
-         tool_call_id TEXT, created_at TEXT, PRIMARY KEY(conv_id, seq))""",
+         tool_call_id TEXT, steps TEXT, created_at TEXT, PRIMARY KEY(conv_id, seq))""",
     """CREATE TABLE IF NOT EXISTS documents(
          id TEXT PRIMARY KEY, user_id TEXT, filename TEXT, size INTEGER, num_chunks INTEGER,
          chunk_ids TEXT, uploaded_at TEXT)""",
@@ -30,6 +30,7 @@ _SCHEMA = (
 # 历史库若建于某列引入之前，需在此补齐（CREATE TABLE IF NOT EXISTS 不改既有表结构）
 _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
     "conversations": {"user_id": "TEXT"},
+    "conversation_messages": {"steps": "TEXT"},
     "documents": {"user_id": "TEXT"},
     "questions": {"user_id": "TEXT"},
     "wrong_answers": {"user_id": "TEXT"},
