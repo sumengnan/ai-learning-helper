@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Conversation } from "../types";
 import {
-  Box, Button, List, ListItemButton, ListItemText, IconButton, TextField,
+  Box, Button, List, ListItemButton, ListItemText, IconButton, TextField, Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import CloseIcon from "@mui/icons-material/Close";
@@ -30,6 +30,15 @@ export function ConversationList({ items, activeId, onSelect, onNew, onDelete, o
         新对话
       </Button>
       <List sx={{ flex: 1, overflowY: "auto", py: 0 }}>
+        {items.length === 0 && (
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            sx={{ px: 2, py: 3, textAlign: "center" }}
+          >
+            暂无历史对话
+          </Typography>
+        )}
         {items.map((c) => (
           <ListItemButton
             key={c.id}

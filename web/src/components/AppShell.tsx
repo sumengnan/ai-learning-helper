@@ -1,5 +1,5 @@
 // web/src/components/AppShell.tsx
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   Box, Drawer, List, ListItemButton, ListItemIcon, ListItemText,
@@ -13,7 +13,6 @@ import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlined";
 import DownloadIcon from "@mui/icons-material/Download";
 import Brightness4Icon from "@mui/icons-material/Brightness4";
 import Brightness7Icon from "@mui/icons-material/Brightness7";
-import AddIcon from "@mui/icons-material/Add";
 import LogoutIcon from "@mui/icons-material/Logout";
 import { useColorMode } from "../ThemeModeProvider";
 import { useAuth } from "../auth/AuthProvider";
@@ -21,36 +20,22 @@ import { useAuth } from "../auth/AuthProvider";
 const WIDTH = 220;
 
 const NAV: { to: string; label: string; icon: ReactNode }[] = [
-  { to: "/", label: "聊天", icon: <ChatBubbleOutlineIcon /> },
+  { to: "/", label: "AI聊天", icon: <ChatBubbleOutlineIcon /> },
   { to: "/knowledge", label: "知识库", icon: <MenuBookIcon /> },
   { to: "/questions", label: "题库", icon: <QuizIcon /> },
   { to: "/wrong", label: "错题集", icon: <ErrorOutlineIcon /> },
   { to: "/downloads", label: "下载", icon: <DownloadIcon /> },
 ];
 
-// 顶部栏「新建对话」→ ChatPage 之间的解耦通道：点一次自增 nonce，ChatPage 监听。
-const ShellContext = createContext<{ newChatNonce: number; requestNewChat: () => void }>({
-  newChatNonce: 0,
-  requestNewChat: () => {},
-});
-export function useShell() {
-  return useContext(ShellContext);
-}
-
 export function AppShell({ children }: { children: ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { mode, toggleMode } = useColorMode();
   const { user, logout } = useAuth();
-  const [newChatNonce, setNewChatNonce] = useState(0);
   const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
 
   const isActive = (to: string) =>
     to === "/" ? location.pathname === "/" : location.pathname.startsWith(to);
-  const requestNewChat = () => {
-    setNewChatNonce((n) => n + 1);
-    navigate("/");
-  };
   const onLogout = () => {
     setMenuAnchor(null);
     logout();
@@ -58,8 +43,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   };
 
   return (
-    <ShellContext.Provider value={{ newChatNonce, requestNewChat }}>
-      <Box sx={{ display: "flex", height: "100%" }}>
+    <Box sx={{ display: "flex", height: "100%" }}>
         <Drawer
           variant="permanent"
           sx={{
@@ -92,10 +76,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           <AppBar position="static" color="default" elevation={0}
             sx={{ borderBottom: 1, borderColor: "divider" }}>
             <Toolbar sx={{ gap: 1 }}>
-              <Button startIcon={<AddIcon />} variant="outlined" size="small"
-                onClick={requestNewChat}>
-                新建对话
-              </Button>
               <Box sx={{ flex: 1 }} />
               <Tooltip title={mode === "light" ? "切换到暗色" : "切换到亮色"}>
                 <IconButton onClick={toggleMode} aria-label="切换明暗主题">
@@ -123,7 +103,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             {children}
           </Box>
         </Box>
-      </Box>
-    </ShellContext.Provider>
+    </Box>
   );
 }

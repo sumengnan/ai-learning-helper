@@ -1,11 +1,10 @@
 // web/src/pages/ChatPage.tsx
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Box, Paper, Typography } from "@mui/material";
 import type { Conversation, ChatMessage } from "../types";
 import { api } from "../api/client";
 import { ConversationList } from "../components/ConversationList";
 import { ChatView } from "../components/ChatView";
-import { useShell } from "../components/AppShell";
 
 const SUGGESTIONS = [
   "查询最新的 AI 资讯，保存到知识库",
@@ -45,24 +44,13 @@ function EmptyState({ onAsk }: { onAsk: (q: string) => void }) {
 }
 
 export function ChatPage() {
-  const { newChatNonce } = useShell();
   const [convs, setConvs] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [initial, setInitial] = useState<ChatMessage[]>([]);
   const [autoSend, setAutoSend] = useState<string | null>(null);
-  const lastNonce = useRef(0);
 
   const refresh = () => api.list().then(setConvs);
   useEffect(() => { refresh(); }, []);
-
-  // 顶部栏「新建对话」触发（跳过初始 0）
-  useEffect(() => {
-    if (newChatNonce > 0 && newChatNonce !== lastNonce.current) {
-      lastNonce.current = newChatNonce;
-      void newConv();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [newChatNonce]);
 
   async function select(id: string) {
     setAutoSend(null);
