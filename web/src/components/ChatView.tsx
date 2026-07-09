@@ -134,13 +134,17 @@ export function ChatView({ conversationId, initial, autoSend }:
                 const sandbox = m.progress.filter((p) => p.scope === "sandbox");
                 const sub = m.progress.filter((p) => p.scope.startsWith("subagent:"));
                 const live = busy && i === messages.length - 1;
+                const sbLast = sandbox[sandbox.length - 1]?.text ?? "";
+                const sbStatus: "running" | "ok" | "error" =
+                  live && sbLast.endsWith("…") ? "running"
+                    : sandbox.some((p) => p.text.includes("失败")) ? "error" : "ok";
+                const subStatus: "running" | "ok" | "error" =
+                  live && !sub.some((p) => /完成|未产出|失败/.test(p.text)) ? "running"
+                    : sub.some((p) => /未产出|失败/.test(p.text)) ? "error" : "ok";
                 return (
                   <>
-                    <ProgressBlock title="沙箱执行" kind="sandbox" items={sandbox}
-                      running={live && sandbox.length > 0
-                        && sandbox[sandbox.length - 1].text.endsWith("…")} />
-                    <ProgressBlock title="子代理执行" kind="subagent" items={sub}
-                      running={live && !sub.some((p) => /完成|未产出|失败/.test(p.text))} />
+                    <ProgressBlock title="沙箱执行" kind="sandbox" items={sandbox} status={sbStatus} />
+                    <ProgressBlock title="子代理执行" kind="subagent" items={sub} status={subStatus} />
                   </>
                 );
               })()}

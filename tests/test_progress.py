@@ -64,3 +64,23 @@ async def test_sandbox_exec_emits_progress_even_when_reused():
     texts = [e.text for e in events]
     assert any(t.startswith("执行 ") and t.endswith("…") for t in texts)
     assert "执行完成" in texts
+
+
+async def test_sandbox_exec_emits_failure_on_nonzero_exit():
+    sb = DockerSandbox(docker_host="tcp://h:2376", image="python:3.12")
+    container = Mock()
+    exec_res = Mock()
+    exec_res.output = (b"", b"not found")
+    exec_res.exit_code = 127
+    container.exec_run.return_value = exec_res
+    sb._container = container
+
+    got = []
+    token = progress.set_emitter(got.append)
+    try:
+        await sb.exec(["sh", "-c", "nope"], timeout=5)
+    finally:
+        progress.reset_emitter(token)
+
+    texts = [e.text for e in got if isinstance(e, Progress)]
+    assert any("执行失败" in t and "127" in t for t in texts)

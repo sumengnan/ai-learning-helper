@@ -54,6 +54,30 @@ async def test_run_shell():
         await sb.close()
 
 
+async def test_run_shell_nonzero_exit_is_error():
+    sb = LocalSandbox(); await sb.start()
+    try:
+        ex = await _executor(sb)
+        r = await ex.execute(ToolCall(id="c1", name="run_shell",
+                                      arguments={"command": "exit 7"}))
+        assert r.is_error is True            # 非零退出 → 标记失败
+        assert "exit_code=7" in r.content    # 输出仍保留（无“工具执行出错”前缀）
+    finally:
+        await sb.close()
+
+
+async def test_run_python_nonzero_exit_is_error():
+    sb = LocalSandbox(); await sb.start()
+    try:
+        ex = await _executor(sb)
+        r = await ex.execute(ToolCall(id="c1", name="run_python",
+                                      arguments={"code": "import sys; sys.exit(5)"}))
+        assert r.is_error is True
+        assert "exit_code=5" in r.content
+    finally:
+        await sb.close()
+
+
 async def test_path_escape_is_error():
     sb = LocalSandbox(); await sb.start()
     try:

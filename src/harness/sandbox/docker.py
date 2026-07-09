@@ -99,7 +99,8 @@ class DockerSandbox:
         wrapped = ["timeout", str(max(1, math.ceil(timeout))), *command]
         res = await asyncio.to_thread(
             self._container.exec_run, wrapped, workdir=self.workspace, demux=True)
-        emit(Progress("sandbox", "执行完成"))
+        emit(Progress("sandbox", "执行完成" if res.exit_code == 0
+                      else f"执行失败（exit_code={res.exit_code}）"))
         out, err = res.output if isinstance(res.output, tuple) else (res.output, b"")
         return ExecResult((out or b"").decode(errors="replace"),
                           (err or b"").decode(errors="replace"),

@@ -7,6 +7,10 @@ from pydantic import BaseModel, ValidationError
 from ..types import ToolCall, ToolResult
 
 
+class ToolError(Exception):
+    """工具主动把本次结果标记为失败：异常内容原样作为结果回传（不加“工具执行出错”前缀）。"""
+
+
 class Tool(ABC):
     name: str
     description: str
@@ -65,5 +69,7 @@ class ToolExecutor:
         try:
             content = await tool.run(params)
             return ToolResult(call.id, self._truncate(content), is_error=False)
+        except ToolError as e:  # 工具主动标记失败：内容原样回传
+            return ToolResult(call.id, self._truncate(str(e)), is_error=True)
         except Exception as e:  # 工具内部异常兜成 is_error，喂回模型自纠正
             return ToolResult(call.id, f"工具执行出错: {e}", is_error=True)

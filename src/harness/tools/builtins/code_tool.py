@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from ..base import Tool
+from ..base import Tool, ToolError
 from ...sandbox.base import Sandbox
 from ._sandbox_util import format_exec
 
@@ -25,4 +25,7 @@ class RunPythonTool(Tool):
     async def run(self, params: "RunPythonTool.Params") -> str:
         await self._sandbox.write_file("_run.py", params.code)   # SandboxError→is_error
         res = await self._sandbox.exec([self._python_cmd, "_run.py"], self._timeout)
-        return format_exec(res, self._max_chars)
+        out = format_exec(res, self._max_chars)
+        if res.exit_code != 0 or res.timed_out:   # 非零退出/超时 → 标记失败
+            raise ToolError(out)
+        return out
