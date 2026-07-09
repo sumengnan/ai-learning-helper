@@ -1,4 +1,7 @@
 import { useEffect, useState } from "react";
+import { Box, Typography, Card, CardContent, IconButton, Tooltip } from "@mui/material";
+import DownloadIcon from "@mui/icons-material/Download";
+import DeleteIcon from "@mui/icons-material/Delete";
 import { api } from "../api/client";
 
 interface Download {
@@ -15,41 +18,43 @@ export default function DownloadsView() {
   const refresh = () => api.downloads.list().then(setItems);
   useEffect(() => { refresh(); }, []);
 
-  const remove = async (id: string) => {
-    await api.downloads.remove(id);
-    await refresh();
-  };
+  const remove = async (id: string) => { await api.downloads.remove(id); await refresh(); };
 
   return (
-    <div className="p-6 space-y-3">
-      <h2 className="text-xl font-bold">下载管理</h2>
+    <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2 }}>
+      <Typography variant="h5" sx={{ fontWeight: 700 }}>下载管理</Typography>
       {items.length === 0 ? (
-        <p className="text-gray-500">暂无文件。聊天中让助手用 save_download 保存内容后会出现在这里。</p>
+        <Typography color="text.secondary">
+          暂无文件。聊天中让助手用 save_download 保存内容后会出现在这里。
+        </Typography>
       ) : (
-        <ul className="space-y-2">
-          {items.map((d) => (
-            <li key={d.id} className="border rounded p-3 flex justify-between items-center gap-3">
-              <div className="flex items-center gap-3 min-w-0">
-                {d.content_type.startsWith("image/") && (
-                  <img src={`/api/downloads/${d.id}`} alt={d.filename}
-                    className="w-12 h-12 object-cover rounded border" />
-                )}
-                <div className="min-w-0">
-                  <div className="truncate">{d.filename}</div>
-                  <div className="text-xs text-gray-400">
-                    {d.content_type} · {d.size} 字节 · {d.created_at.slice(0, 10)}
-                  </div>
-                </div>
-              </div>
-              <div className="flex items-center gap-3 shrink-0">
-                <a href={`/api/downloads/${d.id}`} download={d.filename}
-                  className="text-blue-600 text-sm">下载</a>
-                <button onClick={() => remove(d.id)} className="text-red-600 text-sm">删除</button>
-              </div>
-            </li>
-          ))}
-        </ul>
+        items.map((d) => (
+          <Card key={d.id} variant="outlined">
+            <CardContent sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+              {d.content_type.startsWith("image/") && (
+                <Box
+                  component="img" src={`/api/downloads/${d.id}`} alt={d.filename}
+                  sx={{ width: 48, height: 48, objectFit: "cover", borderRadius: 1, border: 1, borderColor: "divider" }}
+                />
+              )}
+              <Box sx={{ minWidth: 0, flex: 1 }}>
+                <Typography noWrap>{d.filename}</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {d.content_type} · {d.size} 字节 · {d.created_at.slice(0, 10)}
+                </Typography>
+              </Box>
+              <Tooltip title="下载">
+                <IconButton component="a" href={`/api/downloads/${d.id}`} download={d.filename} aria-label="下载文件">
+                  <DownloadIcon />
+                </IconButton>
+              </Tooltip>
+              <IconButton color="error" onClick={() => remove(d.id)} aria-label="删除文件">
+                <DeleteIcon />
+              </IconButton>
+            </CardContent>
+          </Card>
+        ))
       )}
-    </div>
+    </Box>
   );
 }
