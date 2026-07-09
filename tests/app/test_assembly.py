@@ -35,9 +35,32 @@ def test_browser_gated_on():
     assert h.registry.get("browse") is not None
 
 
-def test_dispatch_gated_on():
-    h = build_harness(_cfg(enable_dispatch=True, enable_browser=True))
+def _agents_dir(tmp_path, fname, content):
+    (tmp_path / fname).write_text(content, encoding="utf-8")
+    return str(tmp_path)
+
+
+def test_dispatch_gated_on(tmp_path):
+    # api_key 有 → search_memory 在池；http_request 恒在 → researcher 有可用工具
+    d = _agents_dir(tmp_path, "researcher.yaml",
+                    "name: researcher\ndescription: 检索\nsystem_prompt: 你是研究员\n"
+                    "tool_names: [search_memory, http_request]\n")
+    h = build_harness(_cfg(enable_dispatch=True, agents_dir=d))
     assert h.registry.get("dispatch") is not None
+
+
+def test_dispatch_skips_agent_with_no_available_tools(tmp_path):
+    # coder 只引用沙箱工具，但未启用沙箱 → 工具全不可用 → 跳过该 agent → 无 agent → 不注册 dispatch
+    d = _agents_dir(tmp_path, "coder.yaml",
+                    "name: coder\ndescription: 写码\nsystem_prompt: 你是程序员\n"
+                    "tool_names: [run_python, run_shell]\n")
+    h = build_harness(_cfg(enable_dispatch=True, agents_dir=d))
+    assert h.registry.get("dispatch") is None
+
+
+def test_dispatch_empty_agents_dir_no_dispatch(tmp_path):
+    h = build_harness(_cfg(enable_dispatch=True, agents_dir=str(tmp_path / "empty")))
+    assert h.registry.get("dispatch") is None
 
 
 def test_build_harness_exposes_memory():

@@ -71,6 +71,7 @@ class HarnessConfig(BaseSettings):
     skills_dir: str = "skills"            # 技能目录：<skills_dir>/<name>/SKILL.md
     skill_resource_max_chars: int = 8000  # read_skill_resource 单次读取上限
     # 多 Agent 编排
+    agents_dir: str = "agents"        # 子 agent 花名册目录：<agents_dir>/<name>.yaml
     max_dispatch_depth: int = 2       # agent 树最大层数（防无限递归）
     sub_agent_max_steps: int = 10     # 子 agent 单次 run 步数上限
     # 情景记忆

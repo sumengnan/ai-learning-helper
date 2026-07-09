@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+import yaml
+
 
 @dataclass(frozen=True)
 class Skill:
@@ -13,10 +15,10 @@ class Skill:
 
 
 def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
-    """解析 SKILL.md 头部的 `---` YAML 块（仅扁平 key: value）+ 正文。
+    """解析 SKILL.md 头部的 `---` YAML 块 + 正文。
 
-    不引入 PyYAML：技能元数据只需 name/description 两个扁平字段，手写解析更省依赖。
-    无合法 frontmatter 时返回 ({}, 原文)。
+    无合法 frontmatter（无 `---` 前缀或未闭合）时返回 ({}, 原文)。frontmatter 解析
+    失败或非映射时 meta 取空 dict；值统一转为字符串。
     """
     if not text.startswith("---"):
         return {}, text
@@ -28,13 +30,13 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
             break
     if end is None:
         return {}, text
-    meta: dict[str, str] = {}
-    for line in lines[1:end]:
-        s = line.strip()
-        if not s or s.startswith("#") or ":" not in s:
-            continue
-        k, _, v = s.partition(":")
-        meta[k.strip()] = v.strip().strip('"').strip("'")
+    try:
+        data = yaml.safe_load("\n".join(lines[1:end]))
+    except yaml.YAMLError:
+        data = None
+    if not isinstance(data, dict):
+        data = {}
+    meta = {str(k): ("" if v is None else str(v)) for k, v in data.items()}
     body = "\n".join(lines[end + 1:]).lstrip("\n")
     return meta, body
 

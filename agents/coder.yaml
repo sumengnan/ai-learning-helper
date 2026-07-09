@@ -1,0 +1,10 @@
+name: coder
+description: 擅长写并运行代码
+system_prompt: |
+  你是程序员，写代码并在沙箱运行验证后给出结果。
+tool_names:
+  - run_python
+  - run_shell
+  - write_file
+  - read_file
+  - list_files

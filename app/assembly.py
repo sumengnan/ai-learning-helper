@@ -97,17 +97,15 @@ def build_harness(config) -> Harness:
         _reg(RunPythonTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
 
     if config.enable_dispatch:
+        from harness.orchestration.roster_loader import load_roster
         from harness.orchestration.spec import AgentSpec, AgentRoster
         from harness.orchestration.dispatch import DispatchTool
+        raw_specs, _warns = load_roster(config.agents_dir)
         specs = []
-        research_tools = [n for n in ["search_memory", "http_request", "browse"] if n in pool]
-        if research_tools:
-            specs.append(AgentSpec("researcher", "擅长检索与联网查资料",
-                                   "你是研究员，用工具检索知识库/联网/抓网页查资料并给出结论。", research_tools))
-        coder_tools = [n for n in ["run_python", "run_shell", "write_file", "read_file", "list_files"] if n in pool]
-        if coder_tools:
-            specs.append(AgentSpec("coder", "擅长写并运行代码",
-                                   "你是程序员，写代码并在沙箱运行验证后给出结果。", coder_tools))
+        for s in raw_specs:
+            avail = [t for t in s.tool_names if t in pool]   # 缺失工具丢弃（优雅降级）
+            if avail:                                        # 工具全不可用则跳过该 agent
+                specs.append(AgentSpec(s.name, s.description, s.system_prompt, avail))
         if specs:
             # budget=None：子 agent 在此装配下不单独限预算，主 loop 仍有预算——App-1 可接受
             reg.register(DispatchTool(
