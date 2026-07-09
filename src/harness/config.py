@@ -39,7 +39,12 @@ class HarnessConfig(BaseSettings):
     memory_collection: str = "knowledge"
     # 容器沙箱
     sandbox_backend: str = "local"          # local | docker
-    sandbox_docker_host: str = ""           # ssh://user@host
+    sandbox_docker_host: str = ""           # tcp://host:2376（Docker daemon 的 TLS 端口）
+    # 直连 Docker daemon TLS 端口的双向 TLS 证书（不再走 SSH）
+    sandbox_docker_tls_ca_cert: str = ""        # CA 证书路径（校验服务端）
+    sandbox_docker_tls_client_cert: str = ""    # 客户端证书路径
+    sandbox_docker_tls_client_key: str = ""     # 客户端私钥路径
+    sandbox_docker_tls_verify: bool = True      # 是否校验服务端证书
     sandbox_image: str = "python:3.12-slim"
     sandbox_workspace: str = "/workspace"
     sandbox_user: str = "1000:1000"

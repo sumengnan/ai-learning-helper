@@ -11,7 +11,7 @@ from .base import ExecResult, resolve_in_workspace
 
 
 class DockerSandbox:
-    """远程 Linux 云服务器的 Docker 容器沙箱（docker SDK over SSH）。真正的安全边界。
+    """远程 Linux 云服务器的 Docker 容器沙箱（docker SDK 直连 daemon 的 TLS 端口）。真正的安全边界。
 
     已知限制（容器内符号链接）：resolve_in_workspace 的 os.path.realpath 符号链接
     检测运行在宿主机侧，对容器内的路径无效；因此 /workspace 的路径限制是尽力而为的
@@ -22,7 +22,9 @@ class DockerSandbox:
 
     def __init__(self, docker_host: str, image: str, workspace: str = "/workspace",
                  user: str = "1000:1000", network: str = "none", mem_limit: str = "512m",
-                 cpus: float = 1.0, pids_limit: int = 128) -> None:
+                 cpus: float = 1.0, pids_limit: int = 128,
+                 tls_ca_cert: str = "", tls_client_cert: str = "",
+                 tls_client_key: str = "", tls_verify: bool = True) -> None:
         self.workspace = workspace
         self._docker_host = docker_host
         self._image = image
@@ -31,15 +33,30 @@ class DockerSandbox:
         self._mem_limit = mem_limit
         self._cpus = cpus
         self._pids_limit = pids_limit
+        self._tls_ca_cert = tls_ca_cert
+        self._tls_client_cert = tls_client_cert
+        self._tls_client_key = tls_client_key
+        self._tls_verify = tls_verify
         self._client = None
         self._container = None
+
+    def _tls_config(self):
+        """按配置构造 docker TLS 客户端配置：双向 TLS（客户端证书/私钥 + CA）。"""
+        from docker.tls import TLSConfig
+        client_cert = ((self._tls_client_cert, self._tls_client_key)
+                       if self._tls_client_cert and self._tls_client_key else None)
+        return TLSConfig(
+            client_cert=client_cert,
+            ca_cert=self._tls_ca_cert or None,
+            verify=self._tls_verify,
+        )
 
     async def start(self) -> None:
         if self._container is not None:
             return
         import docker
         self._client = await asyncio.to_thread(
-            docker.DockerClient, base_url=self._docker_host)
+            docker.DockerClient, base_url=self._docker_host, tls=self._tls_config())
         self._container = await asyncio.to_thread(
             self._client.containers.run,
             self._image, command="sleep infinity", detach=True,
