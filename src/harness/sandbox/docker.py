@@ -91,9 +91,15 @@ class DockerSandbox:
 
     async def exec(self, command: list[str], timeout: float) -> ExecResult:
         await self.start()
+        # 容器复用时 start() 不再产出进度；每次执行仍上报，让沙箱活动可见
+        desc = " ".join(command).replace("\n", " ")
+        if len(desc) > 60:
+            desc = desc[:60]
+        emit(Progress("sandbox", f"执行 {desc}…"))
         wrapped = ["timeout", str(max(1, math.ceil(timeout))), *command]
         res = await asyncio.to_thread(
             self._container.exec_run, wrapped, workdir=self.workspace, demux=True)
+        emit(Progress("sandbox", "执行完成"))
         out, err = res.output if isinstance(res.output, tuple) else (res.output, b"")
         return ExecResult((out or b"").decode(errors="replace"),
                           (err or b"").decode(errors="replace"),

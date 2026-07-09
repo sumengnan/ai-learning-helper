@@ -137,7 +137,8 @@ export function ChatView({ conversationId, initial, autoSend }:
                 return (
                   <>
                     <ProgressBlock title="沙箱执行" kind="sandbox" items={sandbox}
-                      running={live && !sandbox.some((p) => p.text.includes("就绪"))} />
+                      running={live && sandbox.length > 0
+                        && sandbox[sandbox.length - 1].text.endsWith("…")} />
                     <ProgressBlock title="子代理执行" kind="subagent" items={sub}
                       running={live && !sub.some((p) => /完成|未产出|失败/.test(p.text))} />
                   </>
