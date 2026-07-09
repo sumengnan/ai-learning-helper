@@ -40,9 +40,23 @@ def build_harness(config) -> Harness:
         pool[tool.name] = tool
 
     _reg(CalculatorTool())
-    _reg(HttpRequestTool(
-        config.http_allowed_domains, config.http_block_private, config.http_timeout,
-        config.http_max_response_bytes, config.http_max_redirects))
+
+    # 沙箱（若启用）：网络工具与代码工具共用同一个联网容器
+    sandbox = None
+    if config.enable_sandbox and config.sandbox_docker_host:
+        from harness.sandbox.factory import build_sandbox
+        sandbox = build_sandbox(config)
+
+    # http_request：有沙箱时在容器内用 curl 出网，否则回退到宿主 httpx
+    if sandbox is not None:
+        from harness.tools.builtins.sandbox_http_tool import SandboxedHttpRequestTool
+        _reg(SandboxedHttpRequestTool(
+            sandbox, config.http_allowed_domains, config.http_block_private,
+            config.http_timeout, config.http_max_response_bytes, config.http_max_redirects))
+    else:
+        _reg(HttpRequestTool(
+            config.http_allowed_domains, config.http_block_private, config.http_timeout,
+            config.http_max_response_bytes, config.http_max_redirects))
 
     # 记忆（有 api_key 即可注册；知识库为空时检索返回空，不报错）
     if config.api_key or config.embedding_api_key:
@@ -71,17 +85,15 @@ def build_harness(config) -> Harness:
             build_browser(config), config.http_allowed_domains, config.http_block_private,
             config.browser_nav_timeout, config.browser_wait_until, config.browser_output_max_chars))
 
-    if config.enable_sandbox and config.sandbox_docker_host:
-        from harness.sandbox.factory import build_sandbox
+    if sandbox is not None:
         from harness.tools.builtins.fs_tools import WriteFileTool, ReadFileTool, ListFilesTool
         from harness.tools.builtins.shell_tool import RunShellTool
         from harness.tools.builtins.code_tool import RunPythonTool
-        sb = build_sandbox(config)
-        _reg(WriteFileTool(sb))
-        _reg(ReadFileTool(sb, config.sandbox_output_max_chars))
-        _reg(ListFilesTool(sb))
-        _reg(RunShellTool(sb, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
-        _reg(RunPythonTool(sb, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
+        _reg(WriteFileTool(sandbox))
+        _reg(ReadFileTool(sandbox, config.sandbox_output_max_chars))
+        _reg(ListFilesTool(sandbox))
+        _reg(RunShellTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
+        _reg(RunPythonTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
 
     if config.enable_dispatch:
         from harness.orchestration.spec import AgentSpec, AgentRoster
