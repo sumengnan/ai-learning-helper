@@ -2,7 +2,8 @@ from harness.config import HarnessConfig
 
 
 def test_defaults():
-    cfg = HarnessConfig(api_key="k")
+    # _env_file=None：断言源码默认值，不受开发机本地 .env 影响
+    cfg = HarnessConfig(api_key="k", _env_file=None)
     assert cfg.model == "gpt-4o-mini"
     assert cfg.max_steps == 10
     assert cfg.base_url.endswith("/v1")
@@ -29,7 +30,7 @@ def test_reliability_defaults():
 
 
 def test_memory_defaults():
-    cfg = HarnessConfig(api_key="k")
+    cfg = HarnessConfig(api_key="k", _env_file=None)
     assert cfg.embedding_base_url.endswith("/v1")
     assert cfg.embedding_model == "text-embedding-3-small"
     assert cfg.embedding_dimension == 1536
