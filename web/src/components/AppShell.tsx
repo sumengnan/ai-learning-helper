@@ -70,7 +70,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </Tooltip>
         </Box>
       </Drawer>
-      <Box component="main" sx={{ flex: 1, minWidth: 0, height: "100%", overflow: "hidden" }}>
+      <Box component="main" sx={{ flex: 1, minWidth: 0, height: "100%", overflow: "auto" }}>
         {children}
       </Box>
     </Box>

@@ -91,7 +91,7 @@ export default function QuestionBankView() {
                 </IconButton>
               }
             >
-              <Chip size="small" label={q.type} sx={{ mr: 1 }} />
+              <Chip size="small" label={TYPES.find((t) => t.key === q.type)?.label ?? q.type} sx={{ mr: 1 }} />
               <ListItemText
                 primary={q.stem}
                 secondary={q.source ? `· ${q.source}` : undefined}
