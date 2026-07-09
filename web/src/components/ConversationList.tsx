@@ -1,11 +1,42 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import type { Conversation } from "../types";
 import {
-  Box, Button, List, ListItemButton, ListItemText, IconButton, TextField, Typography,
+  Box, Button, List, ListItemButton, ListItemText, ListSubheader, IconButton,
+  TextField, Typography, Dialog, DialogTitle, DialogContent, DialogContentText,
+  DialogActions,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
-import CloseIcon from "@mui/icons-material/Close";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
 import EditIcon from "@mui/icons-material/Edit";
+
+// 依据创建时间与今天的自然日差，归入「今天 / 昨天 / 3天前 / …」分组
+function dayDiff(iso: string): number {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return 0;
+  const startOfDay = (x: Date) =>
+    new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  return Math.round((startOfDay(new Date()) - startOfDay(d)) / 86_400_000);
+}
+function bucketLabel(iso: string): string {
+  const diff = dayDiff(iso);
+  if (diff <= 0) return "今天";
+  if (diff === 1) return "昨天";
+  if (diff <= 3) return "3天前";
+  if (diff <= 7) return "7天前";
+  if (diff <= 30) return "30天前";
+  return "更久";
+}
+// items 已按 created_at 倒序，相同分组必连续，据此切段
+function groupByTime(items: Conversation[]): { label: string; items: Conversation[] }[] {
+  const groups: { label: string; items: Conversation[] }[] = [];
+  for (const c of items) {
+    const label = bucketLabel(c.created_at);
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.items.push(c);
+    else groups.push({ label, items: [c] });
+  }
+  return groups;
+}
 
 export function ConversationList({ items, activeId, onSelect, onNew, onDelete, onRename }: {
   items: Conversation[]; activeId: string | null;
@@ -14,77 +45,117 @@ export function ConversationList({ items, activeId, onSelect, onNew, onDelete, o
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null);
 
   const startEdit = (c: Conversation) => { setEditingId(c.id); setDraft(c.title); };
   const commit = () => {
     if (editingId && draft.trim()) onRename(editingId, draft.trim());
     setEditingId(null);
   };
+  const confirmDelete = () => {
+    if (pendingDelete) onDelete(pendingDelete.id);
+    setPendingDelete(null);
+  };
+
+  const groups = groupByTime(items);
 
   return (
     <Box sx={{
-      width: 240, borderRight: 1, borderColor: "divider",
+      width: 260, borderRight: 1, borderColor: "divider",
       display: "flex", flexDirection: "column", height: "100%",
+      bgcolor: "background.paper",
     }}>
-      <Button startIcon={<AddIcon />} variant="contained" onClick={onNew} sx={{ m: 1 }}>
-        新对话
-      </Button>
+      <Box sx={{ p: 1.5 }}>
+        <Button fullWidth startIcon={<AddIcon />} variant="contained" disableElevation onClick={onNew}>
+          新对话
+        </Button>
+      </Box>
       <List sx={{ flex: 1, overflowY: "auto", py: 0 }}>
         {items.length === 0 && (
           <Typography
-            variant="body2"
-            color="text.secondary"
+            variant="body2" color="text.secondary"
             sx={{ px: 2, py: 3, textAlign: "center" }}
           >
             暂无历史对话
           </Typography>
         )}
-        {items.map((c) => (
-          <ListItemButton
-            key={c.id}
-            selected={c.id === activeId}
-            onClick={() => editingId === c.id ? undefined : onSelect(c.id)}
-            sx={{ "&:hover .conv-actions": { opacity: 1 } }}
-          >
-            {editingId === c.id ? (
-              <TextField
-                autoFocus fullWidth size="small" variant="standard" value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onClick={(e) => e.stopPropagation()}
-                onBlur={commit}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") commit();
-                  else if (e.key === "Escape") setEditingId(null);
+        {groups.map((g) => (
+          <Fragment key={g.label}>
+            <ListSubheader
+              disableSticky
+              sx={{
+                bgcolor: "transparent", color: "text.secondary",
+                fontWeight: 600, lineHeight: "32px",
+              }}
+            >
+              {g.label}
+            </ListSubheader>
+            {g.items.map((c) => (
+              <ListItemButton
+                key={c.id}
+                selected={c.id === activeId}
+                onClick={() => (editingId === c.id ? undefined : onSelect(c.id))}
+                sx={{
+                  mx: 1, borderRadius: 1.5,
+                  "&:hover .conv-actions": { opacity: 1 },
                 }}
-              />
-            ) : (
-              <>
-                <ListItemText
-                  primary={c.title}
-                  slotProps={{ primary: { noWrap: true } }}
-                  onDoubleClick={() => startEdit(c)}
-                />
-                <Box className="conv-actions" sx={{ opacity: 0, display: "flex" }}>
-                  <IconButton
-                    size="small"
-                    onClick={(e) => { e.stopPropagation(); startEdit(c); }}
-                    aria-label="重命名对话"
-                  >
-                    <EditIcon fontSize="small" />
-                  </IconButton>
-                  <IconButton
-                    size="small"
-                    onClick={(e) => { e.stopPropagation(); onDelete(c.id); }}
-                    aria-label="删除对话"
-                  >
-                    <CloseIcon fontSize="small" />
-                  </IconButton>
-                </Box>
-              </>
-            )}
-          </ListItemButton>
+              >
+                {editingId === c.id ? (
+                  <TextField
+                    autoFocus fullWidth size="small" variant="standard" value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    onBlur={commit}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") commit();
+                      else if (e.key === "Escape") setEditingId(null);
+                    }}
+                  />
+                ) : (
+                  <>
+                    <ListItemText
+                      primary={c.title}
+                      slotProps={{ primary: { noWrap: true } }}
+                      onDoubleClick={() => startEdit(c)}
+                    />
+                    <Box className="conv-actions" sx={{ opacity: 0, display: "flex", ml: 0.5 }}>
+                      <IconButton
+                        size="small"
+                        onClick={(e) => { e.stopPropagation(); startEdit(c); }}
+                        aria-label="重命名对话"
+                      >
+                        <EditIcon fontSize="small" />
+                      </IconButton>
+                      <IconButton
+                        size="small"
+                        onClick={(e) => { e.stopPropagation(); setPendingDelete(c); }}
+                        aria-label="删除对话"
+                      >
+                        <DeleteOutlineIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
+                  </>
+                )}
+              </ListItemButton>
+            ))}
+          </Fragment>
         ))}
       </List>
+
+      <Dialog open={Boolean(pendingDelete)} onClose={() => setPendingDelete(null)}>
+        <DialogTitle>删除对话</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            确定删除对话「{pendingDelete?.title}」吗？此操作不可撤销。
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPendingDelete(null)}>取消</Button>
+          <Button color="error" variant="contained" disableElevation onClick={confirmDelete}>
+            删除
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

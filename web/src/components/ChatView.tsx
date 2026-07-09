@@ -22,6 +22,8 @@ export function ChatView({ conversationId, initial, autoSend }:
   const [saveWrong, setSaveWrong] = useState(() => readBool(SAVE_WRONG_KEY, false));
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const stickRef = useRef(true);
   const saveWrongRef = useRef(saveWrong);
   saveWrongRef.current = saveWrong;
 
@@ -34,6 +36,16 @@ export function ChatView({ conversationId, initial, autoSend }:
 
   // 卸载（含 App 用 key={activeId} 切换对话触发 remount）时取消在途流
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  // 跟随滚动：AI 回复流式更新时自动滚到底部；用户主动上滑离开底部则暂停跟随
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
+  }, [messages]);
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (el) stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
 
   const upd = (fn: (a: ChatMessage) => void) =>
     setMessages((m) => {
@@ -79,7 +91,8 @@ export function ChatView({ conversationId, initial, autoSend }:
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <Box sx={{ flex: 1, overflowY: "auto", p: 2, display: "flex", flexDirection: "column", gap: 2 }}>
+      <Box ref={scrollRef} onScroll={onScroll}
+        sx={{ flex: 1, overflowY: "auto", p: 2, display: "flex", flexDirection: "column", gap: 2 }}>
         {messages.map((m, i) => (
           <Box key={i} sx={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
             <Paper
@@ -90,10 +103,12 @@ export function ChatView({ conversationId, initial, autoSend }:
                 color: m.role === "user" ? "primary.contrastText" : "text.primary",
               }}
             >
+              {showTools && m.role === "assistant" && m.steps && m.steps.length > 0 && (
+                <AgentProgress steps={m.steps} />
+              )}
               <Typography component="div" sx={{ whiteSpace: "pre-wrap" }}>
                 {m.content || (m.role === "assistant" ? "…" : "")}
               </Typography>
-              {showTools && m.role === "assistant" && m.steps && <AgentProgress steps={m.steps} />}
               {showTools && m.usage && (
                 <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
                   tokens {m.usage.tokens}{m.usage.cost != null ? ` · $${m.usage.cost.toFixed(4)}` : ""}
@@ -116,14 +131,18 @@ export function ChatView({ conversationId, initial, autoSend }:
           label={<Typography variant="caption">考试答错自动保存错题集</Typography>}
         />
       </Box>
-      <Box sx={{ px: 1.5, pb: 1.5, pt: 0.5, display: "flex", gap: 1 }}>
+      <Box sx={{ px: 1.5, pb: 1.5, pt: 0.5, display: "flex", gap: 1, alignItems: "flex-end" }}>
         <TextField
           fullWidth size="small" value={input}
+          multiline minRows={1} maxRows={6}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") send(); }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+          }}
           placeholder="问点什么…"
         />
-        <Button variant="contained" onClick={() => send()} disabled={busy}>发送</Button>
+        <Button variant="contained" onClick={() => send()} disabled={busy}
+          sx={{ flexShrink: 0, mb: 0.25 }}>发送</Button>
       </Box>
     </Box>
   );

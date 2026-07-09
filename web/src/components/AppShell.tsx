@@ -58,12 +58,19 @@ export function AppShell({ children }: { children: ReactNode }) {
             </Typography>
           </Toolbar>
           <Divider />
-          <List sx={{ flex: 1 }}>
+          <List sx={{ flex: 1, px: 1 }}>
             {NAV.map((n) => (
               <ListItemButton
                 key={n.to}
                 selected={isActive(n.to)}
                 onClick={() => navigate(n.to)}
+                sx={{
+                  borderRadius: 1.5, mb: 0.5,
+                  "&.Mui-selected": {
+                    "& .MuiListItemIcon-root": { color: "primary.main" },
+                    "& .MuiListItemText-primary": { fontWeight: 600, color: "primary.main" },
+                  },
+                }}
               >
                 <ListItemIcon sx={{ minWidth: 40 }}>{n.icon}</ListItemIcon>
                 <ListItemText primary={n.label} />
