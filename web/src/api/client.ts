@@ -66,11 +66,11 @@ export function drainSSE(buffer: string): { events: AgentEvent[]; rest: string }
 
 export async function streamChat(
   conversationId: string, message: string, onEvent: (e: AgentEvent) => void,
-  signal?: AbortSignal,
+  signal?: AbortSignal, saveWrong = false,
 ): Promise<void> {
   const resp = await authFetch("/api/chat", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ conversation_id: conversationId, message }),
+    body: JSON.stringify({ conversation_id: conversationId, message, save_wrong: saveWrong }),
     signal,
   });
   if (!resp.ok || !resp.body) throw new Error(`chat 失败：${resp.status}`);
@@ -129,19 +129,6 @@ export const api = {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids }),
       }).then(() => undefined),
-  },
-  exams: {
-    compose: (count: number, types: string[] | null) =>
-      authFetch("/api/exams", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ count, types }),
-      }).then((r) => { if (!r.ok) throw new Error("组卷失败"); return r.json(); }),
-    submit: (answers: { question_id: string; user_answer: unknown }[]) =>
-      authFetch("/api/exams/submit", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ answers }),
-      }).then((r) => { if (!r.ok) throw new Error("交卷失败"); return r.json(); }),
-    history: () => authFetch("/api/exams").then((r) => r.json()),
   },
   wrong: {
     list: () => authFetch("/api/wrong-answers").then((r) => r.json()),

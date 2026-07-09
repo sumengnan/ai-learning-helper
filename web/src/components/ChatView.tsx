@@ -1,16 +1,36 @@
 import { useEffect, useRef, useState } from "react";
-import { Box, Paper, TextField, Button, Typography } from "@mui/material";
+import {
+  Box, Paper, TextField, Button, Typography, FormControlLabel, Switch,
+} from "@mui/material";
 import type { ChatMessage } from "../types";
 import { streamChat } from "../api/client";
 import { AgentProgress } from "./AgentProgress";
+
+const SHOW_TOOLS_KEY = "chat_show_tools";
+const SAVE_WRONG_KEY = "chat_save_wrong";
+const readBool = (k: string, dflt: boolean) => {
+  const v = localStorage.getItem(k);
+  return v === null ? dflt : v === "1";
+};
 
 export function ChatView({ conversationId, initial, autoSend }:
   { conversationId: string; initial: ChatMessage[]; autoSend?: string | null }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initial);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showTools, setShowTools] = useState(() => readBool(SHOW_TOOLS_KEY, true));
+  const [saveWrong, setSaveWrong] = useState(() => readBool(SAVE_WRONG_KEY, false));
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
+  const saveWrongRef = useRef(saveWrong);
+  saveWrongRef.current = saveWrong;
+
+  const toggleShowTools = (v: boolean) => {
+    setShowTools(v); localStorage.setItem(SHOW_TOOLS_KEY, v ? "1" : "0");
+  };
+  const toggleSaveWrong = (v: boolean) => {
+    setSaveWrong(v); localStorage.setItem(SAVE_WRONG_KEY, v ? "1" : "0");
+  };
 
   // 卸载（含 App 用 key={activeId} 切换对话触发 remount）时取消在途流
   useEffect(() => () => abortRef.current?.abort(), []);
@@ -45,7 +65,7 @@ export function ChatView({ conversationId, initial, autoSend }:
       else if (e.type === "RunError") upd((a) => { a.content += `\n[出错] ${e.data.error}`; });
     };
     try {
-      await streamChat(conversationId, msg, onEvent, controller.signal);
+      await streamChat(conversationId, msg, onEvent, controller.signal, saveWrongRef.current);
     } catch (err: any) {
       if (err?.name !== "AbortError") upd((a) => { a.content += `\n[连接失败] ${err}`; });
     } finally { setBusy(false); busyRef.current = false; }
@@ -73,8 +93,8 @@ export function ChatView({ conversationId, initial, autoSend }:
               <Typography component="div" sx={{ whiteSpace: "pre-wrap" }}>
                 {m.content || (m.role === "assistant" ? "…" : "")}
               </Typography>
-              {m.role === "assistant" && m.steps && <AgentProgress steps={m.steps} />}
-              {m.usage && (
+              {showTools && m.role === "assistant" && m.steps && <AgentProgress steps={m.steps} />}
+              {showTools && m.usage && (
                 <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
                   tokens {m.usage.tokens}{m.usage.cost != null ? ` · $${m.usage.cost.toFixed(4)}` : ""}
                 </Typography>
@@ -83,7 +103,20 @@ export function ChatView({ conversationId, initial, autoSend }:
           </Box>
         ))}
       </Box>
-      <Box sx={{ p: 1.5, borderTop: 1, borderColor: "divider", display: "flex", gap: 1 }}>
+      <Box sx={{ px: 1.5, pt: 1, borderTop: 1, borderColor: "divider",
+        display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+        <FormControlLabel
+          control={<Switch size="small" checked={showTools}
+            onChange={(e) => toggleShowTools(e.target.checked)} />}
+          label={<Typography variant="caption">展示工具调用和 Token</Typography>}
+        />
+        <FormControlLabel
+          control={<Switch size="small" checked={saveWrong}
+            onChange={(e) => toggleSaveWrong(e.target.checked)} />}
+          label={<Typography variant="caption">考试答错自动保存错题集</Typography>}
+        />
+      </Box>
+      <Box sx={{ px: 1.5, pb: 1.5, pt: 0.5, display: "flex", gap: 1 }}>
         <TextField
           fullWidth size="small" value={input}
           onChange={(e) => setInput(e.target.value)}

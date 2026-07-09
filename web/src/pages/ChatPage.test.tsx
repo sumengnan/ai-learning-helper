@@ -30,8 +30,10 @@ describe("ChatPage 空态引导", () => {
     render(<MemoryRouter><ChatPage /></MemoryRouter>);
     fireEvent.click(await screen.findByText("对我的错题集做个总结"));
     await waitFor(() => expect(api.create).toHaveBeenCalled());
-    await waitFor(() =>
-      expect(streamChat).toHaveBeenCalledWith(
-        "new1", "对我的错题集做个总结", expect.anything(), expect.anything()));
+    await waitFor(() => expect(streamChat).toHaveBeenCalled());
+    const calls = vi.mocked(streamChat).mock.calls;
+    const call = calls[calls.length - 1];
+    expect(call[0]).toBe("new1");
+    expect(call[1]).toBe("对我的错题集做个总结");
   });
 });

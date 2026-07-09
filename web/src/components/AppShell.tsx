@@ -9,7 +9,6 @@ import {
 import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutlined";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
 import QuizIcon from "@mui/icons-material/Quiz";
-import AssignmentIcon from "@mui/icons-material/Assignment";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlined";
 import DownloadIcon from "@mui/icons-material/Download";
 import Brightness4Icon from "@mui/icons-material/Brightness4";
@@ -25,7 +24,6 @@ const NAV: { to: string; label: string; icon: ReactNode }[] = [
   { to: "/", label: "聊天", icon: <ChatBubbleOutlineIcon /> },
   { to: "/knowledge", label: "知识库", icon: <MenuBookIcon /> },
   { to: "/questions", label: "题库", icon: <QuizIcon /> },
-  { to: "/exam", label: "考试", icon: <AssignmentIcon /> },
   { to: "/wrong", label: "错题集", icon: <ErrorOutlineIcon /> },
   { to: "/downloads", label: "下载", icon: <DownloadIcon /> },
 ];
