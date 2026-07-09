@@ -6,6 +6,8 @@ import sqlite3
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from ._migrations import ensure_columns
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -19,6 +21,7 @@ class WrongAnswerStore:
                  id TEXT PRIMARY KEY, user_id TEXT, question_id TEXT, exam_id TEXT,
                  snapshot TEXT, user_answer TEXT, created_at TEXT, seq INTEGER)""")
         self._db.commit()
+        ensure_columns(self._db, "wrong_answers", {"user_id": "TEXT"})
         self._seq = self._db.execute(
             "SELECT COALESCE(MAX(seq), 0) FROM wrong_answers").fetchone()[0]
 

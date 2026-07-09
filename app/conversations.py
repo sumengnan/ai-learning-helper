@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from harness.persistence.serialize import message_from_dict, message_to_dict
 from harness.types import Message
 
+from ._migrations import ensure_columns
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -25,6 +27,7 @@ class ConversationStore:
             "conv_id TEXT, seq INTEGER, role TEXT, content TEXT, tool_calls TEXT, "
             "tool_call_id TEXT, created_at TEXT, PRIMARY KEY(conv_id, seq))")
         self._conn.commit()
+        ensure_columns(self._conn, "conversations", {"user_id": "TEXT"})
 
     def create(self, user_id: str, title: str = "新对话") -> str:
         cid = uuid.uuid4().hex

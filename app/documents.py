@@ -5,6 +5,8 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
+from ._migrations import ensure_columns
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -18,6 +20,7 @@ class DocumentStore:
             "id TEXT PRIMARY KEY, user_id TEXT, filename TEXT, size INTEGER, num_chunks INTEGER, "
             "chunk_ids TEXT, uploaded_at TEXT)")
         self._conn.commit()
+        ensure_columns(self._conn, "documents", {"user_id": "TEXT"})
 
     def create(self, user_id: str, doc_id: str, filename: str, size: int,
                chunk_ids: list[int]) -> None:

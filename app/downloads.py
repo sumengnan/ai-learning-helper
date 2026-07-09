@@ -6,6 +6,8 @@ import sqlite3
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from ._migrations import ensure_columns
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -21,6 +23,7 @@ class DownloadStore:
                  id TEXT PRIMARY KEY, user_id TEXT, filename TEXT, size INTEGER,
                  content_type TEXT, created_at TEXT, seq INTEGER)""")
         self._db.commit()
+        ensure_columns(self._db, "downloads", {"user_id": "TEXT"})
         self._seq = self._db.execute(
             "SELECT COALESCE(MAX(seq), 0) FROM downloads").fetchone()[0]
 

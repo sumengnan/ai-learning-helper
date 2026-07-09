@@ -6,6 +6,8 @@ import sqlite3
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from ._migrations import ensure_columns
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -19,6 +21,7 @@ class QuestionStore:
                  id TEXT PRIMARY KEY, user_id TEXT, type TEXT, stem TEXT, options TEXT,
                  answer TEXT, explanation TEXT, source TEXT, created_at TEXT)""")
         self._db.commit()
+        ensure_columns(self._db, "questions", {"user_id": "TEXT"})
 
     _COLS = "id, type, stem, options, answer, explanation, source, created_at"
 
