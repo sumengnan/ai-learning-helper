@@ -19,6 +19,7 @@ class AppConfig(HarnessConfig):
     enable_browser: bool = False
     enable_sandbox: bool = False
     enable_dispatch: bool = False
+    enable_skills: bool = False
     cors_origins: list = ["http://localhost:5173"]
     app_max_upload_mb: int = 20
     quiz_max_count: int = 20

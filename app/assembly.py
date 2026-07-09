@@ -23,6 +23,7 @@ class Harness:
     memory: object | None = None
     memory_store: object | None = None
     download_store: object | None = None
+    skill_registry: object | None = None
 
 
 def build_harness(config) -> Harness:
@@ -114,6 +115,20 @@ def build_harness(config) -> Harness:
                 max_depth=config.max_dispatch_depth, sub_max_steps=config.sub_agent_max_steps,
                 model_name=config.model, price_map=config.price_map))
 
+    # 技能（渐进式披露）：扫描技能目录，非空才注册三个工具
+    skill_registry = None
+    if config.enable_skills:
+        from harness.skills.registry import SkillRegistry
+        from harness.skills.tools import (
+            LoadSkillTool, ReadSkillResourceTool, UnloadSkillTool)
+        skill_registry = SkillRegistry(config.skills_dir, config.skill_resource_max_chars)
+        if not skill_registry.is_empty():
+            _reg(LoadSkillTool(skill_registry))
+            _reg(UnloadSkillTool(skill_registry))
+            _reg(ReadSkillResourceTool(skill_registry))
+        else:
+            skill_registry = None   # 无技能可加载，不必包装 context
+
     from .downloads import DownloadStore
     from .tools.save_download import SaveDownloadTool
     dstore = DownloadStore(config.downloads_dir, db_path=config.app_db_path)
@@ -125,4 +140,5 @@ def build_harness(config) -> Harness:
         checkpoint_store=CheckpointStore(config.persistence_db_path),
         trajectory_store=traj, sink=TrajectorySink(traj),
         system_prompt=config.app_system_prompt,
-        memory=memory, memory_store=memory_store, download_store=dstore)
+        memory=memory, memory_store=memory_store, download_store=dstore,
+        skill_registry=skill_registry)

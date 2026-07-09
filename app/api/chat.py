@@ -64,6 +64,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             raise HTTPException(status_code=404, detail="对话不存在")
         history = store.messages(req.conversation_id)
         ctx = ConversationContextManager(harness.system_prompt + EXAM_GUIDE, history)
+        if getattr(harness, "skill_registry", None) is not None:
+            from harness.skills.context import SkillContextManager
+            ctx = SkillContextManager(ctx, harness.skill_registry)
         registry = _build_registry(user_id, req.save_wrong)
         loop = AgentLoop(
             client=harness.client, registry=registry, context=ctx,

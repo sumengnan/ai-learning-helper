@@ -50,3 +50,28 @@ def test_build_harness_registers_save_download():
     h = build_harness(_cfg())
     assert h.registry.get("save_download") is not None
     assert h.download_store is not None
+
+
+def test_skills_gated_off():
+    h = build_harness(_cfg(enable_skills=False))
+    assert h.registry.get("load_skill") is None
+    assert h.skill_registry is None
+
+
+def test_skills_gated_on_registers_tools(tmp_path):
+    d = tmp_path / "etl"
+    d.mkdir()
+    (d / "SKILL.md").write_text(
+        "---\nname: etl\ndescription: 表格清洗\n---\n正文", encoding="utf-8")
+    h = build_harness(_cfg(enable_skills=True, skills_dir=str(tmp_path)))
+    assert h.registry.get("load_skill") is not None
+    assert h.registry.get("unload_skill") is not None
+    assert h.registry.get("read_skill_resource") is not None
+    assert h.skill_registry is not None
+    assert h.skill_registry.has("etl")
+
+
+def test_skills_gated_on_empty_dir_registers_nothing(tmp_path):
+    h = build_harness(_cfg(enable_skills=True, skills_dir=str(tmp_path / "empty")))
+    assert h.registry.get("load_skill") is None
+    assert h.skill_registry is None
