@@ -19,28 +19,31 @@ class ConversationStore:
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS conversations("
-            "id TEXT PRIMARY KEY, title TEXT, created_at TEXT)")
+            "id TEXT PRIMARY KEY, user_id TEXT, title TEXT, created_at TEXT)")
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS conversation_messages("
             "conv_id TEXT, seq INTEGER, role TEXT, content TEXT, tool_calls TEXT, "
             "tool_call_id TEXT, created_at TEXT, PRIMARY KEY(conv_id, seq))")
         self._conn.commit()
 
-    def create(self, title: str = "新对话") -> str:
+    def create(self, user_id: str, title: str = "新对话") -> str:
         cid = uuid.uuid4().hex
-        self._conn.execute("INSERT INTO conversations(id, title, created_at) VALUES (?, ?, ?)",
-                           (cid, title, _now()))
+        self._conn.execute(
+            "INSERT INTO conversations(id, user_id, title, created_at) VALUES (?, ?, ?, ?)",
+            (cid, user_id, title, _now()))
         self._conn.commit()
         return cid
 
-    def list(self) -> list[dict]:
+    def list(self, user_id: str) -> list[dict]:
         rows = self._conn.execute(
-            "SELECT id, title, created_at FROM conversations ORDER BY created_at DESC").fetchall()
+            "SELECT id, title, created_at FROM conversations WHERE user_id = ? "
+            "ORDER BY created_at DESC", (user_id,)).fetchall()
         return [{"id": r[0], "title": r[1], "created_at": r[2]} for r in rows]
 
-    def exists(self, conv_id: str) -> bool:
+    def exists(self, user_id: str, conv_id: str) -> bool:
         return self._conn.execute(
-            "SELECT 1 FROM conversations WHERE id = ?", (conv_id,)).fetchone() is not None
+            "SELECT 1 FROM conversations WHERE id = ? AND user_id = ?",
+            (conv_id, user_id)).fetchone() is not None
 
     def messages(self, conv_id: str) -> list[Message]:
         rows = self._conn.execute(
@@ -70,7 +73,16 @@ class ConversationStore:
             seq += 1
         self._conn.commit()
 
-    def delete(self, conv_id: str) -> None:
+    def rename(self, user_id: str, conv_id: str, title: str) -> bool:
+        cur = self._conn.execute(
+            "UPDATE conversations SET title = ? WHERE id = ? AND user_id = ?",
+            (title, conv_id, user_id))
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def delete(self, user_id: str, conv_id: str) -> None:
+        if not self.exists(user_id, conv_id):
+            return
         self._conn.execute("DELETE FROM conversation_messages WHERE conv_id = ?", (conv_id,))
         self._conn.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
         self._conn.commit()

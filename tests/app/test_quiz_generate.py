@@ -27,16 +27,16 @@ async def _completer_returning(text):
 @pytest.mark.asyncio
 async def test_generate_parses_validates_and_stores(mock_embedder):
     mem = _memory(mock_embedder)
-    await mem.add_texts(["光合作用在叶绿体进行，释放氧气"], "knowledge", {"source": "生物"})
+    await mem.add_texts(["光合作用在叶绿体进行，释放氧气"], "knowledge:u1", {"source": "生物"})
     store = QuestionStore(":memory:")
     async def complete(system, user):
         return f"```json\n{GEN_JSON}\n```"       # 带 markdown 围栏
     svc = QuizService(mem, store, complete)
-    out = await svc.generate("光合作用", 2, ["single", "truefalse"])
+    out = await svc.generate("u1", "光合作用", 2, ["single", "truefalse"])
     assert len(out) == 2
     assert all("id" in q for q in out)
     assert {q["type"] for q in out} == {"single", "truefalse"}
-    assert len(store.list()) == 2                # 已入库
+    assert len(store.list("u1")) == 2                # 已入库
     assert out[0]["source"] == "光合作用"         # source 记为 topic
 
 
@@ -45,24 +45,24 @@ async def test_generate_no_knowledge_raises(mock_embedder):
     mem = _memory(mock_embedder)                 # 空知识库
     svc = QuizService(mem, QuestionStore(":memory:"), lambda s, u: None)
     with pytest.raises(NoKnowledge):
-        await svc.generate("任意主题", 2, ["single"])
+        await svc.generate("u1", "任意主题", 2, ["single"])
 
 
 @pytest.mark.asyncio
 async def test_generate_bad_json_raises(mock_embedder):
     mem = _memory(mock_embedder)
-    await mem.add_texts(["有内容"], "knowledge", {})
+    await mem.add_texts(["有内容"], "knowledge:u1", {})
     async def complete(system, user):
         return "这不是 JSON"
     svc = QuizService(mem, QuestionStore(":memory:"), complete)
     with pytest.raises(QuizError):
-        await svc.generate("主题", 2, ["single"])
+        await svc.generate("u1", "主题", 2, ["single"])
 
 
 @pytest.mark.asyncio
 async def test_generate_filters_invalid_items(mock_embedder):
     mem = _memory(mock_embedder)
-    await mem.add_texts(["有内容"], "knowledge", {})
+    await mem.add_texts(["有内容"], "knowledge:u1", {})
     bad = json.dumps([
         {"type": "single", "stem": "", "options": ["a", "b"], "answer": 0},   # stem 空 → 剔除
         {"type": "single", "stem": "有效吗", "options": ["a", "b"], "answer": 5},  # 索引越界 → 剔除
@@ -71,4 +71,4 @@ async def test_generate_filters_invalid_items(mock_embedder):
         return bad
     svc = QuizService(mem, QuestionStore(":memory:"), complete)
     with pytest.raises(QuizError):               # 全不合法 → QuizError
-        await svc.generate("主题", 2, ["single"])
+        await svc.generate("u1", "主题", 2, ["single"])

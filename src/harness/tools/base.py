@@ -37,6 +37,9 @@ class ToolRegistry:
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
 
+    def tools(self) -> list[Tool]:
+        return list(self._tools.values())
+
     def schemas(self) -> list[dict]:
         return [t.schema() for t in self._tools.values()]
 

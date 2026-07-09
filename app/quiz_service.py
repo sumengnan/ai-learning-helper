@@ -110,8 +110,10 @@ class QuizService:
                     "score": score, "feedback": verdict.get("feedback")}
         raise QuizError(f"未知题型 {t}")
 
-    async def generate(self, topic: str, count: int, types: list[str]) -> list[dict]:
-        hits = await self._memory.search(topic, self._collection, self._retrieve_k)
+    async def generate(self, user_id: str, topic: str, count: int,
+                       types: list[str]) -> list[dict]:
+        collection = f"{self._collection}:{user_id}"
+        hits = await self._memory.search(topic, collection, self._retrieve_k)
         if not hits:
             raise NoKnowledge(topic)
         context = "\n\n".join(h.text for h in hits)
@@ -122,5 +124,5 @@ class QuizService:
         for q in valid:
             q["source"] = topic
             q["explanation"] = q.get("explanation", "")
-            q["id"] = self._store.create(q)
+            q["id"] = self._store.create(user_id, q)
         return valid

@@ -43,7 +43,13 @@ def _cfg():
     # quiz 三个 store 未在这些测试里注入，走 create_app 默认路径；用 :memory: 免得
     # 在 cwd 落下 questions.db/exams.db/wrong_answers.db。
     return AppConfig(api_key="k", questions_db_path=":memory:",
-                     exams_db_path=":memory:", wrong_answers_db_path=":memory:")
+                     exams_db_path=":memory:", wrong_answers_db_path=":memory:",
+                     users_db_path=":memory:")
+
+
+def _auth_headers(client, username="u"):
+    r = client.post("/api/auth/register", json={"username": username, "password": "pw1234"})
+    return {"Authorization": f"Bearer {r.json()['token']}"}
 
 
 def _client(make_mock, turns=None):
@@ -73,48 +79,54 @@ def _client_with_kb(make_mock, mock_embedder):
 
 def test_upload_list_delete(make_mock, mock_embedder):
     client = _client_with_kb(make_mock, mock_embedder)
-    r = client.post("/api/documents", files={"file": ("bio.txt", "光合作用内容".encode(), "text/plain")})
+    h = _auth_headers(client)
+    r = client.post("/api/documents", files={"file": ("bio.txt", "光合作用内容".encode(), "text/plain")}, headers=h)
     assert r.status_code == 200
     doc_id = r.json()["id"]
-    assert any(d["id"] == doc_id for d in client.get("/api/documents").json())
-    assert client.delete(f"/api/documents/{doc_id}").status_code == 200
-    assert client.get("/api/documents").json() == []
+    assert any(d["id"] == doc_id for d in client.get("/api/documents", headers=h).json())
+    assert client.delete(f"/api/documents/{doc_id}", headers=h).status_code == 200
+    assert client.get("/api/documents", headers=h).json() == []
 
 
 def test_upload_unsupported_400(make_mock, mock_embedder):
     client = _client_with_kb(make_mock, mock_embedder)
-    r = client.post("/api/documents", files={"file": ("x.pptx", b"data", "application/octet-stream")})
+    h = _auth_headers(client)
+    r = client.post("/api/documents", files={"file": ("x.pptx", b"data", "application/octet-stream")}, headers=h)
     assert r.status_code == 400
 
 
 def test_upload_oversize_413(make_mock, mock_embedder):
     client = _client_with_kb(make_mock, mock_embedder)
+    h = _auth_headers(client)
     # AppConfig 默认 app_max_upload_mb=20；构造 >20MB 的假文件
     big = b"x" * (21 * 1024 * 1024)
-    r = client.post("/api/documents", files={"file": ("big.txt", big, "text/plain")})
+    r = client.post("/api/documents", files={"file": ("big.txt", big, "text/plain")}, headers=h)
     assert r.status_code == 413
 
 
 def test_upload_corrupt_pdf_400(make_mock, mock_embedder):
     client = _client_with_kb(make_mock, mock_embedder)
-    r = client.post("/api/documents", files={"file": ("x.pdf", b"not a pdf", "application/pdf")})
+    h = _auth_headers(client)
+    r = client.post("/api/documents", files={"file": ("x.pdf", b"not a pdf", "application/pdf")}, headers=h)
     assert r.status_code == 400
 
 
 def test_upload_503_without_memory(make_mock):
     # 默认 _client（无 memory 的 harness）→ 上传 503
     client, _ = _client(make_mock, [])
-    r = client.post("/api/documents", files={"file": ("a.txt", b"hi", "text/plain")})
+    h = _auth_headers(client)
+    r = client.post("/api/documents", files={"file": ("a.txt", b"hi", "text/plain")}, headers=h)
     assert r.status_code == 503
 
 
 def test_conversation_crud(make_mock):
     client, _ = _client(make_mock)
-    cid = client.post("/api/conversations", json={"title": "T"}).json()["id"]
-    assert any(c["id"] == cid for c in client.get("/api/conversations").json())
-    assert client.get(f"/api/conversations/{cid}/messages").json() == []
-    client.delete(f"/api/conversations/{cid}")
-    assert client.get(f"/api/conversations/{cid}/messages").status_code == 404
+    h = _auth_headers(client)
+    cid = client.post("/api/conversations", json={"title": "T"}, headers=h).json()["id"]
+    assert any(c["id"] == cid for c in client.get("/api/conversations", headers=h).json())
+    assert client.get(f"/api/conversations/{cid}/messages", headers=h).json() == []
+    client.delete(f"/api/conversations/{cid}", headers=h)
+    assert client.get(f"/api/conversations/{cid}/messages", headers=h).status_code == 404
 
 
 def _sse_events(resp):
@@ -127,9 +139,10 @@ def _sse_events(resp):
 
 def test_chat_streams_sse_and_persists(make_mock, text_turn):
     client, store = _client(make_mock, [text_turn("你好呀")])
-    cid = client.post("/api/conversations", json={}).json()["id"]
+    h = _auth_headers(client)
+    cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
     with client.stream("POST", "/api/chat",
-                       json={"conversation_id": cid, "message": "hi"}) as resp:
+                       json={"conversation_id": cid, "message": "hi"}, headers=h) as resp:
         assert resp.status_code == 200
         types = [e["type"] for e in _sse_events(resp)]
     assert "TextDelta" in types and "RunFinished" in types
@@ -141,9 +154,10 @@ def test_chat_tool_call_in_stream(make_mock, text_turn, tool_turn):
     turns = [tool_turn("calculator", '{"expression":"(12+8)*3"}', call_id="c1"),
              text_turn("答案是 60")]
     client, store = _client(make_mock, turns)
-    cid = client.post("/api/conversations", json={}).json()["id"]
+    h = _auth_headers(client)
+    cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
     with client.stream("POST", "/api/chat",
-                       json={"conversation_id": cid, "message": "算 (12+8)*3"}) as resp:
+                       json={"conversation_id": cid, "message": "算 (12+8)*3"}, headers=h) as resp:
         events = _sse_events(resp)
     tfs = [e for e in events if e["type"] == "ToolFinished"]
     assert tfs and tfs[0]["data"]["result"]["content"] == "60"
@@ -151,17 +165,19 @@ def test_chat_tool_call_in_stream(make_mock, text_turn, tool_turn):
 
 def test_two_turns_accumulate_history(make_mock, text_turn):
     client, store = _client(make_mock, [text_turn("答1"), text_turn("答2")])
-    cid = client.post("/api/conversations", json={}).json()["id"]
+    h = _auth_headers(client)
+    cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
     for msg in ["问1", "问2"]:
         with client.stream("POST", "/api/chat",
-                           json={"conversation_id": cid, "message": msg}) as resp:
+                           json={"conversation_id": cid, "message": msg}, headers=h) as resp:
             _sse_events(resp)
     assert [m.content for m in store.messages(cid)] == ["问1", "答1", "问2", "答2"]
 
 
 def test_chat_unknown_conversation_404(make_mock, text_turn):
     client, _ = _client(make_mock, [text_turn("x")])
-    resp = client.post("/api/chat", json={"conversation_id": "nope", "message": "hi"})
+    h = _auth_headers(client)
+    resp = client.post("/api/chat", json={"conversation_id": "nope", "message": "hi"}, headers=h)
     assert resp.status_code == 404
 
 
@@ -184,9 +200,10 @@ def test_chat_run_error_persists_clean_message():
     app = create_app(config=_cfg(), harness=harness, store=store,
                      doc_store=DocumentStore(":memory:"))
     client = TestClient(app)
-    cid = client.post("/api/conversations", json={}).json()["id"]
+    h = _auth_headers(client)
+    cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
     with client.stream("POST", "/api/chat",
-                       json={"conversation_id": cid, "message": "hi"}) as resp:
+                       json={"conversation_id": cid, "message": "hi"}, headers=h) as resp:
         types = [e["type"] for e in _sse_events(resp)]
     assert "RunError" in types
     assert [m.content for m in store.messages(cid)] == ["hi", "（本轮未能完成，请重试）"]

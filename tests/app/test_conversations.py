@@ -4,16 +4,16 @@ from harness.types import Message, Role
 
 def test_create_list_delete():
     s = ConversationStore(":memory:")
-    cid = s.create("测试")
-    assert any(c["id"] == cid and c["title"] == "测试" for c in s.list())
-    assert s.exists(cid) is True
-    s.delete(cid)
-    assert s.exists(cid) is False
+    cid = s.create("u1", "测试")
+    assert any(c["id"] == cid and c["title"] == "测试" for c in s.list("u1"))
+    assert s.exists("u1", cid) is True
+    s.delete("u1", cid)
+    assert s.exists("u1", cid) is False
 
 
 def test_append_and_messages_roundtrip():
     s = ConversationStore(":memory:")
-    cid = s.create()
+    cid = s.create("u1")
     s.append(cid, [Message(role=Role.USER, content="hi"),
                    Message(role=Role.ASSISTANT, content="yo")])
     s.append(cid, [Message(role=Role.USER, content="再问")])
