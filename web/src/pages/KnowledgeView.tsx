@@ -1,5 +1,11 @@
 // web/src/pages/KnowledgeView.tsx
 import { useEffect, useRef, useState } from "react";
+import {
+  Box, Typography, Button, List, ListItem, ListItemText, IconButton,
+  CircularProgress, Alert,
+} from "@mui/material";
+import UploadFileIcon from "@mui/icons-material/UploadFile";
+import DeleteIcon from "@mui/icons-material/Delete";
 import { api } from "../api/client";
 
 type Doc = { id: string; filename: string; num_chunks: number; uploaded_at: string };
@@ -21,26 +27,37 @@ export function KnowledgeView() {
   async function remove(id: string) { await api.documents.remove(id); await refresh(); }
 
   return (
-    <div className="p-6 max-w-2xl">
-      <h1 className="text-xl font-bold mb-4">知识库</h1>
-      <div className="mb-4">
-        <input ref={fileRef} type="file" accept=".pdf,.docx,.txt,.md" disabled={busy}
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); }} />
-        {busy && <span className="ml-2 text-gray-500">上传中…</span>}
-        {error && <div className="text-red-600 mt-1">{error}</div>}
-      </div>
+    <Box sx={{ p: 3, maxWidth: 720 }}>
+      <Typography variant="h5" gutterBottom sx={{ fontWeight: 700 }}>知识库</Typography>
+      <Box sx={{ mb: 2, display: "flex", alignItems: "center", gap: 1 }}>
+        <Button component="label" variant="outlined" startIcon={<UploadFileIcon />} disabled={busy}>
+          上传文档
+          <input
+            ref={fileRef} hidden type="file" accept=".pdf,.docx,.txt,.md"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); }}
+          />
+        </Button>
+        {busy && <CircularProgress size={20} />}
+      </Box>
+      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       {docs.length === 0 ? (
-        <div className="text-gray-400">还没有上传文档</div>
+        <Typography color="text.secondary">还没有上传文档</Typography>
       ) : (
-        <ul className="divide-y border rounded">
+        <List sx={{ border: 1, borderColor: "divider", borderRadius: 2 }}>
           {docs.map((d) => (
-            <li key={d.id} className="flex justify-between items-center px-3 py-2">
-              <span>{d.filename} <span className="text-xs text-gray-400">· {d.num_chunks} 块</span></span>
-              <button className="text-red-500" onClick={() => remove(d.id)}>删除</button>
-            </li>
+            <ListItem
+              key={d.id} divider
+              secondaryAction={
+                <IconButton edge="end" color="error" onClick={() => remove(d.id)} aria-label="删除文档">
+                  <DeleteIcon />
+                </IconButton>
+              }
+            >
+              <ListItemText primary={d.filename} secondary={`· ${d.num_chunks} 块`} />
+            </ListItem>
           ))}
-        </ul>
+        </List>
       )}
-    </div>
+    </Box>
   );
 }
