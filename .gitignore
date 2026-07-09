@@ -19,6 +19,9 @@ venv/
 # 前端
 web/node_modules/
 web/dist/
+# tsc -b（build 脚本）会把 .tsx 编译产物吐进 src，忽略以防误入库
+web/tsconfig.tsbuildinfo
+web/src/**/*.js
 
 # 运行时数据（应用启动/测试时生成，非源码）
 *.db
