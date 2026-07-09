@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { Box, Typography, Button, Card, CardContent, Checkbox, Chip, Stack } from "@mui/material";
+import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
 import { api } from "../api/client";
 
 interface Wrong {
@@ -29,31 +31,50 @@ export default function WrongAnswersView() {
   };
 
   return (
-    <div className="p-6 space-y-3">
-      <div className="flex justify-between items-center">
-        <h2 className="text-xl font-bold">错题集</h2>
-        <button onClick={removeSelected} disabled={selected.size === 0}
-          className="bg-red-600 text-white px-3 py-1 rounded disabled:opacity-50">
+    <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2 }}>
+      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <Typography variant="h5" sx={{ fontWeight: 700 }}>错题集</Typography>
+        <Button
+          variant="contained" color="error" startIcon={<DeleteSweepIcon />}
+          onClick={removeSelected} disabled={selected.size === 0}
+        >
           批量删除（{selected.size}）
-        </button>
-      </div>
+        </Button>
+      </Box>
       {items.length === 0 ? (
-        <p className="text-gray-500">暂无错题。</p>
+        <Typography color="text.secondary">暂无错题。</Typography>
       ) : (
-        <ul className="space-y-2">
+        <Stack spacing={1.5}>
           {items.map((w) => (
-            <li key={w.id} className="border rounded p-3 flex gap-2">
-              <input type="checkbox" checked={selected.has(w.id)} onChange={() => toggle(w.id)} />
-              <div>
-                <div><span className="text-xs bg-gray-200 rounded px-1 mr-2">{w.snapshot.type}</span>{w.snapshot.stem}</div>
-                <div className="text-sm text-gray-600">你的作答：{JSON.stringify(w.user_answer)}</div>
-                <div className="text-sm text-gray-500">正确答案：{JSON.stringify(w.snapshot.answer)}</div>
-                {w.snapshot.explanation && <div className="text-sm text-gray-400">解析：{w.snapshot.explanation}</div>}
-              </div>
-            </li>
+            <Card key={w.id} variant="outlined">
+              <CardContent sx={{ display: "flex", gap: 1 }}>
+                <Checkbox
+                  sx={{ p: 0, mt: 0.25 }}
+                  checked={selected.has(w.id)}
+                  onChange={() => toggle(w.id)}
+                />
+                <Box>
+                  <Typography component="div">
+                    <Chip size="small" label={w.snapshot.type} sx={{ mr: 1 }} />
+                    {w.snapshot.stem}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    你的作答：{JSON.stringify(w.user_answer)}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    正确答案：{JSON.stringify(w.snapshot.answer)}
+                  </Typography>
+                  {w.snapshot.explanation && (
+                    <Typography variant="body2" color="text.disabled">
+                      解析：{w.snapshot.explanation}
+                    </Typography>
+                  )}
+                </Box>
+              </CardContent>
+            </Card>
           ))}
-        </ul>
+        </Stack>
       )}
-    </div>
+    </Box>
   );
 }
