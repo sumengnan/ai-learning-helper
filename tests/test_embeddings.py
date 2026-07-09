@@ -23,9 +23,10 @@ async def test_openai_embedding_client_calls_api(monkeypatch):
     class _Resp:
         data = [_D(0, [1.0, 2.0, 3.0]), _D(1, [4.0, 5.0, 6.0])]
 
-    async def fake_create(model, input):
+    async def fake_create(model, input, dimensions):
         assert model == "m"
         assert input == ["a", "b"]
+        assert dimensions == 3
         return _Resp()
 
     monkeypatch.setattr(client._client.embeddings, "create", fake_create)
@@ -47,7 +48,7 @@ async def test_openai_embedding_client_sorts_by_index(monkeypatch):
         # 乱序返回：index 1 在前，index 0 在后
         data = [_D(1, [4.0, 5.0, 6.0]), _D(0, [1.0, 2.0, 3.0])]
 
-    async def fake_create(model, input):
+    async def fake_create(model, input, dimensions):
         return _Resp()
 
     monkeypatch.setattr(client._client.embeddings, "create", fake_create)

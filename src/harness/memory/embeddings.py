@@ -29,6 +29,9 @@ class OpenAICompatibleEmbeddingClient:
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        resp = await self._client.embeddings.create(model=self._model, input=texts)
+        # 显式请求目标维度：text-embedding-v4 等模型默认维度可能不是配置值
+        # （如默认 1024），不指定就会与向量表 float[dimension] 不符。
+        resp = await self._client.embeddings.create(
+            model=self._model, input=texts, dimensions=self.dimension)
         # 第三方兼容端点未必保证顺序，按 index 归位
         return [d.embedding for d in sorted(resp.data, key=lambda d: d.index)]
