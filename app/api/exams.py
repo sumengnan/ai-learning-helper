@@ -1,8 +1,10 @@
 # app/api/exams.py
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+
+from ..auth import current_user
 
 
 class ComposeBody(BaseModel):
@@ -32,22 +34,22 @@ def make_exams_router(quiz_service, question_store, exam_store, wrong_store, con
     router = APIRouter()
 
     @router.post("/api/exams")
-    async def compose(body: ComposeBody):
+    async def compose(body: ComposeBody, user_id: str = Depends(current_user)):
         count = max(1, min(body.count, config.quiz_max_count))  # 防负数→LIMIT -1 无限量
-        picked = question_store.sample(count, body.types)
+        picked = question_store.sample(user_id, count, body.types)
         # 去掉 answer/explanation，防前端偷看
         paper = [{"id": q["id"], "type": q["type"], "stem": q["stem"],
                   "options": q["options"]} for q in picked]
         return {"questions": paper}
 
     @router.post("/api/exams/submit")
-    async def submit(body: SubmitBody):
+    async def submit(body: SubmitBody, user_id: str = Depends(current_user)):
         if quiz_service is None:
             raise HTTPException(status_code=503, detail="知识库未启用")
         detail, correct = [], 0
         graded = []  # (question, user_answer, result)
         for ans in body.answers:
-            q = question_store.get(ans.question_id)
+            q = question_store.get(user_id, ans.question_id)
             if q is None:
                 detail.append({"question_id": ans.question_id, "missing": True,
                                "correct": False})
@@ -63,29 +65,29 @@ def make_exams_router(quiz_service, question_store, exam_store, wrong_store, con
             graded.append((q, ans.user_answer, res))
         total = len(body.answers)
         score = round(correct / total * 100, 1) if total else 0.0
-        exam_id = exam_store.create(total, correct, score, detail)
+        exam_id = exam_store.create(user_id, total, correct, score, detail)
         for q, ua, res in graded:
             if not res["correct"]:
-                wrong_store.create(q["id"], exam_id, _snapshot(q), ua)
+                wrong_store.create(user_id, q["id"], exam_id, _snapshot(q), ua)
         return {"exam_id": exam_id, "total": total, "correct": correct,
                 "score": score, "detail": detail}
 
     @router.get("/api/exams")
-    async def list_exams():
-        return exam_store.list()
+    async def list_exams(user_id: str = Depends(current_user)):
+        return exam_store.list(user_id)
 
     @router.get("/api/wrong-answers")
-    async def list_wrong():
-        return wrong_store.list()
+    async def list_wrong(user_id: str = Depends(current_user)):
+        return wrong_store.list(user_id)
 
     @router.post("/api/wrong-answers/delete")
-    async def delete_wrong(body: IdsBody):
-        wrong_store.delete_many(body.ids)
+    async def delete_wrong(body: IdsBody, user_id: str = Depends(current_user)):
+        wrong_store.delete_many(user_id, body.ids)
         return {"ok": True}
 
     @router.delete("/api/wrong-answers/{wid}")
-    async def delete_one_wrong(wid: str):
-        wrong_store.delete(wid)
+    async def delete_one_wrong(wid: str, user_id: str = Depends(current_user)):
+        wrong_store.delete(user_id, wid)
         return {"ok": True}
 
     return router

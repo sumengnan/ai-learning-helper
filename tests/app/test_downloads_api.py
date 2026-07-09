@@ -26,7 +26,13 @@ def _sqlite_allow_cross_thread(monkeypatch):
 
 def _cfg():
     return AppConfig(api_key="k", questions_db_path=":memory:",
-                     exams_db_path=":memory:", wrong_answers_db_path=":memory:")
+                     exams_db_path=":memory:", wrong_answers_db_path=":memory:",
+                     users_db_path=":memory:")
+
+
+def _auth_headers(client, username="u"):
+    r = client.post("/api/auth/register", json={"username": username, "password": "pw1234"})
+    return {"Authorization": f"Bearer {r.json()['token']}"}
 
 
 def _client(tmp_path):
@@ -45,34 +51,38 @@ def _client(tmp_path):
 
 def test_list_and_download(tmp_path):
     client, dstore = _client(tmp_path)
+    h = _auth_headers(client)
     rec = dstore.create("hello.txt", b"hello world", "text/plain")
-    listing = client.get("/api/downloads").json()
+    listing = client.get("/api/downloads", headers=h).json()
     assert any(d["id"] == rec["id"] for d in listing)
-    r = client.get(f"/api/downloads/{rec['id']}")
+    r = client.get(f"/api/downloads/{rec['id']}", headers=h)
     assert r.status_code == 200 and r.content == b"hello world"
     assert r.headers["content-type"].startswith("text/plain")
 
 
 def test_download_404(tmp_path):
     client, _ = _client(tmp_path)
-    assert client.get("/api/downloads/nope").status_code == 404
+    h = _auth_headers(client)
+    assert client.get("/api/downloads/nope", headers=h).status_code == 404
 
 
 def test_download_404_when_disk_file_missing(tmp_path):
     # 登记在但磁盘文件被外部删 → 404（而非 FileResponse os.stat 抛 500）
     import os
     client, dstore = _client(tmp_path)
+    h = _auth_headers(client)
     rec = dstore.create("x.txt", b"x", "text/plain")
     os.remove(dstore.path(rec["id"]))
-    assert client.get(f"/api/downloads/{rec['id']}").status_code == 404
+    assert client.get(f"/api/downloads/{rec['id']}", headers=h).status_code == 404
 
 
 def test_delete_removes_file_and_row(tmp_path):
     import os
     client, dstore = _client(tmp_path)
+    h = _auth_headers(client)
     rec = dstore.create("x.txt", b"x", "text/plain")
     path = dstore.path(rec["id"])
-    assert client.delete(f"/api/downloads/{rec['id']}").status_code == 200
+    assert client.delete(f"/api/downloads/{rec['id']}", headers=h).status_code == 200
     assert not os.path.exists(path)
-    assert client.get(f"/api/downloads/{rec['id']}").status_code == 404
-    assert client.delete(f"/api/downloads/{rec['id']}").status_code == 404
+    assert client.get(f"/api/downloads/{rec['id']}", headers=h).status_code == 404
+    assert client.delete(f"/api/downloads/{rec['id']}", headers=h).status_code == 404

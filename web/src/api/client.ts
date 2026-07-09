@@ -1,4 +1,56 @@
-import type { AgentEvent, Conversation } from "../types";
+import type { AgentEvent, Conversation, User } from "../types";
+
+const TOKEN_KEY = "auth_token";
+let onUnauthorized: (() => void) | null = null;
+
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  onUnauthorized = fn;
+}
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+export function setToken(token: string | null): void {
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
+/** 统一 fetch：注入 Authorization 头、吸收 X-Refresh-Token 续期、401 触发登出。 */
+export async function authFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const token = getToken();
+  const headers = new Headers(init.headers || {});
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const resp = await fetch(input, { ...init, headers });
+  const refreshed = resp.headers.get("X-Refresh-Token");
+  if (refreshed) setToken(refreshed);
+  if (resp.status === 401) {
+    setToken(null);
+    onUnauthorized?.();
+  }
+  return resp;
+}
+
+async function detail(r: Response, fallback: string): Promise<string> {
+  return (await r.json().catch(() => ({})))?.detail || fallback;
+}
+
+export const auth = {
+  register: async (username: string, password: string): Promise<{ token: string; user: User }> => {
+    const r = await fetch("/api/auth/register", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!r.ok) throw new Error(await detail(r, "注册失败"));
+    return r.json();
+  },
+  login: async (username: string, password: string): Promise<{ token: string; user: User }> => {
+    const r = await fetch("/api/auth/login", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!r.ok) throw new Error(await detail(r, "登录失败"));
+    return r.json();
+  },
+};
 
 export function drainSSE(buffer: string): { events: AgentEvent[]; rest: string } {
   const events: AgentEvent[] = [];
@@ -16,7 +68,7 @@ export async function streamChat(
   conversationId: string, message: string, onEvent: (e: AgentEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const resp = await fetch("/api/chat", {
+  const resp = await authFetch("/api/chat", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ conversation_id: conversationId, message }),
     signal,
@@ -36,69 +88,72 @@ export async function streamChat(
 }
 
 export const api = {
-  list: (): Promise<Conversation[]> => fetch("/api/conversations").then((r) => r.json()),
+  list: (): Promise<Conversation[]> => authFetch("/api/conversations").then((r) => r.json()),
   create: (title?: string): Promise<{ id: string }> =>
-    fetch("/api/conversations", { method: "POST", headers: { "Content-Type": "application/json" },
+    authFetch("/api/conversations", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title }) }).then((r) => r.json()),
+  rename: (id: string, title: string): Promise<void> =>
+    authFetch(`/api/conversations/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }) }).then(() => undefined),
   messages: (id: string): Promise<{ role: string; content: string }[]> =>
-    fetch(`/api/conversations/${id}/messages`).then((r) => r.json()),
+    authFetch(`/api/conversations/${id}/messages`).then((r) => r.json()),
   remove: (id: string): Promise<void> =>
-    fetch(`/api/conversations/${id}`, { method: "DELETE" }).then(() => undefined),
+    authFetch(`/api/conversations/${id}`, { method: "DELETE" }).then(() => undefined),
   documents: {
     list: (): Promise<{ id: string; filename: string; num_chunks: number; uploaded_at: string }[]> =>
-      fetch("/api/documents").then((r) => r.json()),
+      authFetch("/api/documents").then((r) => r.json()),
     upload: (file: File) => {
       const fd = new FormData(); fd.append("file", file);
-      return fetch("/api/documents", { method: "POST", body: fd }).then(async (r) => {
-        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `上传失败：${r.status}`);
+      return authFetch("/api/documents", { method: "POST", body: fd }).then(async (r) => {
+        if (!r.ok) throw new Error(await detail(r, `上传失败：${r.status}`));
         return r.json();
       });
     },
     remove: (id: string): Promise<void> =>
-      fetch(`/api/documents/${id}`, { method: "DELETE" }).then(() => undefined),
+      authFetch(`/api/documents/${id}`, { method: "DELETE" }).then(() => undefined),
   },
   questions: {
     generate: (topic: string, count: number, types: string[]) =>
-      fetch("/api/questions/generate", {
+      authFetch("/api/questions/generate", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ topic, count, types }),
       }).then(async (r) => {
-        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "出题失败");
+        if (!r.ok) throw new Error(await detail(r, "出题失败"));
         return r.json();
       }),
-    list: () => fetch("/api/questions").then((r) => r.json()),
+    list: () => authFetch("/api/questions").then((r) => r.json()),
     remove: (id: string) =>
-      fetch(`/api/questions/${id}`, { method: "DELETE" }).then(() => undefined),
+      authFetch(`/api/questions/${id}`, { method: "DELETE" }).then(() => undefined),
     removeMany: (ids: string[]) =>
-      fetch("/api/questions/delete", {
+      authFetch("/api/questions/delete", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids }),
       }).then(() => undefined),
   },
   exams: {
     compose: (count: number, types: string[] | null) =>
-      fetch("/api/exams", {
+      authFetch("/api/exams", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ count, types }),
       }).then((r) => { if (!r.ok) throw new Error("组卷失败"); return r.json(); }),
     submit: (answers: { question_id: string; user_answer: unknown }[]) =>
-      fetch("/api/exams/submit", {
+      authFetch("/api/exams/submit", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ answers }),
       }).then((r) => { if (!r.ok) throw new Error("交卷失败"); return r.json(); }),
-    history: () => fetch("/api/exams").then((r) => r.json()),
+    history: () => authFetch("/api/exams").then((r) => r.json()),
   },
   wrong: {
-    list: () => fetch("/api/wrong-answers").then((r) => r.json()),
+    list: () => authFetch("/api/wrong-answers").then((r) => r.json()),
     removeMany: (ids: string[]) =>
-      fetch("/api/wrong-answers/delete", {
+      authFetch("/api/wrong-answers/delete", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids }),
       }).then(() => undefined),
   },
   downloads: {
-    list: () => fetch("/api/downloads").then((r) => r.json()),
+    list: () => authFetch("/api/downloads").then((r) => r.json()),
     remove: (id: string) =>
-      fetch(`/api/downloads/${id}`, { method: "DELETE" }).then(() => undefined),
+      authFetch(`/api/downloads/${id}`, { method: "DELETE" }).then(() => undefined),
   },
 };

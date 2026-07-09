@@ -12,6 +12,8 @@ class AppConfig(HarnessConfig):
 
     app_host: str = "127.0.0.1"
     app_port: int = 8000
+    auth_secret: str = "dev-insecure-secret-change-me"
+    users_db_path: str = "users.db"
     conversations_db_path: str = "conversations.db"
     app_system_prompt: str = "你是一个 AI 学习助手，可用工具检索知识、联网、计算来帮助用户学习。"
     enable_browser: bool = False

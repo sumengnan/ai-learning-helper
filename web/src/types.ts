@@ -6,3 +6,4 @@ export type ChatMessage = {
   usage?: { tokens: number; cost: number | null };
 };
 export type Conversation = { id: string; title: string; created_at: string };
+export type User = { id: string; username: string };

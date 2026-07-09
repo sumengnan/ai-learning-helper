@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -13,6 +13,7 @@ from harness.persistence.serialize import event_to_dict
 from harness.reliability.budget import BudgetTracker
 from harness.types import Message, Role
 
+from ..auth import current_user
 from ..context import ConversationContextManager
 
 
@@ -25,8 +26,8 @@ def make_chat_router(harness, store, config) -> APIRouter:
     router = APIRouter()
 
     @router.post("/api/chat")
-    async def chat(req: _ChatRequest):
-        if not store.exists(req.conversation_id):
+    async def chat(req: _ChatRequest, user_id: str = Depends(current_user)):
+        if not store.exists(user_id, req.conversation_id):
             raise HTTPException(status_code=404, detail="对话不存在")
         history = store.messages(req.conversation_id)
         ctx = ConversationContextManager(harness.system_prompt, history)

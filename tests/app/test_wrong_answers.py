@@ -8,8 +8,8 @@ def _snap():
 
 def test_create_list_snapshot_roundtrip():
     s = WrongAnswerStore(":memory:")
-    wid = s.create(question_id="q1", exam_id="e1", snapshot=_snap(), user_answer=0)
-    rows = s.list()
+    wid = s.create("u1", question_id="q1", exam_id="e1", snapshot=_snap(), user_answer=0)
+    rows = s.list("u1")
     assert len(rows) == 1
     assert rows[0]["id"] == wid
     assert rows[0]["question_id"] == "q1" and rows[0]["exam_id"] == "e1"
@@ -19,13 +19,13 @@ def test_create_list_snapshot_roundtrip():
 
 def test_delete_many():
     s = WrongAnswerStore(":memory:")
-    ids = [s.create("q", "e", _snap(), 0) for _ in range(3)]
-    s.delete_many(ids[:2])
-    assert [r["id"] for r in s.list()] == [ids[2]]
+    ids = [s.create("u1", "q", "e", _snap(), 0) for _ in range(3)]
+    s.delete_many("u1", ids[:2])
+    assert [r["id"] for r in s.list("u1")] == [ids[2]]
 
 
 def test_delete_one():
     s = WrongAnswerStore(":memory:")
-    a = s.create("q", "e", _snap(), 0)
-    s.delete(a)
-    assert s.list() == []
+    a = s.create("u1", "q", "e", _snap(), 0)
+    s.delete("u1", a)
+    assert s.list("u1") == []

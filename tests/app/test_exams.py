@@ -4,8 +4,8 @@ from app.exams import ExamStore
 def test_create_and_list():
     s = ExamStore(":memory:")
     detail = [{"question_id": "q1", "correct": True}]
-    eid = s.create(total=1, correct=1, score=100.0, detail=detail)
-    rows = s.list()
+    eid = s.create("u1", total=1, correct=1, score=100.0, detail=detail)
+    rows = s.list("u1")
     assert len(rows) == 1
     assert rows[0]["id"] == eid
     assert rows[0]["total"] == 1 and rows[0]["correct"] == 1
@@ -15,6 +15,6 @@ def test_create_and_list():
 
 def test_list_newest_first():
     s = ExamStore(":memory:")
-    first = s.create(1, 0, 0.0, [])
-    second = s.create(1, 1, 100.0, [])
-    assert [r["id"] for r in s.list()] == [second, first]   # 倒序
+    first = s.create("u1", 1, 0, 0.0, [])
+    second = s.create("u1", 1, 1, 100.0, [])
+    assert [r["id"] for r in s.list("u1")] == [second, first]   # 倒序
