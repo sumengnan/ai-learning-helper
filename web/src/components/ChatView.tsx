@@ -4,11 +4,13 @@ import type { ChatMessage } from "../types";
 import { streamChat } from "../api/client";
 import { AgentProgress } from "./AgentProgress";
 
-export function ChatView({ conversationId, initial }: { conversationId: string; initial: ChatMessage[] }) {
+export function ChatView({ conversationId, initial, autoSend }:
+  { conversationId: string; initial: ChatMessage[]; autoSend?: string | null }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initial);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const busyRef = useRef(false);
 
   // 卸载（含 App 用 key={activeId} 切换对话触发 remount）时取消在途流
   useEffect(() => () => abortRef.current?.abort(), []);
@@ -23,12 +25,13 @@ export function ChatView({ conversationId, initial }: { conversationId: string; 
       return copy;
     });
 
-  async function send() {
-    if (!input.trim() || busy) return;
-    const userMsg: ChatMessage = { role: "user", content: input };
+  async function send(text?: string) {
+    const msg = (text ?? input).trim();
+    if (!msg || busyRef.current) return;
+    const userMsg: ChatMessage = { role: "user", content: msg };
     const assistant: ChatMessage = { role: "assistant", content: "", steps: [] };
     setMessages((m) => [...m, userMsg, assistant]);
-    const msg = input; setInput(""); setBusy(true);
+    setInput(""); setBusy(true); busyRef.current = true;
     const controller = new AbortController();
     abortRef.current = controller;
     const onEvent = (e: any) => {
@@ -45,8 +48,14 @@ export function ChatView({ conversationId, initial }: { conversationId: string; 
       await streamChat(conversationId, msg, onEvent, controller.signal);
     } catch (err: any) {
       if (err?.name !== "AbortError") upd((a) => { a.content += `\n[连接失败] ${err}`; });
-    } finally { setBusy(false); }
+    } finally { setBusy(false); busyRef.current = false; }
   }
+
+  // 空态默认问题：挂载时若带 autoSend 则自动发问（key=对话 id，每对话仅触发一次）
+  useEffect(() => {
+    if (autoSend) void send(autoSend);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -81,7 +90,7 @@ export function ChatView({ conversationId, initial }: { conversationId: string; 
           onKeyDown={(e) => { if (e.key === "Enter") send(); }}
           placeholder="问点什么…"
         />
-        <Button variant="contained" onClick={send} disabled={busy}>发送</Button>
+        <Button variant="contained" onClick={() => send()} disabled={busy}>发送</Button>
       </Box>
     </Box>
   );
