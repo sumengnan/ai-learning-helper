@@ -46,6 +46,11 @@
    - 测试：`npx vitest run`
    - 两者都必须全绿再 commit。
 4. commit 信息用中文 Conventional Commits，**不出现任何 AI/Claude 署名**。
+5. **MUI v9 约定（已实测）**：本项目装的是 `@mui/material@9.2.0`，v9 移除了组件上的**系统样式简写 prop**。因此：
+   - 不要把 `fontWeight` / `alignItems` / `justifyContent` / `flexWrap` 等当作组件顶层 prop 写，一律放进 `sx`（如 `<Typography sx={{ fontWeight: 700 }}>`）。放在 `sx={{...}}` 里的这些属性完全正常。
+   - `Stack` 不再支持 `useFlexGap` prop（gap 已是默认），删除即可；`alignItems`/`flexWrap` 移进 `sx`。`Stack` 的 `direction`/`spacing` 仍是合法 prop。
+   - 图标：`@mui/icons-material@9.2.0` **没有** `ChatBubbleOutline`、`ErrorOutline` 裸名导出，用 `ChatBubbleOutlined`、`ErrorOutlined` 代替。其余用到的图标（`MenuBook`/`Quiz`/`Assignment`/`Download`/`Brightness4`/`Brightness7`/`Add`/`Close`/`Delete`/`UploadFile`/`ExpandMore`/`DeleteSweep`）均存在。
+   - 仍合法的 prop（已实测）：Typography 的 `variant`/`color`/`gutterBottom`/`noWrap`/`component`；Button/Chip/IconButton 的 `color`；TextField 的 `slotProps={{ htmlInput: {...} }}`；ListItemText 的 `slotProps={{ primary: {...} }}`。
 
 ---
 
@@ -289,11 +294,11 @@ import {
   Box, Drawer, List, ListItemButton, ListItemIcon, ListItemText,
   Toolbar, Typography, IconButton, Tooltip, Divider,
 } from "@mui/material";
-import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
+import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutlined";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
 import QuizIcon from "@mui/icons-material/Quiz";
 import AssignmentIcon from "@mui/icons-material/Assignment";
-import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
+import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlined";
 import DownloadIcon from "@mui/icons-material/Download";
 import Brightness4Icon from "@mui/icons-material/Brightness4";
 import Brightness7Icon from "@mui/icons-material/Brightness7";
@@ -328,7 +333,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         }}
       >
         <Toolbar sx={{ px: 2 }}>
-          <Typography variant="h6" noWrap fontWeight={700}>
+          <Typography variant="h6" noWrap sx={{ fontWeight: 700 }}>
             AI 学习助手
           </Typography>
         </Toolbar>
@@ -701,7 +706,7 @@ export function KnowledgeView() {
 
   return (
     <Box sx={{ p: 3, maxWidth: 720 }}>
-      <Typography variant="h5" fontWeight={700} gutterBottom>知识库</Typography>
+      <Typography variant="h5" gutterBottom sx={{ fontWeight: 700 }}>知识库</Typography>
       <Box sx={{ mb: 2, display: "flex", alignItems: "center", gap: 1 }}>
         <Button component="label" variant="outlined" startIcon={<UploadFileIcon />} disabled={busy}>
           上传文档
@@ -806,7 +811,7 @@ export default function QuestionBankView() {
 
   return (
     <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2 }}>
-      <Typography variant="h5" fontWeight={700}>题库</Typography>
+      <Typography variant="h5" sx={{ fontWeight: 700 }}>题库</Typography>
       <Card variant="outlined">
         <CardContent>
           <Stack spacing={2}>
@@ -814,7 +819,7 @@ export default function QuestionBankView() {
               fullWidth size="small" label="出题主题（从知识库检索）"
               value={topic} onChange={(e) => setTopic(e.target.value)}
             />
-            <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Stack direction="row" spacing={2} sx={{ alignItems: "center", flexWrap: "wrap" }}>
               <TextField
                 type="number" size="small" label="题数" sx={{ width: 96 }}
                 slotProps={{ htmlInput: { min: 1, max: 20 } }}
@@ -960,7 +965,7 @@ export default function ExamView() {
   if (result) {
     return (
       <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2 }}>
-        <Typography variant="h5" component="div" fontWeight={700}>
+        <Typography variant="h5" component="div" sx={{ fontWeight: 700 }}>
           成绩：{result.correct}/{result.total}
           <Chip label={`${result.score} 分`} color="primary" sx={{ ml: 1 }} />
         </Typography>
@@ -996,10 +1001,10 @@ export default function ExamView() {
   if (paper.length === 0) {
     return (
       <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2 }}>
-        <Typography variant="h5" fontWeight={700}>模拟考试</Typography>
+        <Typography variant="h5" sx={{ fontWeight: 700 }}>模拟考试</Typography>
         <Card variant="outlined">
           <CardContent>
-            <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Stack direction="row" spacing={2} sx={{ alignItems: "center", flexWrap: "wrap" }}>
               <TextField
                 type="number" size="small" label="题数" sx={{ width: 96 }}
                 slotProps={{ htmlInput: { min: 1, max: 20 } }}
@@ -1026,7 +1031,7 @@ export default function ExamView() {
 
   return (
     <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2 }}>
-      <Typography variant="h5" fontWeight={700}>答题（{paper.length} 题）</Typography>
+      <Typography variant="h5" sx={{ fontWeight: 700 }}>答题（{paper.length} 题）</Typography>
       {paper.map((q, qi) => (
         <Card key={q.id} variant="outlined">
           <CardContent>
@@ -1125,7 +1130,7 @@ export default function WrongAnswersView() {
   return (
     <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2 }}>
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <Typography variant="h5" fontWeight={700}>错题集</Typography>
+        <Typography variant="h5" sx={{ fontWeight: 700 }}>错题集</Typography>
         <Button
           variant="contained" color="error" startIcon={<DeleteSweepIcon />}
           onClick={removeSelected} disabled={selected.size === 0}
@@ -1219,7 +1224,7 @@ export default function DownloadsView() {
 
   return (
     <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2 }}>
-      <Typography variant="h5" fontWeight={700}>下载管理</Typography>
+      <Typography variant="h5" sx={{ fontWeight: 700 }}>下载管理</Typography>
       {items.length === 0 ? (
         <Typography color="text.secondary">
           暂无文件。聊天中让助手用 save_download 保存内容后会出现在这里。
