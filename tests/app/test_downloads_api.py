@@ -25,9 +25,7 @@ def _sqlite_allow_cross_thread(monkeypatch):
 
 
 def _cfg():
-    return AppConfig(api_key="k", questions_db_path=":memory:",
-                     exams_db_path=":memory:", wrong_answers_db_path=":memory:",
-                     users_db_path=":memory:")
+    return AppConfig(api_key="k", app_db_path=":memory:")
 
 
 def _auth_headers(client, username="u"):

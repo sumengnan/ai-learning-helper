@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from harness.persistence.serialize import message_from_dict, message_to_dict
 from harness.types import Message
 
-from ._migrations import ensure_columns
+from .db import migrate, open_db
 
 
 def _now() -> str:
@@ -17,17 +17,13 @@ def _now() -> str:
 
 
 class ConversationStore:
-    def __init__(self, db_path: str) -> None:
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.execute(
-            "CREATE TABLE IF NOT EXISTS conversations("
-            "id TEXT PRIMARY KEY, user_id TEXT, title TEXT, created_at TEXT)")
-        self._conn.execute(
-            "CREATE TABLE IF NOT EXISTS conversation_messages("
-            "conv_id TEXT, seq INTEGER, role TEXT, content TEXT, tool_calls TEXT, "
-            "tool_call_id TEXT, created_at TEXT, PRIMARY KEY(conv_id, seq))")
-        self._conn.commit()
-        ensure_columns(self._conn, "conversations", {"user_id": "TEXT"})
+    def __init__(self, db_path: str | None = None, *,
+                 conn: sqlite3.Connection | None = None) -> None:
+        if conn is not None:
+            self._conn = conn
+        else:
+            self._conn = open_db(db_path)
+            migrate(self._conn)
 
     def create(self, user_id: str, title: str = "新对话") -> str:
         cid = uuid.uuid4().hex

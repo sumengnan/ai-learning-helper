@@ -31,9 +31,7 @@ def _client():
     harness = Harness(client=None, registry=reg,
                       checkpoint_store=CheckpointStore(":memory:"),
                       trajectory_store=traj, sink=TrajectorySink(traj), system_prompt="s")
-    cfg = AppConfig(api_key="k", questions_db_path=":memory:",
-                    exams_db_path=":memory:", wrong_answers_db_path=":memory:",
-                    users_db_path=":memory:")
+    cfg = AppConfig(api_key="k", app_db_path=":memory:")
     app = create_app(config=cfg, harness=harness, store=ConversationStore(":memory:"),
                      doc_store=DocumentStore(":memory:"))
     return TestClient(app)

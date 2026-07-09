@@ -6,7 +6,7 @@ import sqlite3
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from ._migrations import ensure_columns
+from .db import migrate, open_db
 
 
 def _now() -> str:
@@ -14,16 +14,15 @@ def _now() -> str:
 
 
 class DownloadStore:
-    def __init__(self, files_dir: str, db_path: str) -> None:
+    def __init__(self, files_dir: str, db_path: str | None = None, *,
+                 conn: sqlite3.Connection | None = None) -> None:
         self._dir = files_dir
         os.makedirs(files_dir, exist_ok=True)
-        self._db = sqlite3.connect(db_path, check_same_thread=False)
-        self._db.execute(
-            """CREATE TABLE IF NOT EXISTS downloads(
-                 id TEXT PRIMARY KEY, user_id TEXT, filename TEXT, size INTEGER,
-                 content_type TEXT, created_at TEXT, seq INTEGER)""")
-        self._db.commit()
-        ensure_columns(self._db, "downloads", {"user_id": "TEXT"})
+        if conn is not None:
+            self._db = conn
+        else:
+            self._db = open_db(db_path)
+            migrate(self._db)
         self._seq = self._db.execute(
             "SELECT COALESCE(MAX(seq), 0) FROM downloads").fetchone()[0]
 

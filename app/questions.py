@@ -6,7 +6,7 @@ import sqlite3
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from ._migrations import ensure_columns
+from .db import migrate, open_db
 
 
 def _now() -> str:
@@ -14,14 +14,13 @@ def _now() -> str:
 
 
 class QuestionStore:
-    def __init__(self, db_path: str) -> None:
-        self._db = sqlite3.connect(db_path, check_same_thread=False)
-        self._db.execute(
-            """CREATE TABLE IF NOT EXISTS questions(
-                 id TEXT PRIMARY KEY, user_id TEXT, type TEXT, stem TEXT, options TEXT,
-                 answer TEXT, explanation TEXT, source TEXT, created_at TEXT)""")
-        self._db.commit()
-        ensure_columns(self._db, "questions", {"user_id": "TEXT"})
+    def __init__(self, db_path: str | None = None, *,
+                 conn: sqlite3.Connection | None = None) -> None:
+        if conn is not None:
+            self._db = conn
+        else:
+            self._db = open_db(db_path)
+            migrate(self._db)
 
     _COLS = "id, type, stem, options, answer, explanation, source, created_at"
 

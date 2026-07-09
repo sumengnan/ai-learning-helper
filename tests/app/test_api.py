@@ -40,11 +40,9 @@ def _fake_harness(make_mock, turns):
 
 
 def _cfg():
-    # quiz 三个 store 未在这些测试里注入，走 create_app 默认路径；用 :memory: 免得
-    # 在 cwd 落下 questions.db/exams.db/wrong_answers.db。
-    return AppConfig(api_key="k", questions_db_path=":memory:",
-                     exams_db_path=":memory:", wrong_answers_db_path=":memory:",
-                     users_db_path=":memory:")
+    # quiz/user 等 store 未在这些测试里注入，走 create_app 默认路径；用 :memory: 免得
+    # 在 cwd 落下 app.db。
+    return AppConfig(api_key="k", app_db_path=":memory:")
 
 
 def _auth_headers(client, username="u"):

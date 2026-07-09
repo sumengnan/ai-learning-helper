@@ -25,4 +25,6 @@ web/src/**/*.js
 
 # 运行时数据（应用启动/测试时生成，非源码）
 *.db
+*.db-wal
+*.db-shm
 downloads/

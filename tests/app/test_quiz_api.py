@@ -45,7 +45,7 @@ def _app(make_mock, mock_embedder, with_memory=True, complete=None):
                       memory_store=mstore if with_memory else None)
     qs = QuestionStore(":memory:")
     quiz = QuizService(mem, qs, complete or (lambda s, u: None)) if mem is not None else None
-    app = create_app(config=AppConfig(api_key="k", users_db_path=":memory:"), harness=harness,
+    app = create_app(config=AppConfig(api_key="k", app_db_path=":memory:"), harness=harness,
                      store=ConversationStore(":memory:"), doc_store=DocumentStore(":memory:"),
                      question_store=qs, wrong_store=WrongAnswerStore(":memory:"),
                      quiz_service=quiz)

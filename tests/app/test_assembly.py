@@ -16,7 +16,7 @@ def _dl_dir(tmp_path_factory):
 
 def _cfg(**kw):
     return AppConfig(api_key="k", persistence_db_path=":memory:", memory_db_path=":memory:",
-                     downloads_dir=_DL_DIR, downloads_db_path=":memory:", **kw)
+                     downloads_dir=_DL_DIR, app_db_path=":memory:", **kw)
 
 
 def test_core_tools_registered_heavy_gated_off():

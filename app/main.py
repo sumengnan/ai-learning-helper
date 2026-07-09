@@ -20,6 +20,7 @@ from .auth import AuthService, UserStore
 from .completion import build_completer
 from .config import AppConfig
 from .conversations import ConversationStore
+from .db import migrate, open_db
 from .documents import DocumentStore
 from .knowledge import KnowledgeService
 from .questions import QuestionStore
@@ -35,10 +36,19 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
     # exam_store 参数保留仅为向后兼容（模拟考试已迁入聊天工具，不再有独立考试端点）
     config = config or AppConfig()
     harness = harness if harness is not None else build_harness(config)
-    store = store if store is not None else ConversationStore(config.conversations_db_path)
-    doc_store = doc_store if doc_store is not None else DocumentStore(config.documents_db_path)
-    question_store = question_store if question_store is not None else QuestionStore(config.questions_db_path)
-    wrong_store = wrong_store if wrong_store is not None else WrongAnswerStore(config.wrong_answers_db_path)
+
+    # 应用领域各 Store 共享同一个数据库连接（单文件 app.db）；仅在需要时创建，
+    # 避免测试注入全部 Store 时产生多余的 app.db 副作用。
+    need_db = any(s is None for s in (store, doc_store, question_store, wrong_store, user_store))
+    app_conn = None
+    if need_db:
+        app_conn = open_db(config.app_db_path)
+        migrate(app_conn)
+
+    store = store if store is not None else ConversationStore(conn=app_conn)
+    doc_store = doc_store if doc_store is not None else DocumentStore(conn=app_conn)
+    question_store = question_store if question_store is not None else QuestionStore(conn=app_conn)
+    wrong_store = wrong_store if wrong_store is not None else WrongAnswerStore(conn=app_conn)
 
     has_mem = (getattr(harness, "memory", None) is not None
                and getattr(harness, "memory_store", None) is not None)
@@ -49,7 +59,7 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
                                    retrieve_k=config.quiz_retrieve_k,
                                    short_pass_score=config.short_pass_score)
 
-    user_store = user_store if user_store is not None else UserStore(config.users_db_path)
+    user_store = user_store if user_store is not None else UserStore(conn=app_conn)
     secret = os.environ.get("AUTH_SECRET") or config.auth_secret
     if secret == _DEFAULT_SECRET:
         logging.getLogger("app").warning(

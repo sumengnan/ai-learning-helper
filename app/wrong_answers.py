@@ -6,7 +6,7 @@ import sqlite3
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from ._migrations import ensure_columns
+from .db import migrate, open_db
 
 
 def _now() -> str:
@@ -14,14 +14,13 @@ def _now() -> str:
 
 
 class WrongAnswerStore:
-    def __init__(self, db_path: str) -> None:
-        self._db = sqlite3.connect(db_path, check_same_thread=False)
-        self._db.execute(
-            """CREATE TABLE IF NOT EXISTS wrong_answers(
-                 id TEXT PRIMARY KEY, user_id TEXT, question_id TEXT, exam_id TEXT,
-                 snapshot TEXT, user_answer TEXT, created_at TEXT, seq INTEGER)""")
-        self._db.commit()
-        ensure_columns(self._db, "wrong_answers", {"user_id": "TEXT"})
+    def __init__(self, db_path: str | None = None, *,
+                 conn: sqlite3.Connection | None = None) -> None:
+        if conn is not None:
+            self._db = conn
+        else:
+            self._db = open_db(db_path)
+            migrate(self._db)
         self._seq = self._db.execute(
             "SELECT COALESCE(MAX(seq), 0) FROM wrong_answers").fetchone()[0]
 

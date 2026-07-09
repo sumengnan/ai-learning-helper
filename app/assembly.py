@@ -104,7 +104,7 @@ def build_harness(config) -> Harness:
 
     from .downloads import DownloadStore
     from .tools.save_download import SaveDownloadTool
-    dstore = DownloadStore(config.downloads_dir, config.downloads_db_path)
+    dstore = DownloadStore(config.downloads_dir, db_path=config.app_db_path)
     _reg(SaveDownloadTool(dstore, config.download_max_mb * 1024 * 1024))
 
     traj = TrajectoryStore(config.persistence_db_path)

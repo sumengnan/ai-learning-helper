@@ -12,6 +12,8 @@ from uuid import uuid4
 
 from fastapi import Header, HTTPException, Request, Response
 
+from .db import migrate, open_db
+
 _PBKDF2_ROUNDS = 200_000
 
 
@@ -30,13 +32,13 @@ class UsernameTaken(Exception):
 
 
 class UserStore:
-    def __init__(self, db_path: str) -> None:
-        self._db = sqlite3.connect(db_path, check_same_thread=False)
-        self._db.execute(
-            """CREATE TABLE IF NOT EXISTS users(
-                 id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL,
-                 password_hash TEXT NOT NULL, salt TEXT NOT NULL, created_at TEXT NOT NULL)""")
-        self._db.commit()
+    def __init__(self, db_path: str | None = None, *,
+                 conn: sqlite3.Connection | None = None) -> None:
+        if conn is not None:
+            self._db = conn
+        else:
+            self._db = open_db(db_path)
+            migrate(self._db)
 
     def create(self, username: str, password: str) -> str:
         if self.exists_username(username):

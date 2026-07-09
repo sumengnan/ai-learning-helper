@@ -5,7 +5,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
-from ._migrations import ensure_columns
+from .db import migrate, open_db
 
 
 def _now() -> str:
@@ -13,14 +13,13 @@ def _now() -> str:
 
 
 class DocumentStore:
-    def __init__(self, db_path: str) -> None:
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.execute(
-            "CREATE TABLE IF NOT EXISTS documents("
-            "id TEXT PRIMARY KEY, user_id TEXT, filename TEXT, size INTEGER, num_chunks INTEGER, "
-            "chunk_ids TEXT, uploaded_at TEXT)")
-        self._conn.commit()
-        ensure_columns(self._conn, "documents", {"user_id": "TEXT"})
+    def __init__(self, db_path: str | None = None, *,
+                 conn: sqlite3.Connection | None = None) -> None:
+        if conn is not None:
+            self._conn = conn
+        else:
+            self._conn = open_db(db_path)
+            migrate(self._conn)
 
     def create(self, user_id: str, doc_id: str, filename: str, size: int,
                chunk_ids: list[int]) -> None:
