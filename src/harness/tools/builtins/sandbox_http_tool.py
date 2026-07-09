@@ -1,12 +1,19 @@
 # src/harness/tools/builtins/sandbox_http_tool.py
 from __future__ import annotations
 
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from pydantic import BaseModel
 
 from ..base import Tool
 from ...net.policy import check_url
+
+# 在沙箱容器内解析主机名 → 打印去重后的 IP（每行一个）。请求真正出网发生在沙箱，
+# 故 DNS 也在沙箱内解析，避免宿主与沙箱两侧 DNS 视图不一致。
+_RESOLVE_SCRIPT = (
+    "import socket,sys\n"
+    "print('\\n'.join(sorted({ai[4][0] for ai in socket.getaddrinfo(sys.argv[1], None)})))"
+)
 
 
 def _parse_response(raw: str) -> tuple[int, str | None, str]:
@@ -40,27 +47,45 @@ class SandboxedHttpRequestTool(Tool):
 
     def __init__(self, sandbox, allowed_domains, block_private: bool = True,
                  timeout: float = 30.0, max_bytes: int = 5_000_000,
-                 max_redirects: int = 5, resolve=None) -> None:
+                 max_redirects: int = 5) -> None:
         self._sandbox = sandbox
         self._allowed = allowed_domains
         self._block_private = block_private
         self._timeout = timeout
         self._max_bytes = max_bytes
         self._max_redirects = max_redirects
-        self._resolve_kw = {"resolve": resolve} if resolve is not None else {}
+
+    async def _resolve_in_sandbox(self, host: str) -> list[str]:
+        res = await self._sandbox.exec(
+            ["python3", "-c", _RESOLVE_SCRIPT, host], self._timeout + 5)
+        return [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
 
     async def run(self, params: "SandboxedHttpRequestTool.Params") -> str:
         url = params.url
         for _ in range(self._max_redirects + 1):
-            # SSRF 策略仍在宿主侧逐跳校验（PolicyError→is_error）；curl 关闭自动重定向手动跟随
-            check_url(url, self._allowed, self._block_private, **self._resolve_kw)
+            parsed = urlparse(url)
+            host = parsed.hostname
+            pinned_ips: list[str] | None = None
+            if self._block_private and host:
+                # 执行在沙箱：DNS 在容器内解析；决策在宿主：把 IP 传回 check_url 校验
+                ips = await self._resolve_in_sandbox(host)
+                check_url(url, self._allowed, self._block_private, resolve=lambda _h: ips)
+                pinned_ips = ips
+            else:
+                check_url(url, self._allowed, self._block_private)
+
             cmd = ["curl", "-s", "-S", "-i", "--max-time", str(max(1, int(self._timeout))),
                    "-X", params.method]
+            if pinned_ips:
+                # 把 curl 钉到宿主已校验过的 IP，避免容器再解析一次（关闭 rebinding 时间窗）
+                port = parsed.port or (443 if parsed.scheme == "https" else 80)
+                cmd += ["--resolve", f"{host}:{port}:{','.join(pinned_ips)}"]
             for k, v in (params.headers or {}).items():
                 cmd += ["-H", f"{k}: {v}"]
             if params.body is not None:
                 cmd += ["--data-binary", params.body]
             cmd.append(url)
+
             res = await self._sandbox.exec(cmd, self._timeout + 5)
             if not res.stdout:
                 raise RuntimeError(
