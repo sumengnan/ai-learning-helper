@@ -6,7 +6,8 @@ import type { ChatMessage } from "../types";
 import { streamChat } from "../api/client";
 import { AgentProgress } from "./AgentProgress";
 import { EmptyHint } from "./EmptyHint";
-import { ProgressLog } from "./ProgressLog";
+import { ProgressBlock } from "./ProgressBlock";
+import { Markdown } from "./Markdown";
 
 const SHOW_TOOLS_KEY = "chat_show_tools";
 const SAVE_WRONG_KEY = "chat_save_wrong";
@@ -129,16 +130,30 @@ export function ChatView({ conversationId, initial, autoSend }:
                 color: m.role === "user" ? "primary.contrastText" : "text.primary",
               }}
             >
-              {showTools && m.role === "assistant" && m.progress && m.progress.length > 0 && (
-                <ProgressLog items={m.progress} busy={busy && i === messages.length - 1} />
-              )}
+              {showTools && m.role === "assistant" && m.progress && m.progress.length > 0 && (() => {
+                const sandbox = m.progress.filter((p) => p.scope === "sandbox");
+                const sub = m.progress.filter((p) => p.scope.startsWith("subagent:"));
+                const live = busy && i === messages.length - 1;
+                return (
+                  <>
+                    <ProgressBlock title="沙箱执行" kind="sandbox" items={sandbox}
+                      running={live && !sandbox.some((p) => p.text.includes("就绪"))} />
+                    <ProgressBlock title="子代理执行" kind="subagent" items={sub}
+                      running={live && !sub.some((p) => /完成|未产出|失败/.test(p.text))} />
+                  </>
+                );
+              })()}
               {showTools && m.role === "assistant" && m.steps && m.steps.length > 0 && (
                 <AgentProgress steps={m.steps} />
               )}
               {m.content ? (
-                <Typography component="div" sx={{ whiteSpace: "pre-wrap" }}>
-                  {m.content}
-                </Typography>
+                m.role === "assistant" ? (
+                  <Markdown>{m.content}</Markdown>
+                ) : (
+                  <Typography component="div" sx={{ whiteSpace: "pre-wrap" }}>
+                    {m.content}
+                  </Typography>
+                )
               ) : m.role === "assistant" && busy && i === messages.length - 1 ? (
                 <TypingDots />
               ) : (

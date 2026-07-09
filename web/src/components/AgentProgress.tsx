@@ -7,25 +7,22 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
 import BuildIcon from "@mui/icons-material/Build";
+import { CollapsibleBlock } from "./CollapsibleBlock";
 
 export function AgentProgress({ steps }: { steps: NonNullable<ChatMessage["steps"]> }) {
   if (!steps.length) return null;
+  const pending = steps.some((s) => s.result === undefined);
+  const anyError = steps.some((s) => s.isError);
+  const status = pending ? "running" : anyError ? "error" : "ok";
   return (
-    <Box
-      sx={{
-        mb: 1, p: 1, borderRadius: 1.5,
-        border: 1, borderColor: "divider", bgcolor: "background.default",
-      }}
+    <CollapsibleBlock
+      icon={<BuildIcon sx={{ fontSize: 15 }} color="action" />}
+      title="工具调用"
+      status={status}
     >
-      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 0.5 }}>
-        <BuildIcon sx={{ fontSize: 14 }} color="action" />
-        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-          工具调用
-        </Typography>
-      </Box>
       {steps.map((s, i) => {
-        const pending = s.result === undefined;
-        const ok = !pending && !s.isError;
+        const sp = s.result === undefined;
+        const ok = !sp && !s.isError;
         return (
           <Accordion
             key={i} disableGutters elevation={0}
@@ -38,7 +35,7 @@ export function AgentProgress({ steps }: { steps: NonNullable<ChatMessage["steps
                 "& .MuiAccordionSummary-content": { my: 0.5, alignItems: "center", gap: 0.75 },
               }}
             >
-              {pending ? (
+              {sp ? (
                 <CircularProgress size={14} />
               ) : ok ? (
                 <CheckCircleIcon sx={{ fontSize: 16 }} color="success" />
@@ -50,7 +47,7 @@ export function AgentProgress({ steps }: { steps: NonNullable<ChatMessage["steps
               </Typography>
             </AccordionSummary>
             <AccordionDetails sx={{ px: 0, pt: 0 }}>
-              {/* 参数：蓝色左边框；结果：绿色成功 / 红色失败——两块明显区分 */}
+              {/* 参数：蓝色左边框；结果：绿成功/红失败——两块明显区分 */}
               <Box sx={{
                 mb: 0.5, px: 1, py: 0.5, borderRadius: 0.5,
                 borderLeft: 3, borderColor: "info.main",
@@ -92,6 +89,6 @@ export function AgentProgress({ steps }: { steps: NonNullable<ChatMessage["steps
           </Accordion>
         );
       })}
-    </Box>
+    </CollapsibleBlock>
   );
 }
