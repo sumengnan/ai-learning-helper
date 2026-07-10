@@ -8,6 +8,7 @@ import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
 import BuildIcon from "@mui/icons-material/Build";
 import { CollapsibleBlock } from "./CollapsibleBlock";
+import { EllipsisText } from "./EllipsisText";
 
 export function AgentProgress({ steps }: { steps: NonNullable<ChatMessage["steps"]> }) {
   if (!steps.length) return null;
@@ -26,9 +27,7 @@ export function AgentProgress({ steps }: { steps: NonNullable<ChatMessage["steps
       ) : (
         <CheckCircleIcon sx={{ fontSize: 14 }} color="success" />
       )}
-      <Typography variant="caption" color="text.secondary" noWrap sx={{ ml: 0.5, maxWidth: 200 }}>
-        {last.tool}
-      </Typography>
+      <EllipsisText text={last.tool} sx={{ ml: 0.5 }} />
     </>
   );
   return (

@@ -4,6 +4,7 @@ import AccountTreeIcon from "@mui/icons-material/AccountTree";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
 import { CollapsibleBlock } from "./CollapsibleBlock";
+import { EllipsisText } from "./EllipsisText";
 
 type ProgressItem = {
   scope: string; text: string;
@@ -63,13 +64,12 @@ export function ProgressBlock({ title, kind, items, status }: {
     : <AccountTreeIcon sx={{ fontSize: 15 }} color="action" />;
   // 标题右侧显示最后一步进度
   const last = rows[rows.length - 1];
+  const summaryText = kind === "subagent" && last.scope.startsWith("subagent:")
+    ? `${last.scope.slice("subagent:".length)}: ${last.text}` : last.text;
   const summary = (
     <>
       {stepIcon(last, true, status === "running")}
-      <Typography variant="caption" color="text.secondary" noWrap sx={{ ml: 0.5, maxWidth: 200 }}>
-        {kind === "subagent" && last.scope.startsWith("subagent:")
-          ? `${last.scope.slice("subagent:".length)}: ${last.text}` : last.text}
-      </Typography>
+      <EllipsisText text={summaryText} sx={{ ml: 0.5 }} />
     </>
   );
   return (

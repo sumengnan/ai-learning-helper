@@ -37,7 +37,7 @@ export function CollapsibleBlock({ icon, title, status, summary, defaultExpanded
           {title}
         </Typography>
         {summary ? (
-          <Box sx={{ ml: "auto", minWidth: 0, display: "flex", alignItems: "center" }}>
+          <Box sx={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center" }}>
             {summary}
           </Box>
         ) : status === "running" ? (
