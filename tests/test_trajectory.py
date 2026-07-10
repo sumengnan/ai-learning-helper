@@ -32,6 +32,17 @@ def test_list_run_ids():
     assert sorted(s.list_run_ids()) == ["r1", "r2"]
 
 
+def test_delete_only_target_run():
+    s = TrajectoryStore(":memory:")
+    s.append("r1", 0, {"type": "A", "data": {}})
+    s.append("r1", 1, {"type": "B", "data": {}})
+    s.append("r2", 0, {"type": "A", "data": {}})
+    s.delete("r1")
+    assert s.load("r1") == []                   # 目标 run 清空
+    assert [e["type"] for e in s.load("r2")] == ["A"]   # 其他 run 不受影响
+    assert s.list_run_ids() == ["r2"]
+
+
 async def test_sink_records_and_passes_through():
     store = TrajectoryStore(":memory:")
     sink = TrajectorySink(store)

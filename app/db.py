@@ -26,6 +26,10 @@ _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS downloads(
          id TEXT PRIMARY KEY, user_id TEXT, filename TEXT, size INTEGER,
          content_type TEXT, created_at TEXT, seq INTEGER)""",
+    # 会话↔Agent 运行映射：删除会话时据此清理 persistence 库里的检查点/轨迹
+    """CREATE TABLE IF NOT EXISTS conversation_runs(
+         conv_id TEXT, run_id TEXT, created_at TEXT,
+         PRIMARY KEY(conv_id, run_id))""",
 )
 
 # 历史库若建于某列引入之前，需在此补齐（CREATE TABLE IF NOT EXISTS 不改既有表结构）

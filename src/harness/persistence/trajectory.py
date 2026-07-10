@@ -43,6 +43,10 @@ class TrajectoryStore:
             "SELECT DISTINCT run_id FROM trajectory_events").fetchall()
         return [r[0] for r in rows]
 
+    def delete(self, run_id: str) -> None:
+        self._conn.execute("DELETE FROM trajectory_events WHERE run_id = ?", (run_id,))
+        self._conn.commit()
+
     def close(self) -> None:
         self._conn.close()
 

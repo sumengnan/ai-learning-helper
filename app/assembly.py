@@ -24,7 +24,8 @@ class Harness:
     memory_store: object | None = None
     download_store: object | None = None
     skill_registry: object | None = None
-    sandbox: object | None = None   # 供 app 关停时 close() 释放容器
+    sandbox: object | None = None            # 绑进工具的会话级沙箱代理（SandboxProxy）
+    sandbox_manager: object | None = None    # 会话级容器生命周期管理（销毁/关停/清扫）
 
 
 def build_harness(config) -> Harness:
@@ -43,11 +44,14 @@ def build_harness(config) -> Harness:
 
     _reg(CalculatorTool())
 
-    # 沙箱（若启用）：网络工具与代码工具共用同一个联网容器
+    # 沙箱（若启用）：会话级隔离。绑进工具的是 SandboxProxy（按当前会话解析真实容器），
+    # 真实容器由 SandboxManager 按 conv_id 惰性建/缓存/销毁。
     sandbox = None
+    sandbox_manager = None
     if config.enable_sandbox and config.sandbox_docker_host:
-        from harness.sandbox.factory import build_sandbox
-        sandbox = build_sandbox(config)
+        from .sandbox_manager import SandboxManager, SandboxProxy
+        sandbox_manager = SandboxManager(config)
+        sandbox = SandboxProxy(sandbox_manager)
 
     # http_request：有沙箱时在容器内用 curl 出网，否则回退到宿主 httpx
     if sandbox is not None:
@@ -144,4 +148,4 @@ def build_harness(config) -> Harness:
         trajectory_store=traj, sink=TrajectorySink(traj),
         system_prompt=config.app_system_prompt,
         memory=memory, memory_store=memory_store, download_store=dstore,
-        skill_registry=skill_registry, sandbox=sandbox)
+        skill_registry=skill_registry, sandbox=sandbox, sandbox_manager=sandbox_manager)

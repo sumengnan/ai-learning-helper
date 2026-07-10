@@ -27,7 +27,8 @@ class DockerSandbox:
                  user: str = "1000:1000", network: str = "none", mem_limit: str = "512m",
                  cpus: float = 1.0, pids_limit: int = 128, read_only: bool = False,
                  tls_ca_cert: str = "", tls_client_cert: str = "",
-                 tls_client_key: str = "", tls_verify: bool = True) -> None:
+                 tls_client_key: str = "", tls_verify: bool = True,
+                 labels: dict | None = None) -> None:
         self.workspace = workspace
         self._docker_host = docker_host
         self._image = image
@@ -41,6 +42,7 @@ class DockerSandbox:
         self._tls_client_cert = tls_client_cert
         self._tls_client_key = tls_client_key
         self._tls_verify = tls_verify
+        self._labels = labels or None   # 打到容器上，供重启后按标签回收孤儿容器
         self._client = None
         self._container = None
 
@@ -77,7 +79,8 @@ class DockerSandbox:
             read_only=self._read_only, tmpfs={self.workspace: "rw,size=64m"},
             mem_limit=self._mem_limit, nano_cpus=int(self._cpus * 1e9),
             pids_limit=self._pids_limit, cap_drop=["ALL"],
-            security_opt=["no-new-privileges"], auto_remove=False)
+            security_opt=["no-new-privileges"], auto_remove=False,
+            labels=self._labels)
         emit(Progress("sandbox", "沙箱容器已就绪"))
 
     async def close(self) -> None:

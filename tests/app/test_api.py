@@ -127,6 +127,62 @@ def test_conversation_crud(make_mock):
     assert client.get(f"/api/conversations/{cid}/messages", headers=h).status_code == 404
 
 
+class _FakeSandboxManager:
+    """记录 destroy 调用；提供 create_app 启动/关停会用到的钩子。"""
+
+    def __init__(self):
+        self.destroyed = []
+
+    def sweep_orphans(self):        # 启动清扫：测试里 no-op
+        pass
+
+    async def destroy(self, conv_id):
+        self.destroyed.append(conv_id)
+
+    async def close_all(self):
+        pass
+
+
+def test_delete_conversation_cascades_runs_and_sandbox(make_mock, text_turn):
+    from harness.state import RunState
+
+    reg = ToolRegistry(); reg.register(CalculatorTool())
+    traj = TrajectoryStore(":memory:")
+    ckpt = CheckpointStore(":memory:")
+    mgr = _FakeSandboxManager()
+    harness = Harness(client=make_mock([text_turn("答")]), registry=reg,
+                      checkpoint_store=ckpt, trajectory_store=traj,
+                      sink=TrajectorySink(traj), system_prompt="s",
+                      sandbox_manager=mgr)
+    store = ConversationStore(":memory:")
+    app = create_app(config=_cfg(), harness=harness, store=store,
+                     doc_store=DocumentStore(":memory:"))
+    client = TestClient(app)
+    h = _auth_headers(client)
+    cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
+
+    # 注册生成的是 user_id（非用户名），run_ids 带归属校验需真实 user_id
+    uid = store._conn.execute(
+        "SELECT user_id FROM conversations WHERE id=?", (cid,)).fetchone()[0]
+
+    # 跑一轮 → 自动登记 run 映射并写入轨迹；再手动为该 run 存一个检查点
+    with client.stream("POST", "/api/chat",
+                       json={"conversation_id": cid, "message": "hi"}, headers=h) as resp:
+        _sse_events(resp)
+    run_ids = store.run_ids(uid, cid)
+    assert len(run_ids) == 1                      # run 已关联到会话
+    rid = run_ids[0]
+    ckpt.save(RunState(run_id=rid))
+    assert traj.load(rid) != [] and ckpt.load(rid) is not None
+
+    # 删除会话 → 清理检查点/轨迹，并销毁该会话沙箱
+    assert client.delete(f"/api/conversations/{cid}", headers=h).status_code == 200
+    assert traj.load(rid) == []
+    assert ckpt.load(rid) is None
+    assert store.run_ids(uid, cid) == []
+    assert mgr.destroyed == [cid]
+
+
 def _sse_events(resp):
     events = []
     for line in resp.iter_lines():

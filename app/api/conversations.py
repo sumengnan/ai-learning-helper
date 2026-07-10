@@ -15,7 +15,7 @@ class _Rename(BaseModel):
     title: str
 
 
-def make_conversations_router(store) -> APIRouter:
+def make_conversations_router(store, harness=None) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/conversations")
@@ -44,7 +44,22 @@ def make_conversations_router(store) -> APIRouter:
 
     @router.delete("/api/conversations/{conv_id}")
     async def delete_conversation(conv_id: str, user_id: str = Depends(current_user)):
+        # 1) 先取该会话的运行，清理 persistence 库里的检查点/轨迹（run_ids 带归属校验）
+        run_ids = store.run_ids(user_id, conv_id)
+        if harness is not None:
+            ckpt = getattr(harness, "checkpoint_store", None)
+            traj = getattr(harness, "trajectory_store", None)
+            for rid in run_ids:
+                if ckpt is not None:
+                    ckpt.delete(rid)
+                if traj is not None:
+                    traj.delete(rid)
+        # 2) 删会话 + 消息 + conversation_runs
         store.delete(user_id, conv_id)
+        # 3) 销毁该会话的沙箱容器（含其中生成的临时文件）
+        mgr = getattr(harness, "sandbox_manager", None) if harness is not None else None
+        if mgr is not None:
+            await mgr.destroy(conv_id)
         return {"ok": True}
 
     return router

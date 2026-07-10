@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -19,6 +20,7 @@ from harness.types import Message, Role
 
 from ..auth import current_user
 from ..context import ConversationContextManager
+from ..sandbox_manager import reset_sandbox_conv, set_sandbox_conv
 from ..tools.exam_tools import SampleQuestionsTool, SaveWrongAnswerTool
 from ..tools.save_download import SaveDownloadTool
 
@@ -74,9 +76,13 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             from harness.skills.context import SkillContextManager
             ctx = SkillContextManager(ctx, harness.skill_registry)
         registry = _build_registry(user_id, req.save_wrong)
+        # 固定本轮 run_id 并登记到会话，使检查点/轨迹可在删除会话时按会话清理。
+        # 提前落库：即使本轮报错，遗留的轨迹也能被后续删除清掉。
+        run_id = uuid4().hex
+        store.add_run(req.conversation_id, run_id)
         loop = AgentLoop(
             client=harness.client, registry=registry, context=ctx,
-            max_steps=config.max_steps,
+            max_steps=config.max_steps, run_id_factory=lambda: run_id,
             budget=BudgetTracker(config.max_tokens_budget, config.max_wall_seconds),
             checkpoint_store=harness.checkpoint_store, model_name=config.model,
             price_map=config.price_map, tool_result_max_chars=config.tool_result_max_chars)
@@ -94,14 +100,17 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
 
             async def pump():
                 token = set_emitter(queue.put_nowait)
-                # 审批上下文：run_id 由 loop 内 set_run_id 回填，此处先占位；超时来自配置
-                atoken = set_context(run_id="", timeout=config.sandbox_approval_timeout)
+                # 审批上下文：填入本轮真实 run_id；超时来自配置
+                atoken = set_context(run_id=run_id, timeout=config.sandbox_approval_timeout)
+                # 会话级沙箱上下文：工具执行在此上下文内解析出本会话的容器
+                stoken = set_sandbox_conv(req.conversation_id)
                 try:
                     async for ev in harness.sink.wrap(loop.run(req.message)):
                         queue.put_nowait(ev)
                 except Exception as e:  # 兜底成 RunError，避免流卡死
                     queue.put_nowait(RunError(error=str(e)))
                 finally:
+                    reset_sandbox_conv(stoken)
                     reset_context(atoken)
                     reset_emitter(token)
                     queue.put_nowait(sentinel)

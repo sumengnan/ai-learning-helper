@@ -60,6 +60,9 @@ class HarnessConfig(BaseSettings):
     sandbox_read_only: bool = False         # 容器根文件系统是否只读（默认可写）
     sandbox_exec_timeout: float = 30.0
     sandbox_output_max_chars: int = 8000
+    # 会话级沙箱空闲驱逐（秒）：某会话超过此时长无沙箱操作则销毁其容器（安全阀，防泄漏）。
+    # 与「删除会话即销毁」的主路径无关；<=0 关闭空闲驱逐。默认 30 分钟。
+    sandbox_idle_timeout: float = 1800.0
     # 外部 API/HTTP
     http_allowed_domains: list = []         # 空=放行公网；非空=仅白名单
     http_block_private: bool = True         # SSRF：拦截内网/元数据

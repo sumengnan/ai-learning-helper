@@ -72,7 +72,7 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
         CORSMiddleware, allow_origins=config.cors_origins,
         allow_methods=["*"], allow_headers=["*"], expose_headers=["X-Refresh-Token"])
     app.include_router(make_auth_router(auth))
-    app.include_router(make_conversations_router(store))
+    app.include_router(make_conversations_router(store, harness))
     app.include_router(make_chat_router(harness, store, config,
                                         question_store=question_store, wrong_store=wrong_store))
     app.include_router(make_documents_router(service, doc_store, config))
@@ -84,13 +84,14 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
     app.include_router(make_questions_router(quiz_service, question_store, config))
     app.include_router(make_wrong_answers_router(wrong_store))
 
-    # 关停时释放沙箱容器（RoutingSandbox 会关闭其全部语言容器；单容器亦然）。
-    # 修复此前无人调用 close() 导致的容器泄漏。
-    sandbox = getattr(harness, "sandbox", None)
-    if sandbox is not None:
+    # 会话级沙箱：启动时清扫上次遗留的孤儿容器；关停时销毁全部会话容器。
+    sandbox_manager = getattr(harness, "sandbox_manager", None)
+    if sandbox_manager is not None:
+        sandbox_manager.sweep_orphans()
+
         @app.on_event("shutdown")
-        async def _close_sandbox() -> None:
-            await sandbox.close()
+        async def _close_sandboxes() -> None:
+            await sandbox_manager.close_all()
 
     if os.path.isdir("web/dist"):  # prod：托管前端静态产物
         app.mount("/", StaticFiles(directory="web/dist", html=True), name="static")

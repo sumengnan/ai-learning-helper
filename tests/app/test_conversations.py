@@ -22,6 +22,29 @@ def test_append_and_messages_roundtrip():
     assert msgs[0].role == Role.USER and msgs[1].role == Role.ASSISTANT
 
 
+def test_add_run_and_run_ids_scoped_by_owner():
+    s = ConversationStore(":memory:")
+    cid = s.create("u1")
+    s.add_run(cid, "run-a")
+    s.add_run(cid, "run-b")
+    s.add_run(cid, "run-a")                      # 重复登记幂等
+    assert sorted(s.run_ids("u1", cid)) == ["run-a", "run-b"]
+    # 归属校验：非本人 / 不存在的会话都返回空
+    assert s.run_ids("u2", cid) == []
+    assert s.run_ids("u1", "nope") == []
+
+
+def test_delete_clears_runs_but_not_other_conversations():
+    s = ConversationStore(":memory:")
+    c1 = s.create("u1")
+    c2 = s.create("u1")
+    s.add_run(c1, "r1")
+    s.add_run(c2, "r2")
+    s.delete("u1", c1)
+    assert s.run_ids("u1", c1) == []             # 该会话的运行映射被清
+    assert s.run_ids("u1", c2) == ["r2"]         # 其他会话不受影响
+
+
 def test_append_steps_persist_for_ui_only():
     s = ConversationStore(":memory:")
     cid = s.create("u1")

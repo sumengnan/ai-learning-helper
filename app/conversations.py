@@ -99,9 +99,25 @@ class ConversationStore:
         self._conn.commit()
         return cur.rowcount > 0
 
+    def add_run(self, conv_id: str, run_id: str) -> None:
+        """登记一次 Agent 运行归属于哪个会话，供删除会话时清理其检查点/轨迹。"""
+        self._conn.execute(
+            "INSERT OR IGNORE INTO conversation_runs(conv_id, run_id, created_at) "
+            "VALUES (?, ?, ?)", (conv_id, run_id, _now()))
+        self._conn.commit()
+
+    def run_ids(self, user_id: str, conv_id: str) -> list[str]:
+        """该会话的全部 run_id（带归属校验；会话不存在/非本人则返回空）。"""
+        if not self.exists(user_id, conv_id):
+            return []
+        rows = self._conn.execute(
+            "SELECT run_id FROM conversation_runs WHERE conv_id = ?", (conv_id,)).fetchall()
+        return [r[0] for r in rows]
+
     def delete(self, user_id: str, conv_id: str) -> None:
         if not self.exists(user_id, conv_id):
             return
         self._conn.execute("DELETE FROM conversation_messages WHERE conv_id = ?", (conv_id,))
+        self._conn.execute("DELETE FROM conversation_runs WHERE conv_id = ?", (conv_id,))
         self._conn.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
         self._conn.commit()

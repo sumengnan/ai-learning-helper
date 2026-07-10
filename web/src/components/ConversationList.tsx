@@ -158,8 +158,21 @@ export function ConversationList({ items, activeId, onSelect, onNew, onDelete, o
       <Dialog open={Boolean(pendingDelete)} onClose={() => setPendingDelete(null)}>
         <DialogTitle>删除对话</DialogTitle>
         <DialogContent>
-          <DialogContentText>
-            确定删除对话「{pendingDelete?.title}」吗？此操作不可撤销。
+          <DialogContentText component="div">
+            确定删除对话「{pendingDelete?.title}」吗？删除后将<strong>一并清除</strong>：
+            <Box component="ul" sx={{ mt: 1, mb: 1.5, pl: 2.5 }}>
+              <li>本对话的全部聊天记录与消息</li>
+              <li>工具调用与执行进度轨迹</li>
+              <li>本对话的 Agent 运行数据（检查点与轨迹）</li>
+              <li>本对话的沙箱容器及其中生成的临时文件</li>
+            </Box>
+            <Typography variant="body2" color="text.secondary" component="div">
+              以下内容<strong>不会</strong>被删除：你的知识库文档、题库与错题集、
+              已保存到「下载」的文件、账号记忆。
+            </Typography>
+            <Typography variant="body2" color="error" component="div" sx={{ mt: 1 }}>
+              此操作不可撤销。
+            </Typography>
           </DialogContentText>
         </DialogContent>
         <DialogActions>
