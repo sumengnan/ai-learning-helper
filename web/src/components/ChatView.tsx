@@ -118,6 +118,12 @@ export function ChatView({ conversationId, initial, autoSend }:
     } finally { setBusy(false); busyRef.current = false; }
   }
 
+  // 停止本轮生成：中断 SSE fetch（AbortError 被 send() 静默处理），后端在客户端断开时
+  // 取消 loop 并保留已生成的部分回答落库；已流式到气泡的文本原样保留。
+  function stop() {
+    abortRef.current?.abort();
+  }
+
   // 空态默认问题：挂载时若带 autoSend 则自动发问（key=对话 id，每对话仅触发一次）
   useEffect(() => {
     if (autoSend) void send(autoSend);
@@ -237,8 +243,13 @@ export function ChatView({ conversationId, initial, autoSend }:
           }}
           placeholder="问点什么…"
         />
-        <Button variant="contained" onClick={() => send()} disabled={busy}
-          sx={{ flexShrink: 0, mb: 0.25 }}>发送</Button>
+        {busy ? (
+          <Button variant="outlined" color="error" onClick={stop}
+            sx={{ flexShrink: 0, mb: 0.25 }}>停止</Button>
+        ) : (
+          <Button variant="contained" onClick={() => send()}
+            sx={{ flexShrink: 0, mb: 0.25 }}>发送</Button>
+        )}
       </Box>
 
       {/* 危险命令人工确认：不设 onClose，backdrop/Esc 不关闭，须显式选择（走后端超时兜底） */}
