@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from ..events import Progress
+from ..progress import emit
 from ..tools.base import Tool
 from .registry import SkillRegistry
 
@@ -21,6 +23,10 @@ class LoadSkillTool(Tool):
     async def run(self, params: "LoadSkillTool.Params") -> str:
         if not self._reg.has(params.name):
             raise ValueError(f"未知技能：{params.name}。可用技能：{self._reg.names()}")
+        # 上报到前端：技能被引用（加载）。每次动作各成一行，故不设 key（不折叠）
+        skill = self._reg.get(params.name)
+        desc = f"：{skill.description}" if skill and skill.description else ""
+        emit(Progress("skill", f"引用技能「{params.name}」{desc}", status="ok"))
         return f"已加载技能「{params.name}」，其详细说明已注入上下文，可直接按其步骤执行。"
 
 
@@ -37,6 +43,8 @@ class UnloadSkillTool(Tool):
     async def run(self, params: "UnloadSkillTool.Params") -> str:
         if not self._reg.has(params.name):
             raise ValueError(f"未知技能：{params.name}。可用技能：{self._reg.names()}")
+        # 上报到前端：技能被卸载（从上下文移除）
+        emit(Progress("skill", f"卸载技能「{params.name}」"))
         return f"已释放技能「{params.name}」，其正文已从上下文移除。"
 
 

@@ -134,6 +134,7 @@ export function ChatView({ conversationId, initial, autoSend }:
               {showTools && m.role === "assistant" && m.progress && m.progress.length > 0 && (() => {
                 const sandbox = m.progress.filter((p) => p.scope === "sandbox");
                 const sub = m.progress.filter((p) => p.scope.startsWith("subagent:"));
+                const skill = m.progress.filter((p) => p.scope === "skill");
                 const live = busy && i === messages.length - 1;
                 const sbLast = sandbox[sandbox.length - 1];
                 const sbLastText = sbLast?.text ?? "";
@@ -147,6 +148,7 @@ export function ChatView({ conversationId, initial, autoSend }:
                     : sub.some((p) => /未产出|失败/.test(p.text)) ? "error" : "ok";
                 return (
                   <>
+                    <ProgressBlock title="技能" kind="skill" items={skill} status="ok" />
                     <ProgressBlock title="沙箱执行" kind="sandbox" items={sandbox} status={sbStatus} />
                     <ProgressBlock title="子代理执行" kind="subagent" items={sub} status={subStatus} />
                   </>
