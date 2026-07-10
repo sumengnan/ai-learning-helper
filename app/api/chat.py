@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from harness.approval import reset_context, resolve, set_context
-from harness.events import Progress, RunError, RunFinished, ToolFinished, ToolStarted
+from harness.events import Progress, RunError, RunFinished, TextDelta, ToolFinished, ToolStarted
 from harness.loop.agent_loop import AgentLoop
 from harness.persistence.serialize import event_to_dict
 from harness.progress import reset_emitter, set_emitter
@@ -35,6 +35,15 @@ EXAM_GUIDE = (
     "- 若某题用户答错且 save_wrong_answer 工具可用，则调用它把该题存入错题集"
     "（传 question_id 与用户作答 user_answer）；若该工具不可用，说明「答错自动保存错题集」"
     "未开启，不要尝试保存。\n")
+
+
+def _final_content(final: str | None, partial: str) -> str:
+    """本轮落库的助手内容：正常完成用 final；用户中途停止（无 final）时保留已生成的
+    部分文本并标注「已停止」，什么都没生成则用占位符。"""
+    if final:
+        return final
+    partial = partial.strip()
+    return f"{partial}\n\n（已停止）" if partial else "（本轮已停止）"
 
 
 class _ChatRequest(BaseModel):
@@ -89,6 +98,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
 
         async def gen():
             final = None
+            # 流式文本增量的累积：用户中途停止时用它保留已生成的部分回答
+            partial: list[str] = []
             # 工具调用轨迹（纯 UI 用途），随助手消息落库，切换对话回来后仍可还原
             steps: list[dict] = []
             step_by_id: dict[str, dict] = {}
@@ -125,6 +136,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         final = ev.message.content
                     elif isinstance(ev, RunError):
                         final = final or "（本轮未能完成，请重试）"
+                    elif isinstance(ev, TextDelta):
+                        partial.append(ev.text)
                     elif isinstance(ev, ToolStarted):
                         tc = ev.tool_call
                         st = {"tool": tc.name, "args": tc.arguments}
@@ -149,7 +162,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     pass
                 store.append(req.conversation_id, [
                     Message(role=Role.USER, content=req.message),
-                    Message(role=Role.ASSISTANT, content=final or "（本轮未完成）")],
+                    Message(role=Role.ASSISTANT,
+                            content=_final_content(final, "".join(partial)))],
                     steps=steps or None, progress=progress or None)
 
         return StreamingResponse(gen(), media_type="text/event-stream")

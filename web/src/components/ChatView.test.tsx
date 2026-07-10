@@ -87,4 +87,19 @@ describe("ChatView", () => {
     fireEvent.click(screen.getByText("发送"));
     await waitFor(() => expect(screen.getByText("第一步查资料")).toBeTruthy());
   });
+
+  it("生成中显示「停止」按钮，点击后中断并恢复「发送」", async () => {
+    vi.mocked(streamChat).mockImplementationOnce(
+      (_cid: string, _msg: string, _onEvent: (e: any) => void, signal?: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () =>
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+        }));
+    render(<ChatView conversationId="c1" initial={[]} />);
+    fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "hi" } });
+    fireEvent.click(screen.getByText("发送"));
+    const stopBtn = await screen.findByText("停止");   // 生成中：发送→停止
+    fireEvent.click(stopBtn);
+    await waitFor(() => expect(screen.getByText("发送")).toBeTruthy());  // 中断后恢复
+  });
 });
