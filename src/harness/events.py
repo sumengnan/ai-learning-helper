@@ -60,6 +60,8 @@ class Progress(Event):
     """执行过程中的进度旁路事件：沙箱初始化、子 agent 派发进度等。"""
     scope: str   # "sandbox" | f"subagent:{agent}"
     text: str
+    status: str | None = None   # "running" | "ok" | "error"，子 agent 每步的状态
+    key: str | None = None      # 步骤合并键（工具调用 id）；前端据此把同一步的开始/完成折叠为一行
 
 
 @dataclass

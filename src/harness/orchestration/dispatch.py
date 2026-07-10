@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from ..context.manager import ContextManager
-from ..events import Progress, RunError, RunFinished, ToolStarted
+from ..events import Progress, RunError, RunFinished, ToolFinished, ToolStarted
 from ..loop.agent_loop import AgentLoop
 from ..progress import emit
 from ..tools.base import Tool, ToolRegistry
@@ -68,15 +68,25 @@ class DispatchTool(Tool):
         error = None
         scope = f"subagent:{params.agent}"
         emit(Progress(scope, f"开始任务：{params.task}"))
+        # 记录每个工具调用 id 对应的工具名，以便在 ToolFinished 时回填名称与状态
+        tool_names: dict[str, str] = {}
         async for ev in sub_loop.run(params.task):
             if isinstance(ev, ToolStarted):
-                emit(Progress(scope, f"调用工具 {ev.tool_call.name}"))
+                tool_names[ev.tool_call.id] = ev.tool_call.name
+                # status=running + key=工具调用 id：前端把「开始/完成」折叠成同一行并更新状态
+                emit(Progress(scope, f"调用工具 {ev.tool_call.name}",
+                              status="running", key=ev.tool_call.id))
+            elif isinstance(ev, ToolFinished):
+                r = ev.result
+                name = tool_names.get(r.tool_call_id, "工具")
+                emit(Progress(scope, f"调用工具 {name}",
+                              status="error" if r.is_error else "ok", key=r.tool_call_id))
             elif isinstance(ev, RunFinished):
                 final = ev.message.content
             elif isinstance(ev, RunError):
                 error = ev.error
         if final is None:
-            emit(Progress(scope, f"未产出结果：{error or '未知'}"))
+            emit(Progress(scope, f"未产出结果：{error or '未知'}", status="error"))
             raise RuntimeError(f"子 agent[{params.agent}] 未产出结果：{error or '未知'}")
-        emit(Progress(scope, "任务完成"))
+        emit(Progress(scope, "任务完成", status="ok"))
         return final

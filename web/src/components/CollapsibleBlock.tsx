@@ -8,7 +8,7 @@ import CancelIcon from "@mui/icons-material/Cancel";
 
 // 可折叠的过程块（工具调用 / 沙箱执行 / 子代理执行 统一外观）
 // summary：标题右侧显示的“最后一步进度”预览；给了就用它替代整体状态图标
-export function CollapsibleBlock({ icon, title, status, summary, defaultExpanded = true, children }: {
+export function CollapsibleBlock({ icon, title, status, summary, defaultExpanded = false, children }: {
   icon: ReactNode;
   title: string;
   status: "running" | "ok" | "error";

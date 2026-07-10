@@ -99,7 +99,7 @@ export function ChatView({ conversationId, initial, autoSend }:
         if (s) { s.result = e.data.result.content; s.isError = e.data.result.is_error; }
       });
       else if (e.type === "ModelUsage") upd((a) => { a.usage = { tokens: e.data.usage.total, cost: e.data.cost_usd }; });
-      else if (e.type === "Progress") upd((a) => { (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text }); });
+      else if (e.type === "Progress") upd((a) => { (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text, status: e.data.status, key: e.data.key }); });
       else if (e.type === "RunError") upd((a) => { a.content += `\n[出错] ${e.data.error}`; });
     };
     try {
