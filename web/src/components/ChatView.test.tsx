@@ -102,4 +102,23 @@ describe("ChatView", () => {
     fireEvent.click(stopBtn);
     await waitFor(() => expect(screen.getByText("发送")).toBeTruthy());  // 中断后恢复
   });
+
+  it("交付门：先收到校验进度、后收到终稿 TextDelta → 只渲染终稿、进度可见", async () => {
+    // 模拟服务端交付门顺序：校验中 → 校验通过 → 终稿分片 → 合成 RunFinished
+    vi.mocked(streamChat).mockImplementationOnce(
+      async (_cid: string, _msg: string, onEvent: (e: any) => void) => {
+        onEvent({ type: "Progress", data: { scope: "verify", text: "校验中…", status: "running", key: "k1" } });
+        onEvent({ type: "Progress", data: { scope: "verify", text: "校验通过", status: "ok", key: "k1" } });
+        onEvent({ type: "TextDelta", data: { text: "已核对" } });
+        onEvent({ type: "TextDelta", data: { text: "的答案" } });
+        onEvent({ type: "RunFinished", data: {} });
+      });
+    render(<ChatView conversationId="c1" initial={[]} />);
+    fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "hi" } });
+    fireEvent.click(screen.getByText("发送"));
+    // 只渲染补发的终稿（进度里的"校验中…"不会混进气泡正文）
+    await waitFor(() => expect(screen.getByText("已核对的答案")).toBeTruthy());
+    // 校验块可见（展示工具默认开）
+    expect(screen.getByText("校验")).toBeTruthy();
+  });
 });

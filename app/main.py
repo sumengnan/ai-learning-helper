@@ -32,7 +32,7 @@ _DEFAULT_SECRET = "dev-insecure-secret-change-me"
 
 def create_app(config: AppConfig | None = None, harness=None, store=None, doc_store=None,
                question_store=None, exam_store=None, wrong_store=None,
-               quiz_service=None, user_store=None) -> FastAPI:
+               quiz_service=None, user_store=None, verifier=None) -> FastAPI:
     # exam_store 参数保留仅为向后兼容（模拟考试已迁入聊天工具，不再有独立考试端点）
     config = config or AppConfig()
     harness = harness if harness is not None else build_harness(config)
@@ -71,10 +71,16 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
     app.add_middleware(
         CORSMiddleware, allow_origins=config.cors_origins,
         allow_methods=["*"], allow_headers=["*"], expose_headers=["X-Refresh-Token"])
+    # 回答交付前校验门（开关开时装配；测试可注入 verifier）：用单发 completer 做
+    # grounding/judge，代码块在会话沙箱实跑。
+    if verifier is None and config.enable_answer_gate:
+        from .verify import AnswerVerifier
+        verifier = AnswerVerifier(build_completer(harness.client, config.model), config)
     app.include_router(make_auth_router(auth))
     app.include_router(make_conversations_router(store, harness))
     app.include_router(make_chat_router(harness, store, config,
-                                        question_store=question_store, wrong_store=wrong_store))
+                                        question_store=question_store, wrong_store=wrong_store,
+                                        verifier=verifier))
     app.include_router(make_documents_router(service, doc_store, config))
 
     dstore = getattr(harness, "download_store", None)
