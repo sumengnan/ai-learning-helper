@@ -10,7 +10,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from harness.approval import reset_context, resolve, set_context
-from harness.events import Progress, RunError, RunFinished, ToolFinished, ToolStarted
+from harness.events import (
+    Progress, RunError, RunFinished, TextDelta, ToolFinished, ToolStarted)
 from harness.loop.agent_loop import AgentLoop
 from harness.persistence.serialize import event_to_dict
 from harness.progress import reset_emitter, set_emitter
@@ -23,6 +24,15 @@ from ..context import ConversationContextManager
 from ..sandbox_manager import reset_sandbox_conv, set_sandbox_conv
 from ..tools.exam_tools import SampleQuestionsTool, SaveWrongAnswerTool
 from ..tools.save_download import SaveDownloadTool
+from ..verify import Verdict
+
+# 交付门缓冲后补发终稿时，把文本切成小片以保留打字机效果
+_DELIVER_CHUNK = 40
+
+
+def _chunks(text: str, size: int = _DELIVER_CHUNK):
+    for i in range(0, len(text), size):
+        yield text[i:i + size]
 
 EXAM_GUIDE = (
     "\n\n你具备「模拟考试」能力：\n"
@@ -48,7 +58,8 @@ class _Decision(BaseModel):
     approved: bool
 
 
-def make_chat_router(harness, store, config, question_store=None, wrong_store=None) -> APIRouter:
+def make_chat_router(harness, store, config, question_store=None, wrong_store=None,
+                     verifier=None) -> APIRouter:
     router = APIRouter()
 
     def _build_registry(user_id: str, save_wrong: bool) -> ToolRegistry:
@@ -66,46 +77,45 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 reg.register(SaveWrongAnswerTool(question_store, wrong_store, user_id))
         return reg
 
+    def _sse(ev) -> str:
+        return f"data: {json.dumps(event_to_dict(ev), ensure_ascii=False)}\n\n"
+
     @router.post("/api/chat")
     async def chat(req: _ChatRequest, user_id: str = Depends(current_user)):
         if not store.exists(user_id, req.conversation_id):
             raise HTTPException(status_code=404, detail="对话不存在")
         history = store.messages(req.conversation_id)
-        ctx = ConversationContextManager(harness.system_prompt + EXAM_GUIDE, history)
-        if getattr(harness, "skill_registry", None) is not None:
-            from harness.skills.context import SkillContextManager
-            ctx = SkillContextManager(ctx, harness.skill_registry)
         registry = _build_registry(user_id, req.save_wrong)
-        # 固定本轮 run_id 并登记到会话，使检查点/轨迹可在删除会话时按会话清理。
-        # 提前落库：即使本轮报错，遗留的轨迹也能被后续删除清掉。
-        run_id = uuid4().hex
-        store.add_run(req.conversation_id, run_id)
-        loop = AgentLoop(
-            client=harness.client, registry=registry, context=ctx,
-            max_steps=config.max_steps, run_id_factory=lambda: run_id,
-            budget=BudgetTracker(config.max_tokens_budget, config.max_wall_seconds),
-            checkpoint_store=harness.checkpoint_store, model_name=config.model,
-            price_map=config.price_map, tool_result_max_chars=config.tool_result_max_chars)
+        gate_on = verifier is not None and config.enable_answer_gate
 
-        async def gen():
-            final = None
-            # 工具调用轨迹（纯 UI 用途），随助手消息落库，切换对话回来后仍可还原
-            steps: list[dict] = []
-            step_by_id: dict[str, dict] = {}
-            # 沙箱/子代理执行进度轨迹，同样落库，刷新/切回对话后仍可还原
-            progress: list[dict] = []
-            # 工具执行中的进度事件（沙箱初始化 / 子 agent 派发）经 emitter 并入同一队列
+        def _new_loop(run_id_a: str) -> AgentLoop:
+            ctx = ConversationContextManager(harness.system_prompt + EXAM_GUIDE, history)
+            if getattr(harness, "skill_registry", None) is not None:
+                from harness.skills.context import SkillContextManager
+                ctx = SkillContextManager(ctx, harness.skill_registry)
+            return AgentLoop(
+                client=harness.client, registry=registry, context=ctx,
+                max_steps=config.max_steps, run_id_factory=lambda: run_id_a,
+                budget=BudgetTracker(config.max_tokens_budget, config.max_wall_seconds),
+                checkpoint_store=harness.checkpoint_store, model_name=config.model,
+                price_map=config.price_map, tool_result_max_chars=config.tool_result_max_chars)
+
+        async def _drain(loop_obj, run_id_a, message, passthrough, collect):
+            """跑一次 AgentLoop，逐事件产出 SSE 串；把 final/steps/grounding 收进 collect。
+
+            passthrough=False（交付门）时缓冲不转发终态事件（TextDelta/RunFinished/RunError），
+            仅转发"agent 在干活"的活动事件；终稿由调用方校验后再补发。
+            """
             queue: asyncio.Queue = asyncio.Queue()
             sentinel = object()
+            step_by_id: dict[str, dict] = {}
 
             async def pump():
                 token = set_emitter(queue.put_nowait)
-                # 审批上下文：填入本轮真实 run_id；超时来自配置
-                atoken = set_context(run_id=run_id, timeout=config.sandbox_approval_timeout)
-                # 会话级沙箱上下文：工具执行在此上下文内解析出本会话的容器
+                atoken = set_context(run_id=run_id_a, timeout=config.sandbox_approval_timeout)
                 stoken = set_sandbox_conv(req.conversation_id)
                 try:
-                    async for ev in harness.sink.wrap(loop.run(req.message)):
+                    async for ev in harness.sink.wrap(loop_obj.run(message)):
                         queue.put_nowait(ev)
                 except Exception as e:  # 兜底成 RunError，避免流卡死
                     queue.put_nowait(RunError(error=str(e)))
@@ -122,34 +132,116 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     if ev is sentinel:
                         break
                     if isinstance(ev, RunFinished):
-                        final = ev.message.content
+                        collect["final"] = ev.message.content
                     elif isinstance(ev, RunError):
-                        final = final or "（本轮未能完成，请重试）"
+                        collect["error"] = ev.error
                     elif isinstance(ev, ToolStarted):
                         tc = ev.tool_call
                         st = {"tool": tc.name, "args": tc.arguments}
-                        steps.append(st)
+                        collect["steps"].append(st)
                         step_by_id[tc.id] = st
                     elif isinstance(ev, ToolFinished):
                         st = step_by_id.get(ev.result.tool_call_id)
                         if st is not None:
                             st["result"] = ev.result.content
                             st["is_error"] = ev.result.is_error
+                            if st["tool"] in ("search_memory", "run_python", "run_node", "run_java"):
+                                collect["grounding"].append(
+                                    {"tool": st["tool"], "content": ev.result.content,
+                                     "is_error": ev.result.is_error})
                     elif isinstance(ev, Progress):
-                        progress.append({"scope": ev.scope, "text": ev.text,
-                                         "status": ev.status, "key": ev.key})
-                    yield f"data: {json.dumps(event_to_dict(ev), ensure_ascii=False)}\n\n"
+                        collect["progress"].append({"scope": ev.scope, "text": ev.text,
+                                                    "status": ev.status, "key": ev.key})
+                    # 交付门下缓冲终态事件（不转发）；直通模式转发全部
+                    if passthrough or not isinstance(ev, (TextDelta, RunFinished, RunError)):
+                        yield _sse(ev)
             finally:
-                # 客户端断开（GeneratorExit）或异常时仍落库，避免本轮用户消息丢失
                 if not task.done():
                     task.cancel()
                 try:
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
+
+        async def gen():
+            steps: list[dict] = []       # 工具调用轨迹（落库供 UI 还原）
+            progress: list[dict] = []    # 沙箱/子代理/校验进度（落库）
+            question = req.message
+            delivered = None
+
+            def _emit_verify(text, status=None, key=None):
+                ev = Progress("verify", text, status=status, key=key)
+                progress.append({"scope": ev.scope, "text": ev.text,
+                                 "status": ev.status, "key": ev.key})
+                return _sse(ev)
+
+            try:
+                if not gate_on:
+                    # 直通路径：单次尝试、逐字流式（与开门前行为一致）
+                    collect = {"final": None, "error": None, "steps": steps,
+                               "grounding": [], "progress": progress}
+                    run_id_a = uuid4().hex
+                    store.add_run(req.conversation_id, run_id_a)
+                    async for s in _drain(_new_loop(run_id_a), run_id_a, question, True, collect):
+                        yield s
+                    delivered = collect["final"] or (
+                        "（本轮未能完成，请重试）" if collect["error"] else "（本轮未完成）")
+                    return
+
+                # 交付门：缓冲 → 校验 → 不过则回灌重答，最多 answer_gate_max_retries 次
+                corrective = None
+                max_attempts = config.answer_gate_max_retries + 1
+                for attempt in range(max_attempts):
+                    msg = question if corrective is None else corrective
+                    collect = {"final": None, "error": None, "steps": [],
+                               "grounding": [], "progress": progress}
+                    run_id_a = uuid4().hex
+                    store.add_run(req.conversation_id, run_id_a)
+                    async for s in _drain(_new_loop(run_id_a), run_id_a, msg, False, collect):
+                        yield s
+                    steps.extend(collect["steps"])
+                    draft = (collect["final"] or "").strip()
+
+                    ekey = uuid4().hex
+                    yield _emit_verify("校验中…", status="running", key=ekey)
+                    if not draft:
+                        verdict = Verdict(ok=False, failed=["empty"],
+                                          critique=collect["error"] or "本轮未产出答案",
+                                          summary="未产出答案")
+                    else:
+                        # 校验期的代码执行需要会话沙箱上下文
+                        stoken = set_sandbox_conv(req.conversation_id)
+                        try:
+                            verdict = await verifier.verify(
+                                question, draft, collect["grounding"], registry)
+                        finally:
+                            reset_sandbox_conv(stoken)
+
+                    if verdict.ok:
+                        yield _emit_verify("校验通过", status="ok", key=ekey)
+                        delivered = draft
+                        break
+                    yield _emit_verify(f"未通过（{verdict.summary}）", status="error", key=ekey)
+                    if attempt == max_attempts - 1:      # 用尽次数 → 降级交付
+                        delivered = draft or "（本轮未完成）"
+                        if verdict.summary:
+                            delivered = (f"⚠️ 此回答未通过自动校验（{verdict.summary}），"
+                                         f"请谨慎参考。\n\n" + delivered)
+                        break
+                    yield _emit_verify("重答中…", status="running")
+                    corrective = (f"你上一版回答未通过自动校验。问题：{verdict.critique}。"
+                                  f"请针对性修正后，重新完整回答原问题：{question}")
+
+                # 交付：终稿以 TextDelta 补发（保留打字机）+ 合成 RunFinished
+                delivered = delivered or "（本轮未完成）"
+                for chunk in _chunks(delivered):
+                    yield _sse(TextDelta(text=chunk))
+                yield _sse(RunFinished(message=Message(role=Role.ASSISTANT, content=delivered)))
+            finally:
+                # 客户端断开或异常时仍落库，避免本轮用户消息丢失
                 store.append(req.conversation_id, [
-                    Message(role=Role.USER, content=req.message),
-                    Message(role=Role.ASSISTANT, content=final or "（本轮未完成）")],
+                    Message(role=Role.USER, content=question),
+                    Message(role=Role.ASSISTANT, content=delivered or "（本轮未完成）")],
                     steps=steps or None, progress=progress or None)
 
         return StreamingResponse(gen(), media_type="text/event-stream")

@@ -27,3 +27,11 @@ class AppConfig(HarnessConfig):
     short_pass_score: int = 60
     downloads_dir: str = "downloads"
     download_max_mb: int = 25
+    # 回答交付前校验门（默认关，保持现状直通流式）
+    enable_answer_gate: bool = False
+    answer_gate_max_retries: int = 1        # 校验不过时的自动重答次数（N）；总尝试 = N+1
+    answer_pass_score: int = 70             # LLM 自评打分阈值（低于则不过）
+    gate_check_format: bool = True          # 分项开关：格式/完整性
+    gate_check_grounding: bool = True       # 分项开关：知识库 grounding
+    gate_check_code: bool = True            # 分项开关：代码可运行
+    gate_check_judge: bool = True           # 分项开关：LLM 自评打分

@@ -158,6 +158,7 @@ export function ChatView({ conversationId, initial, autoSend }:
                 const sandbox = m.progress.filter((p) => p.scope === "sandbox");
                 const sub = m.progress.filter((p) => p.scope.startsWith("subagent:"));
                 const skill = m.progress.filter((p) => p.scope === "skill");
+                const verify = m.progress.filter((p) => p.scope === "verify");
                 const live = busy && i === messages.length - 1;
                 const sbLast = sandbox[sandbox.length - 1];
                 const sbLastText = sbLast?.text ?? "";
@@ -169,11 +170,18 @@ export function ChatView({ conversationId, initial, autoSend }:
                 const subStatus: "running" | "ok" | "error" =
                   live && !sub.some((p) => /完成|未产出|失败/.test(p.text)) ? "running"
                     : sub.some((p) => /未产出|失败/.test(p.text)) ? "error" : "ok";
+                // 校验门：最后一步 running 且在跑 → running；出现过通过 → ok；否则若有未通过 → error
+                const vLast = verify[verify.length - 1];
+                const vStatus: "running" | "ok" | "error" =
+                  live && vLast?.status === "running" ? "running"
+                    : verify.some((p) => p.status === "ok") ? "ok"
+                      : verify.some((p) => p.status === "error") ? "error" : "ok";
                 return (
                   <>
                     <ProgressBlock title="技能" kind="skill" items={skill} status="ok" />
                     <ProgressBlock title="沙箱执行" kind="sandbox" items={sandbox} status={sbStatus} />
                     <ProgressBlock title="子代理执行" kind="subagent" items={sub} status={subStatus} />
+                    <ProgressBlock title="校验" kind="verify" items={verify} status={vStatus} />
                   </>
                 );
               })()}

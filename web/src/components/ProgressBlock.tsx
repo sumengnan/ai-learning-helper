@@ -2,6 +2,7 @@ import { Box, Typography, CircularProgress } from "@mui/material";
 import StorageIcon from "@mui/icons-material/Storage";
 import AccountTreeIcon from "@mui/icons-material/AccountTree";
 import ExtensionIcon from "@mui/icons-material/Extension";
+import FactCheckIcon from "@mui/icons-material/FactCheck";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
 import RemoveCircleOutlineIcon from "@mui/icons-material/RemoveCircleOutlined";
@@ -57,7 +58,7 @@ function mergeByKey(items: ProgressItem[]): ProgressItem[] {
 // 把同类进度（沙箱执行 / 子代理执行）整合成一个可折叠块，标题风格与「工具调用」一致
 export function ProgressBlock({ title, kind, items, status }: {
   title: string;
-  kind: "sandbox" | "subagent" | "skill";
+  kind: "sandbox" | "subagent" | "skill" | "verify";
   items: ProgressItem[];
   status: "running" | "ok" | "error";
 }) {
@@ -69,7 +70,9 @@ export function ProgressBlock({ title, kind, items, status }: {
     ? <StorageIcon sx={{ fontSize: 15 }} color="action" />
     : kind === "skill"
       ? <ExtensionIcon sx={{ fontSize: 15 }} color="action" />
-      : <AccountTreeIcon sx={{ fontSize: 15 }} color="action" />;
+      : kind === "verify"
+        ? <FactCheckIcon sx={{ fontSize: 15 }} color="action" />
+        : <AccountTreeIcon sx={{ fontSize: 15 }} color="action" />;
   // 标题右侧显示最后一步进度
   const last = rows[rows.length - 1];
   const summaryText = kind === "subagent" && last.scope.startsWith("subagent:")

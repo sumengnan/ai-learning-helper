@@ -1,0 +1,142 @@
+"""AnswerVerifier 单测——用假 complete / 假 registry，不打网络、不碰 Docker。"""
+import json
+
+import pytest
+
+from app.config import AppConfig
+from app.verify import AnswerVerifier
+from harness.tools.base import ToolError
+
+
+def _cfg(**kw):
+    return AppConfig(api_key="k", app_db_path=":memory:", _env_file=None, **kw)
+
+
+def _fake_complete(mapping):
+    """按 system_prompt 关键字返回预设 JSON 串。"""
+    async def complete(system, user):
+        for key, payload in mapping.items():
+            if key in system:
+                return json.dumps(payload, ensure_ascii=False)
+        return "{}"
+    return complete
+
+
+# grounding 判 grounded=true / judge 高分：默认"全通过"的 complete
+def _pass_complete():
+    return _fake_complete({"事实核查": {"grounded": True, "feedback": ""},
+                           "质检": {"score": 95, "feedback": "好"}})
+
+
+async def test_format_empty_fails():
+    v = AnswerVerifier(_pass_complete(), _cfg())
+    verdict = await v.verify("问", "   ", [], None)
+    assert verdict.ok is False and "format" in verdict.failed
+
+
+async def test_format_unclosed_code_fence_fails():
+    v = AnswerVerifier(_pass_complete(), _cfg())
+    verdict = await v.verify("问", "看代码：\n```python\nprint(1)", [], None)
+    assert verdict.ok is False and "format" in verdict.failed
+
+
+async def test_all_pass_normal_answer():
+    v = AnswerVerifier(_pass_complete(), _cfg(gate_check_code=False))
+    verdict = await v.verify("光合作用是什么", "光合作用是植物把光能转化为化学能的过程。", [], None)
+    assert verdict.ok is True and verdict.failed == []
+
+
+async def test_grounding_fail_when_unsupported():
+    complete = _fake_complete({"事实核查": {"grounded": False, "feedback": "X 无依据"},
+                               "质检": {"score": 95, "feedback": ""}})
+    v = AnswerVerifier(complete, _cfg(gate_check_code=False))
+    grounding = [{"tool": "search_memory", "content": "[1]（来源：a）光合作用相关资料", "is_error": False}]
+    verdict = await v.verify("问", "答案含臆造论断。", grounding, None)
+    assert verdict.ok is False and "grounding" in verdict.failed
+    assert "无依据" in verdict.critique
+
+
+async def test_grounding_skipped_when_no_retrieval():
+    # 本轮没有 search_memory 命中 → grounding 跳过（N/A 视为通过）
+    complete = _fake_complete({"事实核查": {"grounded": False, "feedback": "不该被调用"},
+                               "质检": {"score": 95, "feedback": ""}})
+    v = AnswerVerifier(complete, _cfg(gate_check_code=False))
+    verdict = await v.verify("问", "闲聊回答", [], None)
+    assert verdict.ok is True and "grounding" not in verdict.failed
+
+
+async def test_grounding_skipped_on_no_hit_sentinel():
+    complete = _fake_complete({"事实核查": {"grounded": False, "feedback": "不该被调用"},
+                               "质检": {"score": 95, "feedback": ""}})
+    v = AnswerVerifier(complete, _cfg(gate_check_code=False))
+    grounding = [{"tool": "search_memory", "content": "（未在知识库中检索到相关内容）", "is_error": False}]
+    verdict = await v.verify("问", "答", grounding, None)
+    assert verdict.ok is True
+
+
+async def test_judge_low_score_fails():
+    complete = _fake_complete({"事实核查": {"grounded": True, "feedback": ""},
+                               "质检": {"score": 40, "feedback": "跑题"}})
+    v = AnswerVerifier(complete, _cfg(gate_check_code=False, answer_pass_score=70))
+    verdict = await v.verify("问", "答", [], None)
+    assert verdict.ok is False and "judge" in verdict.failed and "跑题" in verdict.critique
+
+
+class _StubCodeTool:
+    """假代码工具：run 成功或按需抛 ToolError。"""
+    class Params:
+        def __init__(self, code, version=None):
+            self.code = code
+
+    def __init__(self, fail=False):
+        self._fail = fail
+
+    async def run(self, params):
+        if self._fail:
+            raise ToolError("exit_code=1\nstderr:\nSyntaxError")
+        return "exit_code=0\nstdout:\nok"
+
+
+class _StubRegistry:
+    def __init__(self, tools):
+        self._t = tools
+
+    def get(self, name):
+        return self._t.get(name)
+
+
+async def test_code_block_error_fails():
+    v = AnswerVerifier(_pass_complete(), _cfg(gate_check_grounding=False, gate_check_judge=False))
+    reg = _StubRegistry({"run_python": _StubCodeTool(fail=True)})
+    answer = "如下：\n```python\nprint(1+\n```"
+    # 注意：上面围栏未闭合会先被 format 拦掉，这里用闭合的坏代码
+    answer = "如下：\n```python\nprint( SyntaxError here\n```"
+    verdict = await v.verify("写段代码", answer, [], reg)
+    assert verdict.ok is False and "code" in verdict.failed
+    assert "run_python" in verdict.critique
+
+
+async def test_code_block_success_passes():
+    v = AnswerVerifier(_pass_complete(), _cfg(gate_check_grounding=False, gate_check_judge=False))
+    reg = _StubRegistry({"run_python": _StubCodeTool(fail=False)})
+    answer = "如下：\n```python\nprint(1+1)\n```"
+    verdict = await v.verify("写段代码", answer, [], reg)
+    assert verdict.ok is True
+
+
+async def test_code_block_with_ellipsis_skipped():
+    # 含省略占位 → 非自包含 → 跳过执行（即便工具会失败也不判不过）
+    v = AnswerVerifier(_pass_complete(), _cfg(gate_check_grounding=False, gate_check_judge=False))
+    reg = _StubRegistry({"run_python": _StubCodeTool(fail=True)})
+    answer = "示例：\n```python\ndef f():\n    ...\n```"
+    verdict = await v.verify("写段代码", answer, [], reg)
+    assert verdict.ok is True
+
+
+async def test_llm_error_does_not_block_delivery():
+    # judge 调用抛异常 → 该项跳过，不因基础设施抖动拦截交付
+    async def boom(system, user):
+        raise RuntimeError("LLM down")
+    v = AnswerVerifier(boom, _cfg(gate_check_code=False, gate_check_grounding=False))
+    verdict = await v.verify("问", "正常答案", [], None)
+    assert verdict.ok is True
