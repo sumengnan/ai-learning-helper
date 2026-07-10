@@ -35,3 +35,8 @@ class AppConfig(HarnessConfig):
     gate_check_grounding: bool = True       # 分项开关：知识库 grounding
     gate_check_code: bool = True            # 分项开关：代码可运行
     gate_check_judge: bool = True           # 分项开关：LLM 自评打分
+    # 聊天附件：裸字节落盘目录、单文件上限、单会话待发数量上限、可直接喂视觉模型的图片上限
+    attachments_dir: str = "attachments"
+    attachment_max_mb: int = 100
+    attachment_max_count: int = 10
+    attachment_vision_max_mb: int = 5

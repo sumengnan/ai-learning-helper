@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 
 from pydantic import BaseModel, ValidationError
 
-from ..types import ToolCall, ToolResult
+from ..types import ToolCall, ToolOutput, ToolResult
 
 
 class ToolError(Exception):
@@ -17,7 +17,7 @@ class Tool(ABC):
     Params: type[BaseModel]
 
     @abstractmethod
-    async def run(self, params: BaseModel) -> str:
+    async def run(self, params: BaseModel) -> "str | ToolOutput":
         ...
 
     def schema(self) -> dict:
@@ -67,8 +67,13 @@ class ToolExecutor:
         except ValidationError as e:
             return ToolResult(call.id, f"参数校验失败: {e}", is_error=True)
         try:
-            content = await tool.run(params)
-            return ToolResult(call.id, self._truncate(content), is_error=False)
+            raw = await tool.run(params)
+            if isinstance(raw, ToolOutput):
+                text, follow_up = raw.text, raw.follow_up
+            else:
+                text, follow_up = raw, []
+            return ToolResult(call.id, self._truncate(text), is_error=False,
+                              follow_up=follow_up)
         except ToolError as e:  # 工具主动标记失败：内容原样回传
             return ToolResult(call.id, self._truncate(str(e)), is_error=True)
         except Exception as e:  # 工具内部异常兜成 is_error，喂回模型自纠正

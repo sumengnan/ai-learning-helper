@@ -15,7 +15,7 @@ class _Rename(BaseModel):
     title: str
 
 
-def make_conversations_router(store, harness=None) -> APIRouter:
+def make_conversations_router(store, harness=None, attachment_store=None) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/conversations")
@@ -56,6 +56,9 @@ def make_conversations_router(store, harness=None) -> APIRouter:
                     traj.delete(rid)
         # 2) 删会话 + 消息 + conversation_runs
         store.delete(user_id, conv_id)
+        # 2.5) 清理该会话的上传附件（落盘文件 + 元数据行）
+        if attachment_store is not None:
+            attachment_store.delete_conv(conv_id)
         # 3) 销毁该会话的沙箱容器（含其中生成的临时文件）
         mgr = getattr(harness, "sandbox_manager", None) if harness is not None else None
         if mgr is not None:

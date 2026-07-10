@@ -1,4 +1,4 @@
-import type { AgentEvent, Conversation, User } from "../types";
+import type { AgentEvent, Attachment, Conversation, User } from "../types";
 
 const TOKEN_KEY = "auth_token";
 let onUnauthorized: (() => void) | null = null;
@@ -66,11 +66,14 @@ export function drainSSE(buffer: string): { events: AgentEvent[]; rest: string }
 
 export async function streamChat(
   conversationId: string, message: string, onEvent: (e: AgentEvent) => void,
-  signal?: AbortSignal, saveWrong = false,
+  signal?: AbortSignal, saveWrong = false, attachmentIds: string[] = [],
 ): Promise<void> {
   const resp = await authFetch("/api/chat", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ conversation_id: conversationId, message, save_wrong: saveWrong }),
+    body: JSON.stringify({
+      conversation_id: conversationId, message, save_wrong: saveWrong,
+      attachment_ids: attachmentIds,
+    }),
     signal,
   });
   if (!resp.ok || !resp.body) throw new Error(`chat 失败：${resp.status}`);
@@ -110,6 +113,7 @@ export const api = {
     role: string; content: string;
     steps?: { tool: string; args: unknown; result?: string; is_error?: boolean }[] | null;
     progress?: { scope: string; text: string; status?: "running" | "ok" | "error" | null; key?: string | null }[] | null;
+    attachments?: Attachment[] | null;
   }[]> =>
     authFetch(`/api/conversations/${id}/messages`).then((r) => r.json()),
   remove: (id: string): Promise<void> =>
@@ -157,5 +161,23 @@ export const api = {
     list: () => authFetch("/api/downloads").then((r) => r.json()),
     remove: (id: string) =>
       authFetch(`/api/downloads/${id}`, { method: "DELETE" }).then(() => undefined),
+  },
+  attachments: {
+    upload: (convId: string, file: File): Promise<Attachment> => {
+      const fd = new FormData(); fd.append("file", file);
+      return authFetch(`/api/conversations/${convId}/attachments`, { method: "POST", body: fd })
+        .then(async (r) => {
+          if (!r.ok) throw new Error(await detail(r, `上传失败：${r.status}`));
+          return r.json();
+        });
+    },
+    remove: (id: string): Promise<void> =>
+      authFetch(`/api/attachments/${id}`, { method: "DELETE" }).then(() => undefined),
+    // 预览需带 Bearer 头，<img src> 无法携带，故取回鉴权后的 blob 供组件建 object URL
+    blob: (id: string): Promise<Blob> =>
+      authFetch(`/api/attachments/${id}`).then(async (r) => {
+        if (!r.ok) throw new Error(`加载失败：${r.status}`);
+        return r.blob();
+      }),
   },
 };

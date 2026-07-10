@@ -48,6 +48,13 @@ class LocalSandbox:
         with open(real, "w") as f:
             f.write(content)
 
+    async def write_bytes(self, path: str, data: bytes) -> None:
+        await self.start()
+        real = resolve_in_workspace(self.workspace, path)
+        os.makedirs(os.path.dirname(real), exist_ok=True)
+        with open(real, "wb") as f:
+            f.write(data)
+
     async def read_file(self, path: str) -> str:
         await self.start()
         real = resolve_in_workspace(self.workspace, path)

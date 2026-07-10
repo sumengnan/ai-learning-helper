@@ -200,6 +200,9 @@ class SandboxProxy:
     async def write_file(self, path: str, content: str) -> None:
         await (await self._box()).write_file(path, content)
 
+    async def write_bytes(self, path: str, data: bytes) -> None:
+        await (await self._box()).write_bytes(path, data)
+
     async def read_file(self, path: str) -> str:
         return await (await self._box()).read_file(path)
 

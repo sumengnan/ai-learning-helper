@@ -2,22 +2,27 @@ import { useEffect, useRef, useState } from "react";
 import {
   Box, Paper, TextField, Button, Typography, FormControlLabel, Switch,
   Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions,
+  IconButton, Tooltip, Snackbar, Alert,
 } from "@mui/material";
+import AttachFileIcon from "@mui/icons-material/AttachFile";
 import { motion } from "framer-motion";
 import type { ChatMessage } from "../types";
-import { streamChat, sendDecision } from "../api/client";
+import { streamChat, sendDecision, api } from "../api/client";
 import { AgentProgress } from "./AgentProgress";
 import { EmptyHint } from "./EmptyHint";
 import { ProgressBlock } from "./ProgressBlock";
 import { PlanBlock } from "./PlanBlock";
 import { Markdown } from "./Markdown";
 import { RollingNumber } from "./RollingNumber";
+import { AttachmentChips, type AttachmentItem } from "./Attachments";
 import { bubbleVariants } from "./motion";
 
 const MotionBox = motion(Box);
 
 const SHOW_TOOLS_KEY = "chat_show_tools";
 const SAVE_WRONG_KEY = "chat_save_wrong";
+const MAX_ATTACHMENTS = 10;
+const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;  // 100MB
 const readBool = (k: string, dflt: boolean) => {
   const v = localStorage.getItem(k);
   return v === null ? dflt : v === "1";
@@ -56,6 +61,62 @@ export function ChatView({ conversationId, initial, autoSend }:
   const stickRef = useRef(true);
   const saveWrongRef = useRef(saveWrong);
   saveWrongRef.current = saveWrong;
+  // 待发附件（发送前可增删）；含本地 File 供即时预览、上传状态。
+  const [pending, setPending] = useState<AttachmentItem[]>([]);
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const patchPending = (tmpId: string, patch: Partial<AttachmentItem> | null) =>
+    setPending((ps) => patch === null
+      ? ps.filter((p) => p.id !== tmpId)
+      : ps.map((p) => (p.id === tmpId ? { ...p, ...patch } : p)));
+
+  async function addFiles(files: FileList | File[]) {
+    const list = Array.from(files);
+    if (list.length === 0) return;
+    for (const file of list) {
+      if (pendingRef.current.length >= MAX_ATTACHMENTS) {
+        setErr(`最多上传 ${MAX_ATTACHMENTS} 个附件`); break;
+      }
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        setErr(`「${file.name}」超过 100MB，未添加`); continue;
+      }
+      const tmpId = crypto.randomUUID();
+      const item: AttachmentItem = {
+        id: tmpId, filename: file.name, size: file.size,
+        content_type: file.type || "application/octet-stream", file, status: "uploading",
+      };
+      setPending((ps) => [...ps, item]);
+      try {
+        const meta = await api.attachments.upload(conversationId, file);
+        // 用服务端返回的真实 id 替换临时 id，保留本地 File 供预览
+        patchPending(tmpId, { id: meta.id, size: meta.size,
+          content_type: meta.content_type, status: undefined });
+      } catch (e: any) {
+        patchPending(tmpId, { status: "error", error: String(e?.message ?? e) });
+        setErr(`「${file.name}」上传失败`);
+      }
+    }
+  }
+
+  async function removePending(item: AttachmentItem) {
+    setPending((ps) => ps.filter((p) => p.id !== item.id));
+    if (item.status !== "error" && item.status !== "uploading") {
+      try { await api.attachments.remove(item.id); } catch { /* 已发送前删除，失败可忽略 */ }
+    }
+  }
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault(); setDragOver(false);
+    if (e.dataTransfer.files?.length) void addFiles(e.dataTransfer.files);
+  };
+  const onPaste = (e: React.ClipboardEvent) => {
+    const files = e.clipboardData?.files;
+    if (files && files.length > 0) { e.preventDefault(); void addFiles(files); }
+  };
 
   const toggleShowTools = (v: boolean) => {
     setShowTools(v); localStorage.setItem(SHOW_TOOLS_KEY, v ? "1" : "0");
@@ -90,11 +151,19 @@ export function ChatView({ conversationId, initial, autoSend }:
 
   async function send(text?: string) {
     const msg = (text ?? input).trim();
-    if (!msg || busyRef.current) return;
-    const userMsg: ChatMessage = { role: "user", content: msg };
+    // 仅取上传成功的附件（排除上传中/失败）
+    const ready = pendingRef.current.filter((p) => !p.status);
+    if ((!msg && ready.length === 0) || busyRef.current) return;
+    if (pendingRef.current.some((p) => p.status === "uploading")) {
+      setErr("附件仍在上传中，请稍候"); return;
+    }
+    const attachments = ready.map((p) => ({
+      id: p.id, filename: p.filename, size: p.size, content_type: p.content_type }));
+    const userMsg: ChatMessage = { role: "user", content: msg,
+      attachments: attachments.length ? attachments : undefined };
     const assistant: ChatMessage = { role: "assistant", content: "", steps: [] };
     setMessages((m) => [...m, userMsg, assistant]);
-    setInput(""); setBusy(true); busyRef.current = true;
+    setInput(""); setPending([]); setBusy(true); busyRef.current = true;
     const controller = new AbortController();
     abortRef.current = controller;
     const onEvent = (e: any) => {
@@ -112,7 +181,8 @@ export function ChatView({ conversationId, initial, autoSend }:
       else if (e.type === "RunError") upd((a) => { a.content += `\n[出错] ${e.data.error}`; });
     };
     try {
-      await streamChat(conversationId, msg, onEvent, controller.signal, saveWrongRef.current);
+      await streamChat(conversationId, msg, onEvent, controller.signal, saveWrongRef.current,
+        attachments.map((a) => a.id));
     } catch (err: any) {
       if (err?.name !== "AbortError") upd((a) => { a.content += `\n[连接失败] ${err}`; });
     } finally { setBusy(false); busyRef.current = false; }
@@ -155,6 +225,11 @@ export function ChatView({ conversationId, initial, autoSend }:
                 color: m.role === "user" ? "primary.contrastText" : "text.primary",
               }}
             >
+              {m.role === "user" && m.attachments && m.attachments.length > 0 && (
+                <Box sx={{ mb: m.content ? 1 : 0 }}>
+                  <AttachmentChips items={m.attachments} />
+                </Box>
+              )}
               {m.role === "assistant" && m.progress && (() => {
                 const planItems = m.progress.filter((p) => p.scope === "plan");
                 const plan = planItems[planItems.length - 1];
@@ -233,24 +308,56 @@ export function ChatView({ conversationId, initial, autoSend }:
           label={<Typography variant="caption">考试答错自动保存错题集</Typography>}
         />
       </Box>
-      <Box sx={{ px: 1.5, pb: 1.5, pt: 0.5, display: "flex", gap: 1, alignItems: "flex-end" }}>
-        <TextField
-          fullWidth size="small" value={input}
-          multiline minRows={1} maxRows={6}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
-          }}
-          placeholder="问点什么…"
-        />
-        {busy ? (
-          <Button variant="outlined" color="error" onClick={stop}
-            sx={{ flexShrink: 0, mb: 0.25 }}>停止</Button>
-        ) : (
-          <Button variant="contained" onClick={() => send()}
-            sx={{ flexShrink: 0, mb: 0.25 }}>发送</Button>
+      <Box
+        onDragOver={(e) => { e.preventDefault(); if (!dragOver) setDragOver(true); }}
+        onDragLeave={(e) => { e.preventDefault(); setDragOver(false); }}
+        onDrop={onDrop}
+        sx={{
+          px: 1.5, pb: 1.5, pt: 0.5,
+          ...(dragOver && { outline: 2, outlineStyle: "dashed", outlineColor: "primary.main",
+            outlineOffset: -4, borderRadius: 1, bgcolor: "action.hover" }),
+        }}
+      >
+        {pending.length > 0 && (
+          <Box sx={{ pb: 1 }}>
+            <AttachmentChips items={pending} onDelete={removePending} />
+          </Box>
         )}
+        <Box sx={{ display: "flex", gap: 1, alignItems: "flex-end" }}>
+          <input ref={fileRef} hidden type="file" multiple
+            onChange={(e) => { if (e.target.files) void addFiles(e.target.files); e.target.value = ""; }} />
+          <Tooltip title="上传文件（也可拖拽/粘贴）">
+            <span>
+              <IconButton aria-label="上传文件" onClick={() => fileRef.current?.click()}
+                disabled={pending.length >= MAX_ATTACHMENTS} sx={{ mb: 0.25 }}>
+                <AttachFileIcon />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <TextField
+            fullWidth size="small" value={input}
+            multiline minRows={1} maxRows={6}
+            onChange={(e) => setInput(e.target.value)}
+            onPaste={onPaste}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+            }}
+            placeholder="问点什么…"
+          />
+          {busy ? (
+            <Button variant="outlined" color="error" onClick={stop}
+              sx={{ flexShrink: 0, mb: 0.25 }}>停止</Button>
+          ) : (
+            <Button variant="contained" onClick={() => send()}
+              sx={{ flexShrink: 0, mb: 0.25 }}>发送</Button>
+          )}
+        </Box>
       </Box>
+
+      <Snackbar open={err !== null} autoHideDuration={4000} onClose={() => setErr(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}>
+        <Alert severity="warning" variant="filled" onClose={() => setErr(null)}>{err}</Alert>
+      </Snackbar>
 
       {/* 危险命令人工确认：不设 onClose，backdrop/Esc 不关闭，须显式选择（走后端超时兜底） */}
       <Dialog open={approval !== null}

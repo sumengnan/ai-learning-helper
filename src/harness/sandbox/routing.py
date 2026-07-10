@@ -58,6 +58,9 @@ class RoutingSandbox:
     async def write_file(self, path: str, content: str) -> None:
         await self._boxes[self._default].write_file(path, content)
 
+    async def write_bytes(self, path: str, data: bytes) -> None:
+        await self._boxes[self._default].write_bytes(path, data)
+
     async def read_file(self, path: str) -> str:
         return await self._boxes[self._default].read_file(path)
 

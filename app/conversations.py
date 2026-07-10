@@ -59,10 +59,12 @@ class ConversationStore:
 
     def append(self, conv_id: str, msgs: list[Message],
                steps: list[dict] | None = None,
-               progress: list[dict] | None = None) -> None:
+               progress: list[dict] | None = None,
+               attachments: list[dict] | None = None) -> None:
         """追加消息。steps 为纯 UI 用途的工具调用轨迹（tool/args/result/is_error），
         progress 为沙箱/子代理执行的进度轨迹（scope/text/status/key）；两者都挂在本批
-        最后一条（助手）消息上，不参与 messages() 返回的 LLM 历史。"""
+        最后一条（助手）消息上。attachments（id/filename/size/content_type）为本轮用户
+        上传的附件，挂在本批第一条（用户）消息上。三者都不参与 messages() 的 LLM 历史。"""
         seq = self._conn.execute(
             "SELECT COALESCE(MAX(seq), -1) + 1 FROM conversation_messages WHERE conv_id = ?",
             (conv_id,)).fetchone()[0]
@@ -73,24 +75,29 @@ class ConversationStore:
                           if steps and i == last else None)
             progress_json = (json.dumps(progress, ensure_ascii=False)
                              if progress and i == last else None)
+            attachments_json = (json.dumps(attachments, ensure_ascii=False)
+                                if attachments and i == 0 else None)
             self._conn.execute(
                 "INSERT INTO conversation_messages(conv_id, seq, role, content, tool_calls, "
-                "tool_call_id, steps, progress, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "tool_call_id, steps, progress, attachments, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (conv_id, seq, d["role"], d["content"],
                  json.dumps(d["tool_calls"], ensure_ascii=False) if d["tool_calls"] else None,
-                 d["tool_call_id"], steps_json, progress_json, _now()))
+                 d["tool_call_id"], steps_json, progress_json, attachments_json, _now()))
             seq += 1
         self._conn.commit()
 
     def ui_messages(self, conv_id: str) -> list[dict]:
-        """供前端渲染：role + content + steps（工具调用轨迹）+ progress（沙箱/子代理进度）。"""
+        """供前端渲染：role + content + steps（工具调用轨迹）+ progress（沙箱/子代理进度）
+        + attachments（用户上传附件元数据）。"""
         rows = self._conn.execute(
-            "SELECT role, content, steps, progress FROM conversation_messages "
+            "SELECT role, content, steps, progress, attachments FROM conversation_messages "
             "WHERE conv_id = ? ORDER BY seq", (conv_id,)).fetchall()
         return [{"role": role, "content": content,
                  "steps": json.loads(steps) if steps else None,
-                 "progress": json.loads(progress) if progress else None}
-                for role, content, steps, progress in rows]
+                 "progress": json.loads(progress) if progress else None,
+                 "attachments": json.loads(attachments) if attachments else None}
+                for role, content, steps, progress, attachments in rows]
 
     def rename(self, user_id: str, conv_id: str, title: str) -> bool:
         cur = self._conn.execute(

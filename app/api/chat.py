@@ -22,6 +22,7 @@ from harness.types import Message, Role
 from ..auth import current_user
 from ..context import ConversationContextManager
 from ..sandbox_manager import reset_sandbox_conv, set_sandbox_conv
+from ..tools.attachment_tools import ListAttachmentsTool, ReadAttachmentTool
 from ..tools.exam_tools import SampleQuestionsTool, SaveWrongAnswerTool
 from ..tools.save_download import SaveDownloadTool
 from ..verify import Verdict
@@ -46,11 +47,19 @@ EXAM_GUIDE = (
     "（传 question_id 与用户作答 user_answer）；若该工具不可用，说明「答错自动保存错题集」"
     "未开启，不要尝试保存。\n")
 
+ATTACHMENT_GUIDE = (
+    "\n\n用户可能在消息中上传附件（文件内容默认不在上下文里，需要时再取）：\n"
+    "- 用 list_attachments 查看本对话的附件清单（id/文件名/类型）。\n"
+    "- 用 read_attachment(attachment_id) 读取具体内容：txt/pdf/word 返回文本，图片作为视觉加载。\n"
+    "- 所有附件也已放入沙箱 /workspace/uploads/，可用 run_python/run_shell 直接读取或执行。\n"
+    "- 只在确有需要时才读取附件，不要无谓地逐个打开。\n")
+
 
 class _ChatRequest(BaseModel):
     conversation_id: str
     message: str
     save_wrong: bool = False        # 「考试答错自动保存错题集」开关（默认关）
+    attachment_ids: list[str] = []  # 本轮随消息发送的附件（已先经上传接口拿到 id）
 
 
 class _Decision(BaseModel):
@@ -59,10 +68,11 @@ class _Decision(BaseModel):
 
 
 def make_chat_router(harness, store, config, question_store=None, wrong_store=None,
-                     verifier=None) -> APIRouter:
+                     verifier=None, attachment_store=None) -> APIRouter:
     router = APIRouter()
 
-    def _build_registry(user_id: str, save_wrong: bool) -> ToolRegistry:
+    def _build_registry(user_id: str, save_wrong: bool, conv_id: str,
+                        has_attachments: bool) -> ToolRegistry:
         reg = ToolRegistry()
         for t in harness.registry.tools():
             reg.register(t)
@@ -75,6 +85,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             reg.register(SampleQuestionsTool(question_store, user_id))
             if save_wrong and wrong_store is not None:
                 reg.register(SaveWrongAnswerTool(question_store, wrong_store, user_id))
+        # 附件工具：本会话有过附件才暴露（按需取内容，图片走视觉）
+        if attachment_store is not None and has_attachments:
+            reg.register(ListAttachmentsTool(attachment_store, user_id, conv_id))
+            reg.register(ReadAttachmentTool(
+                attachment_store, user_id, conv_id,
+                config.attachment_vision_max_mb * 1024 * 1024))
         return reg
 
     def _sse(ev) -> str:
@@ -84,12 +100,35 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
     async def chat(req: _ChatRequest, user_id: str = Depends(current_user)):
         if not store.exists(user_id, req.conversation_id):
             raise HTTPException(status_code=404, detail="对话不存在")
+        # 本轮随消息发送的附件：校验归属并取元数据
+        attachment_metas: list[dict] = []
+        if req.attachment_ids and attachment_store is not None:
+            for aid in req.attachment_ids:
+                rec = attachment_store.get(user_id, aid)
+                if rec is None:
+                    raise HTTPException(status_code=404, detail=f"附件不存在：{aid}")
+                attachment_metas.append(
+                    {k: rec[k] for k in ("id", "filename", "size", "content_type")})
+        # 会话是否曾有附件（决定是否暴露附件工具）：本轮有，或历史有
+        has_attachments = bool(attachment_metas) or (
+            attachment_store is not None
+            and attachment_store.count_conv(user_id, req.conversation_id) > 0)
         history = store.messages(req.conversation_id)
-        registry = _build_registry(user_id, req.save_wrong)
+        registry = _build_registry(user_id, req.save_wrong, req.conversation_id,
+                                   has_attachments)
         gate_on = verifier is not None and config.enable_answer_gate
+        # 喂给模型的消息：带附件时追加只含文件名的名单提示（不含内容），入库仍用原文
+        model_message = req.message
+        if attachment_metas:
+            names = "、".join(m["filename"] for m in attachment_metas)
+            model_message = (
+                f"{req.message}\n\n[本轮附件] 用户上传了 {len(attachment_metas)} 个文件："
+                f"{names}（内容未加载，需要时用 list_attachments/read_attachment 获取，"
+                f"或在沙箱 /workspace/uploads/ 下访问）")
 
         def _new_loop(run_id_a: str) -> AgentLoop:
-            ctx = ConversationContextManager(harness.system_prompt + EXAM_GUIDE, history)
+            ctx = ConversationContextManager(
+                harness.system_prompt + EXAM_GUIDE + ATTACHMENT_GUIDE, history)
             if getattr(harness, "skill_registry", None) is not None:
                 from harness.skills.context import SkillContextManager
                 ctx = SkillContextManager(ctx, harness.skill_registry)
@@ -115,6 +154,18 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 atoken = set_context(run_id=run_id_a, timeout=config.sandbox_approval_timeout)
                 stoken = set_sandbox_conv(req.conversation_id)
                 try:
+                    # 本轮附件播种进会话沙箱 /workspace/uploads/，供模型直接执行（写盘≠给模型）
+                    if attachment_metas and harness.sandbox is not None:
+                        for meta in attachment_metas:
+                            try:
+                                data = attachment_store.bytes(meta["id"])
+                                await harness.sandbox.write_bytes(
+                                    f"uploads/{meta['filename']}", data)
+                            except Exception as e:  # 播种失败不应打断本轮对话
+                                queue.put_nowait(Progress(
+                                    scope="sandbox",
+                                    text=f"附件 {meta['filename']} 载入沙箱失败：{e}",
+                                    status="error"))
                     async for ev in harness.sink.wrap(loop_obj.run(message)):
                         queue.put_nowait(ev)
                 except Exception as e:  # 兜底成 RunError，避免流卡死
@@ -182,7 +233,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                "grounding": [], "progress": progress}
                     run_id_a = uuid4().hex
                     store.add_run(req.conversation_id, run_id_a)
-                    async for s in _drain(_new_loop(run_id_a), run_id_a, question, True, collect):
+                    async for s in _drain(_new_loop(run_id_a), run_id_a, model_message, True, collect):
                         yield s
                     delivered = collect["final"] or (
                         "（本轮未能完成，请重试）" if collect["error"] else "（本轮未完成）")
@@ -192,7 +243,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 corrective = None
                 max_attempts = config.answer_gate_max_retries + 1
                 for attempt in range(max_attempts):
-                    msg = question if corrective is None else corrective
+                    msg = model_message if corrective is None else corrective
                     collect = {"final": None, "error": None, "steps": [],
                                "grounding": [], "progress": progress}
                     run_id_a = uuid4().hex
@@ -240,9 +291,10 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             finally:
                 # 客户端断开或异常时仍落库，避免本轮用户消息丢失
                 store.append(req.conversation_id, [
-                    Message(role=Role.USER, content=question),
+                    Message(role=Role.USER, content=req.message),
                     Message(role=Role.ASSISTANT, content=delivered or "（本轮未完成）")],
-                    steps=steps or None, progress=progress or None)
+                    steps=steps or None, progress=progress or None,
+                    attachments=attachment_metas or None)
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 

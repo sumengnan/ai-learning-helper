@@ -133,6 +133,21 @@ class DockerSandbox:
         await asyncio.to_thread(
             self._container.put_archive, os.path.dirname(real), stream.getvalue())
 
+    async def write_bytes(self, path: str, data: bytes) -> None:
+        """写裸字节到工作区（支持子目录，如 uploads/foo.png——tar 成员用相对路径，
+        解到工作区根即自动建子目录，无需目标目录预先存在）。"""
+        await self.start()
+        real = resolve_in_workspace(self.workspace, path)
+        workspace_real = os.path.realpath(self.workspace)
+        member = os.path.relpath(real, workspace_real)
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode="w") as tar:
+            info = tarfile.TarInfo(name=member)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+        await asyncio.to_thread(
+            self._container.put_archive, workspace_real, stream.getvalue())
+
     async def read_file(self, path: str) -> str:
         await self.start()
         real = resolve_in_workspace(self.workspace, path)

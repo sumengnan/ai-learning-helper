@@ -26,6 +26,10 @@ _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS downloads(
          id TEXT PRIMARY KEY, user_id TEXT, filename TEXT, size INTEGER,
          content_type TEXT, created_at TEXT, seq INTEGER)""",
+    # 聊天附件：裸字节落盘、元数据入库；conv_id 归属会话，发送后经消息 attachments 列关联
+    """CREATE TABLE IF NOT EXISTS attachments(
+         id TEXT PRIMARY KEY, user_id TEXT, conv_id TEXT, filename TEXT,
+         size INTEGER, content_type TEXT, created_at TEXT)""",
     # 会话↔Agent 运行映射：删除会话时据此清理 persistence 库里的检查点/轨迹
     """CREATE TABLE IF NOT EXISTS conversation_runs(
          conv_id TEXT, run_id TEXT, created_at TEXT,
@@ -35,7 +39,7 @@ _SCHEMA = (
 # 历史库若建于某列引入之前，需在此补齐（CREATE TABLE IF NOT EXISTS 不改既有表结构）
 _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
     "conversations": {"user_id": "TEXT"},
-    "conversation_messages": {"steps": "TEXT", "progress": "TEXT"},
+    "conversation_messages": {"steps": "TEXT", "progress": "TEXT", "attachments": "TEXT"},
     "documents": {"user_id": "TEXT"},
     "questions": {"user_id": "TEXT"},
     "wrong_answers": {"user_id": "TEXT"},
