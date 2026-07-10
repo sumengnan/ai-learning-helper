@@ -98,6 +98,7 @@ export const api = {
   messages: (id: string): Promise<{
     role: string; content: string;
     steps?: { tool: string; args: unknown; result?: string; is_error?: boolean }[] | null;
+    progress?: { scope: string; text: string; status?: "running" | "ok" | "error" | null; key?: string | null }[] | null;
   }[]> =>
     authFetch(`/api/conversations/${id}/messages`).then((r) => r.json()),
   remove: (id: string): Promise<void> =>

@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from harness.events import RunError, RunFinished, ToolFinished, ToolStarted
+from harness.events import Progress, RunError, RunFinished, ToolFinished, ToolStarted
 from harness.loop.agent_loop import AgentLoop
 from harness.persistence.serialize import event_to_dict
 from harness.progress import reset_emitter, set_emitter
@@ -80,6 +80,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             # 工具调用轨迹（纯 UI 用途），随助手消息落库，切换对话回来后仍可还原
             steps: list[dict] = []
             step_by_id: dict[str, dict] = {}
+            # 沙箱/子代理执行进度轨迹，同样落库，刷新/切回对话后仍可还原
+            progress: list[dict] = []
             # 工具执行中的进度事件（沙箱初始化 / 子 agent 派发）经 emitter 并入同一队列
             queue: asyncio.Queue = asyncio.Queue()
             sentinel = object()
@@ -115,6 +117,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         if st is not None:
                             st["result"] = ev.result.content
                             st["is_error"] = ev.result.is_error
+                    elif isinstance(ev, Progress):
+                        progress.append({"scope": ev.scope, "text": ev.text,
+                                         "status": ev.status, "key": ev.key})
                     yield f"data: {json.dumps(event_to_dict(ev), ensure_ascii=False)}\n\n"
             finally:
                 # 客户端断开（GeneratorExit）或异常时仍落库，避免本轮用户消息丢失
@@ -127,7 +132,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 store.append(req.conversation_id, [
                     Message(role=Role.USER, content=req.message),
                     Message(role=Role.ASSISTANT, content=final or "（本轮未完成）")],
-                    steps=steps or None)
+                    steps=steps or None, progress=progress or None)
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 

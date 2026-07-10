@@ -38,6 +38,7 @@ export function ChatPage() {
       steps: m.steps
         ? m.steps.map((s) => ({ tool: s.tool, args: s.args, result: s.result, isError: s.is_error }))
         : undefined,
+      progress: m.progress ?? undefined,
     })));
     setActiveId(id);
   }
