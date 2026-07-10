@@ -1,5 +1,6 @@
 // web/src/App.tsx
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
+import { AnimatePresence, motion } from "framer-motion";
 import { AuthProvider } from "./auth/AuthProvider";
 import { RequireAuth } from "./auth/RequireAuth";
 import { AppShell } from "./components/AppShell";
@@ -10,17 +11,30 @@ import { KnowledgeView } from "./pages/KnowledgeView";
 import QuestionBankView from "./pages/QuestionBankView";
 import WrongAnswersView from "./pages/WrongAnswersView";
 import DownloadsView from "./pages/DownloadsView";
+import { pageVariants } from "./components/motion";
 
 function ShellRoutes() {
+  const location = useLocation();
   return (
     <AppShell>
-      <Routes>
-        <Route path="/" element={<ChatPage />} />
-        <Route path="/knowledge" element={<KnowledgeView />} />
-        <Route path="/questions" element={<QuestionBankView />} />
-        <Route path="/wrong" element={<WrongAnswersView />} />
-        <Route path="/downloads" element={<DownloadsView />} />
-      </Routes>
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={location.pathname}
+          variants={pageVariants}
+          initial="initial"
+          animate="animate"
+          exit="exit"
+          style={{ height: "100%" }}
+        >
+          <Routes location={location}>
+            <Route path="/" element={<ChatPage />} />
+            <Route path="/knowledge" element={<KnowledgeView />} />
+            <Route path="/questions" element={<QuestionBankView />} />
+            <Route path="/wrong" element={<WrongAnswersView />} />
+            <Route path="/downloads" element={<DownloadsView />} />
+          </Routes>
+        </motion.div>
+      </AnimatePresence>
     </AppShell>
   );
 }

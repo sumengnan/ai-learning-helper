@@ -4,7 +4,10 @@ import { Link as RouterLink, useNavigate } from "react-router-dom";
 import {
   Box, Paper, TextField, Button, Typography, Alert, Link, Stack,
 } from "@mui/material";
+import { motion } from "framer-motion";
 import { useAuth } from "../auth/AuthProvider";
+
+const MotionPaper = motion(Paper);
 
 export function LoginPage() {
   const { login } = useAuth();
@@ -60,11 +63,17 @@ export function AuthLayout({ title, subtitle, children }:
       minHeight: "100vh", display: "flex", alignItems: "center",
       justifyContent: "center", bgcolor: "background.default", p: 2,
     }}>
-      <Paper elevation={3} sx={{ p: 4, width: "100%", maxWidth: 380, borderRadius: 3 }}>
+      <MotionPaper
+        elevation={3}
+        initial={{ opacity: 0, y: 16, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
+        sx={{ p: 4, width: "100%", maxWidth: 380, borderRadius: 3 }}
+      >
         <Typography variant="h5" sx={{ fontWeight: 700, mb: 0.5 }}>{title}</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>{subtitle}</Typography>
         {children}
-      </Paper>
+      </MotionPaper>
     </Box>
   );
 }

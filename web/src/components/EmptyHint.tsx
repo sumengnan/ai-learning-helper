@@ -1,4 +1,7 @@
 import { Box, Paper, Typography } from "@mui/material";
+import { motion } from "framer-motion";
+
+const MotionPaper = motion(Paper);
 
 export const SUGGESTIONS = [
   "查询最新的 AI 资讯，保存到知识库",
@@ -21,17 +24,22 @@ export function EmptyHint({ onAsk }: { onAsk: (q: string) => void }) {
         display: "flex", flexWrap: "wrap", gap: 1.5,
         justifyContent: "center", maxWidth: 640,
       }}>
-        {SUGGESTIONS.map((s) => (
-          <Paper
+        {SUGGESTIONS.map((s, i) => (
+          <MotionPaper
             key={s} variant="outlined"
             onClick={() => onAsk(s)}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.28, delay: i * 0.06, ease: [0.22, 1, 0.36, 1] }}
+            whileHover={{ y: -4 }}
+            whileTap={{ scale: 0.98 }}
             sx={{
               px: 2, py: 1.5, borderRadius: 2, cursor: "pointer", maxWidth: 300,
               "&:hover": { borderColor: "primary.main", bgcolor: "action.hover" },
             }}
           >
             <Typography variant="body2">{s}</Typography>
-          </Paper>
+          </MotionPaper>
         ))}
       </Box>
     </Box>

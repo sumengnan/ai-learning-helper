@@ -2,12 +2,17 @@ import { useEffect, useRef, useState } from "react";
 import {
   Box, Paper, TextField, Button, Typography, FormControlLabel, Switch,
 } from "@mui/material";
+import { motion } from "framer-motion";
 import type { ChatMessage } from "../types";
 import { streamChat } from "../api/client";
 import { AgentProgress } from "./AgentProgress";
 import { EmptyHint } from "./EmptyHint";
 import { ProgressBlock } from "./ProgressBlock";
 import { Markdown } from "./Markdown";
+import { RollingNumber } from "./RollingNumber";
+import { bubbleVariants } from "./motion";
+
+const MotionBox = motion(Box);
 
 const SHOW_TOOLS_KEY = "chat_show_tools";
 const SAVE_WRONG_KEY = "chat_save_wrong";
@@ -16,23 +21,18 @@ const readBool = (k: string, dflt: boolean) => {
   return v === null ? dflt : v === "1";
 };
 
-// 等待 AI 回复时的“正在输入”三点动画
+// 等待 AI 回复时的“正在输入”三点动画（framer-motion 循环，风格与全站统一）
 function TypingDots() {
-  const dot = {
-    width: 6, height: 6, borderRadius: "50%", bgcolor: "text.secondary",
-    animation: "chat-typing 1.2s infinite ease-in-out",
-  };
   return (
-    <Box sx={{
-      display: "flex", gap: 0.6, alignItems: "center", py: 0.75,
-      "@keyframes chat-typing": {
-        "0%, 80%, 100%": { transform: "scale(0.6)", opacity: 0.3 },
-        "40%": { transform: "scale(1)", opacity: 1 },
-      },
-    }}>
-      <Box sx={dot} />
-      <Box sx={{ ...dot, animationDelay: "0.15s" }} />
-      <Box sx={{ ...dot, animationDelay: "0.3s" }} />
+    <Box sx={{ display: "flex", gap: 0.6, alignItems: "center", py: 0.75 }}>
+      {[0, 1, 2].map((i) => (
+        <MotionBox
+          key={i}
+          sx={{ width: 6, height: 6, borderRadius: "50%", bgcolor: "text.secondary" }}
+          animate={{ scale: [0.6, 1, 0.6], opacity: [0.3, 1, 0.3] }}
+          transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut", delay: i * 0.15 }}
+        />
+      ))}
     </Box>
   );
 }
@@ -121,7 +121,8 @@ export function ChatView({ conversationId, initial, autoSend }:
         sx={{ flex: 1, overflowY: "auto", p: 2, display: "flex", flexDirection: "column", gap: 2 }}>
         {messages.length === 0 && <EmptyHint onAsk={(q) => send(q)} />}
         {messages.map((m, i) => (
-          <Box key={i} sx={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
+          <MotionBox key={i} variants={bubbleVariants} initial="initial" animate="animate"
+            sx={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
             <Paper
               elevation={0}
               sx={{
@@ -167,12 +168,14 @@ export function ChatView({ conversationId, initial, autoSend }:
                 </Typography>
               )}
               {showTools && m.usage && (
-                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
-                  tokens {m.usage.tokens}{m.usage.cost != null ? ` · $${m.usage.cost.toFixed(4)}` : ""}
+                <Typography variant="caption" color="text.secondary"
+                  sx={{ display: "flex", alignItems: "center", gap: 0.5, mt: 0.5 }}>
+                  tokens <RollingNumber value={m.usage.tokens} />
+                  {m.usage.cost != null ? ` · $${m.usage.cost.toFixed(4)}` : ""}
                 </Typography>
               )}
             </Paper>
-          </Box>
+          </MotionBox>
         ))}
       </Box>
       <Box sx={{ px: 1.5, pt: 1, borderTop: 1, borderColor: "divider",

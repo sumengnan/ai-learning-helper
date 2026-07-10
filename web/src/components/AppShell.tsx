@@ -7,6 +7,7 @@ import {
   Button, Menu, MenuItem, Avatar,
 } from "@mui/material";
 import type { Theme } from "@mui/material/styles";
+import { AnimatePresence, motion } from "framer-motion";
 import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutlined";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
 import QuizIcon from "@mui/icons-material/Quiz";
@@ -74,11 +75,21 @@ export function AppShell({ children }: { children: ReactNode }) {
         <Toolbar sx={{ px: 2, overflow: "hidden", gap: 1,
           justifyContent: navOpen ? "flex-start" : "center" }}>
           <SmartToyIcon sx={{ color: "primary.main", fontSize: 28, flexShrink: 0 }} />
-          {navOpen && (
-            <Typography variant="h6" noWrap sx={{ fontWeight: 700 }}>
-              AI 学习助手
-            </Typography>
-          )}
+          <AnimatePresence initial={false}>
+            {navOpen && (
+              <motion.div
+                initial={{ opacity: 0, width: 0 }}
+                animate={{ opacity: 1, width: "auto" }}
+                exit={{ opacity: 0, width: 0 }}
+                transition={{ duration: 0.2 }}
+                style={{ overflow: "hidden" }}
+              >
+                <Typography variant="h6" noWrap sx={{ fontWeight: 700 }}>
+                  AI 学习助手
+                </Typography>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </Toolbar>
         <Divider />
         <List sx={{ flex: 1, px: navOpen ? 1 : 0.5 }}>
@@ -100,7 +111,19 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <ListItemIcon sx={{ minWidth: 0, mr: navOpen ? 2 : 0, justifyContent: "center" }}>
                   {n.icon}
                 </ListItemIcon>
-                {navOpen && <ListItemText primary={n.label} />}
+                <AnimatePresence initial={false}>
+                  {navOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, width: 0 }}
+                      animate={{ opacity: 1, width: "auto" }}
+                      exit={{ opacity: 0, width: 0 }}
+                      transition={{ duration: 0.2 }}
+                      style={{ overflow: "hidden" }}
+                    >
+                      <ListItemText primary={n.label} sx={{ m: 0, whiteSpace: "nowrap" }} />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </ListItemButton>
             </Tooltip>
           ))}

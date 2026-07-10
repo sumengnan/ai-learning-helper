@@ -4,7 +4,9 @@ import {
   Button, Alert, List, ListItem, ListItemText, IconButton, Chip, Stack,
 } from "@mui/material";
 import DeleteIcon from "@mui/icons-material/Delete";
+import { AnimatePresence, motion } from "framer-motion";
 import { api } from "../api/client";
+import { listItemVariants } from "../components/motion";
 
 const TYPES: { key: string; label: string }[] = [
   { key: "single", label: "单选" },
@@ -80,24 +82,29 @@ export default function QuestionBankView() {
       {questions.length === 0 ? (
         <Typography color="text.secondary">暂无题目，先出题吧。</Typography>
       ) : (
-        <List sx={{ display: "flex", flexDirection: "column", gap: 1, py: 0 }}>
+        <List component="div" sx={{ display: "flex", flexDirection: "column", gap: 1, py: 0 }}>
+          <AnimatePresence initial={false}>
           {questions.map((q) => (
-            <ListItem
-              key={q.id}
-              sx={{ border: 1, borderColor: "divider", borderRadius: 2 }}
-              secondaryAction={
-                <IconButton edge="end" color="error" onClick={() => remove(q.id)} aria-label="删除题目">
-                  <DeleteIcon />
-                </IconButton>
-              }
-            >
-              <Chip size="small" label={TYPES.find((t) => t.key === q.type)?.label ?? q.type} sx={{ mr: 1 }} />
-              <ListItemText
-                primary={q.stem}
-                secondary={q.source ? `· ${q.source}` : undefined}
-              />
-            </ListItem>
+            <motion.div key={q.id} layout variants={listItemVariants}
+              initial="initial" animate="animate" exit="exit">
+              <ListItem
+                component="div"
+                sx={{ border: 1, borderColor: "divider", borderRadius: 2 }}
+                secondaryAction={
+                  <IconButton edge="end" color="error" onClick={() => remove(q.id)} aria-label="删除题目">
+                    <DeleteIcon />
+                  </IconButton>
+                }
+              >
+                <Chip size="small" label={TYPES.find((t) => t.key === q.type)?.label ?? q.type} sx={{ mr: 1 }} />
+                <ListItemText
+                  primary={q.stem}
+                  secondary={q.source ? `· ${q.source}` : undefined}
+                />
+              </ListItem>
+            </motion.div>
           ))}
+          </AnimatePresence>
         </List>
       )}
     </Box>

@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Box, Typography, Button, Card, CardContent, Checkbox, Chip, Stack } from "@mui/material";
 import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
+import { AnimatePresence, motion } from "framer-motion";
 import { api } from "../api/client";
+import { listItemVariants } from "../components/motion";
 
 interface Wrong {
   id: string;
@@ -44,9 +46,12 @@ export default function WrongAnswersView() {
       {items.length === 0 ? (
         <Typography color="text.secondary">暂无错题。</Typography>
       ) : (
-        <Stack spacing={1.5}>
+        <Stack spacing={1.5} component="div">
+          <AnimatePresence initial={false}>
           {items.map((w) => (
-            <Card key={w.id} variant="outlined">
+            <motion.div key={w.id} layout variants={listItemVariants}
+              initial="initial" animate="animate" exit="exit">
+            <Card variant="outlined">
               <CardContent sx={{ display: "flex", gap: 1 }}>
                 <Checkbox
                   sx={{ p: 0, mt: 0.25 }}
@@ -72,7 +77,9 @@ export default function WrongAnswersView() {
                 </Box>
               </CardContent>
             </Card>
+            </motion.div>
           ))}
+          </AnimatePresence>
         </Stack>
       )}
     </Box>

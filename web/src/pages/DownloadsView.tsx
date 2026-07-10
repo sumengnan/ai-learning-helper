@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { Box, Typography, Card, CardContent, IconButton, Tooltip } from "@mui/material";
 import DownloadIcon from "@mui/icons-material/Download";
 import DeleteIcon from "@mui/icons-material/Delete";
+import { AnimatePresence, motion } from "framer-motion";
 import { api } from "../api/client";
+import { listItemVariants } from "../components/motion";
 
 interface Download {
   id: string;
@@ -28,8 +30,11 @@ export default function DownloadsView() {
           暂无文件。聊天中让助手用 save_download 保存内容后会出现在这里。
         </Typography>
       ) : (
-        items.map((d) => (
-          <Card key={d.id} variant="outlined">
+        <AnimatePresence initial={false}>
+        {items.map((d) => (
+          <motion.div key={d.id} layout variants={listItemVariants}
+            initial="initial" animate="animate" exit="exit">
+          <Card variant="outlined">
             <CardContent sx={{ display: "flex", alignItems: "center", gap: 2 }}>
               {d.content_type.startsWith("image/") && (
                 <Box
@@ -53,7 +58,9 @@ export default function DownloadsView() {
               </IconButton>
             </CardContent>
           </Card>
-        ))
+          </motion.div>
+        ))}
+        </AnimatePresence>
       )}
     </Box>
   );

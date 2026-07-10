@@ -6,7 +6,9 @@ import {
 } from "@mui/material";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import DeleteIcon from "@mui/icons-material/Delete";
+import { AnimatePresence, motion } from "framer-motion";
 import { api } from "../api/client";
+import { listItemVariants } from "../components/motion";
 
 type Doc = { id: string; filename: string; num_chunks: number; uploaded_at: string };
 
@@ -43,19 +45,24 @@ export function KnowledgeView() {
       {docs.length === 0 ? (
         <Typography color="text.secondary">还没有上传文档</Typography>
       ) : (
-        <List sx={{ border: 1, borderColor: "divider", borderRadius: 2 }}>
+        <List component="div" sx={{ border: 1, borderColor: "divider", borderRadius: 2 }}>
+          <AnimatePresence initial={false}>
           {docs.map((d) => (
-            <ListItem
-              key={d.id} divider
-              secondaryAction={
-                <IconButton edge="end" color="error" onClick={() => remove(d.id)} aria-label="删除文档">
-                  <DeleteIcon />
-                </IconButton>
-              }
-            >
-              <ListItemText primary={d.filename} secondary={`· ${d.num_chunks} 块`} />
-            </ListItem>
+            <motion.div key={d.id} layout variants={listItemVariants}
+              initial="initial" animate="animate" exit="exit">
+              <ListItem
+                component="div" divider
+                secondaryAction={
+                  <IconButton edge="end" color="error" onClick={() => remove(d.id)} aria-label="删除文档">
+                    <DeleteIcon />
+                  </IconButton>
+                }
+              >
+                <ListItemText primary={d.filename} secondary={`· ${d.num_chunks} 块`} />
+              </ListItem>
+            </motion.div>
           ))}
+          </AnimatePresence>
         </List>
       )}
     </Box>

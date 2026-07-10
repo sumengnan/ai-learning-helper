@@ -5,10 +5,12 @@ import {
   TextField, Typography, Dialog, DialogTitle, DialogContent, DialogContentText,
   DialogActions,
 } from "@mui/material";
+import { AnimatePresence, motion } from "framer-motion";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
 import EditIcon from "@mui/icons-material/Edit";
 import { chromeBg } from "./AppShell";
+import { listItemVariants } from "./motion";
 
 // 依据创建时间与今天的自然日差，归入「今天 / 昨天 / 3天前 / …」分组
 function dayDiff(iso: string): number {
@@ -91,9 +93,17 @@ export function ConversationList({ items, activeId, onSelect, onNew, onDelete, o
             >
               {g.label}
             </ListSubheader>
+            <AnimatePresence initial={false}>
             {g.items.map((c) => (
-              <ListItemButton
+              <motion.div
                 key={c.id}
+                layout
+                variants={listItemVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+              >
+              <ListItemButton
                 selected={c.id === activeId}
                 onClick={() => (editingId === c.id ? undefined : onSelect(c.id))}
                 sx={{
@@ -138,7 +148,9 @@ export function ConversationList({ items, activeId, onSelect, onNew, onDelete, o
                   </>
                 )}
               </ListItemButton>
+              </motion.div>
             ))}
+            </AnimatePresence>
           </Fragment>
         ))}
       </List>
