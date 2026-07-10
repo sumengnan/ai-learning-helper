@@ -61,9 +61,11 @@ async def test_sandbox_exec_emits_progress_even_when_reused():
 
     events = [e for e in got if isinstance(e, Progress)]
     assert events and all(e.scope == "sandbox" for e in events)
-    texts = [e.text for e in events]
-    assert any(t.startswith("执行 ") and t.endswith("…") for t in texts)
-    assert "执行完成" in texts
+    # 命令行以 running→ok 折叠（同一 key），成功不再另起「执行完成」结果文字
+    run = next(e for e in events if e.text.startswith("执行 ") and e.status == "running")
+    ok = [e for e in events if e.text.startswith("执行 ") and e.status == "ok"]
+    assert ok and ok[0].key == run.key
+    assert not any(e.text == "执行完成" for e in events)
 
 
 async def test_sandbox_exec_emits_failure_on_nonzero_exit():
@@ -82,5 +84,9 @@ async def test_sandbox_exec_emits_failure_on_nonzero_exit():
     finally:
         progress.reset_emitter(token)
 
-    texts = [e.text for e in got if isinstance(e, Progress)]
-    assert any("执行失败" in t and "127" in t for t in texts)
+    events = [e for e in got if isinstance(e, Progress)]
+    # 命令行标记为失败状态
+    assert any(e.text.startswith("执行 ") and e.status == "error" for e in events)
+    # 失败仍输出失败原因：退出码 + stderr 摘要
+    assert any(e.status == "error" and "失败原因" in e.text and "127" in e.text for e in events)
+    assert any("not found" in e.text for e in events)

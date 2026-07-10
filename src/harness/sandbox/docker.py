@@ -6,6 +6,7 @@ import io
 import math
 import os
 import tarfile
+import uuid
 
 from .base import ExecResult, resolve_in_workspace
 from ..events import Progress
@@ -95,16 +96,27 @@ class DockerSandbox:
         desc = " ".join(command).replace("\n", " ")
         if len(desc) > 60:
             desc = desc[:60]
-        emit(Progress("sandbox", f"执行 {desc}…"))
+        # running→ok/error 用同一 key 折叠成一行：命令前只显示状态标识，成功不再另起结果文字
+        exec_key = uuid.uuid4().hex
+        emit(Progress("sandbox", f"执行 {desc}", status="running", key=exec_key))
         wrapped = ["timeout", str(max(1, math.ceil(timeout))), *command]
         res = await asyncio.to_thread(
             self._container.exec_run, wrapped, workdir=self.workspace, demux=True)
-        emit(Progress("sandbox", "执行完成" if res.exit_code == 0
-                      else f"执行失败（exit_code={res.exit_code}）"))
         out, err = res.output if isinstance(res.output, tuple) else (res.output, b"")
-        return ExecResult((out or b"").decode(errors="replace"),
-                          (err or b"").decode(errors="replace"),
-                          res.exit_code, timed_out=(res.exit_code == 124))
+        stdout = (out or b"").decode(errors="replace")
+        stderr = (err or b"").decode(errors="replace")
+        if res.exit_code == 0:
+            emit(Progress("sandbox", f"执行 {desc}", status="ok", key=exec_key))
+        else:
+            emit(Progress("sandbox", f"执行 {desc}", status="error", key=exec_key))
+            # 失败仍输出失败原因：退出码 + 错误输出摘要
+            snippet = (stderr or stdout).strip().replace("\n", " ")
+            reason = f"失败原因：exit_code={res.exit_code}"
+            if snippet:
+                reason += f"，{snippet[:120]}"
+            emit(Progress("sandbox", reason, status="error"))
+        return ExecResult(stdout, stderr, res.exit_code,
+                          timed_out=(res.exit_code == 124))
 
     async def write_file(self, path: str, content: str) -> None:
         await self.start()

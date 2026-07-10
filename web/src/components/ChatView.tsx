@@ -135,10 +135,13 @@ export function ChatView({ conversationId, initial, autoSend }:
                 const sandbox = m.progress.filter((p) => p.scope === "sandbox");
                 const sub = m.progress.filter((p) => p.scope.startsWith("subagent:"));
                 const live = busy && i === messages.length - 1;
-                const sbLast = sandbox[sandbox.length - 1]?.text ?? "";
+                const sbLast = sandbox[sandbox.length - 1];
+                const sbLastText = sbLast?.text ?? "";
+                // 命令行以显式 status 表达运行/成败；容器初始化等旧式行仍以 … 结尾判进行中
                 const sbStatus: "running" | "ok" | "error" =
-                  live && sbLast.endsWith("…") ? "running"
-                    : sandbox.some((p) => p.text.includes("失败")) ? "error" : "ok";
+                  sandbox.some((p) => p.status === "error" || p.text.includes("失败")) ? "error"
+                    : live && (sbLast?.status === "running" || sbLastText.endsWith("…")) ? "running"
+                      : "ok";
                 const subStatus: "running" | "ok" | "error" =
                   live && !sub.some((p) => /完成|未产出|失败/.test(p.text)) ? "running"
                     : sub.some((p) => /未产出|失败/.test(p.text)) ? "error" : "ok";

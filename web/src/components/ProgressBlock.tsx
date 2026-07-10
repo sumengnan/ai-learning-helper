@@ -58,7 +58,9 @@ export function ProgressBlock({ title, kind, items, status }: {
   status: "running" | "ok" | "error";
 }) {
   if (!items.length) return null;
-  const rows = kind === "subagent" ? mergeByKey(items) : items;
+  // 折叠开始/完成为一行；成功的收尾文字（如「任务完成」）不进正文，状态已由块头图标表达
+  const rows = mergeByKey(items).filter((p) => p.text !== "任务完成");
+  if (!rows.length) return null;
   const icon = kind === "sandbox"
     ? <StorageIcon sx={{ fontSize: 15 }} color="action" />
     : <AccountTreeIcon sx={{ fontSize: 15 }} color="action" />;
