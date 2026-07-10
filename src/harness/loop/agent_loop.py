@@ -114,6 +114,9 @@ class AgentLoop:
     async def _run_from(self, state: RunState, resuming: bool) -> AsyncIterator[Event]:
         if self._budget:
             self._budget.start()
+        # 回填 run_id 到审批上下文（若有），使 ApprovalRequired 事件自洽携带 run_id
+        from ..approval import set_run_id
+        set_run_id(state.run_id)
         if not resuming:
             yield RunStarted(run_id=state.run_id)
 

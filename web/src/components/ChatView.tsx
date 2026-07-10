@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Box, Paper, TextField, Button, Typography, FormControlLabel, Switch,
+  Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions,
 } from "@mui/material";
 import { motion } from "framer-motion";
 import type { ChatMessage } from "../types";
-import { streamChat } from "../api/client";
+import { streamChat, sendDecision } from "../api/client";
 import { AgentProgress } from "./AgentProgress";
 import { EmptyHint } from "./EmptyHint";
 import { ProgressBlock } from "./ProgressBlock";
@@ -46,6 +47,10 @@ export function ChatView({ conversationId, initial, autoSend }:
   const [saveWrong, setSaveWrong] = useState(() => readBool(SAVE_WRONG_KEY, false));
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
+  // 危险命令人工确认：run_id 来自 RunStarted 事件，用于拼回传 URL
+  const runIdRef = useRef<string | null>(null);
+  const [approval, setApproval] = useState<
+    { approvalId: string; command: string; reason: string } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
   const saveWrongRef = useRef(saveWrong);
@@ -100,6 +105,9 @@ export function ChatView({ conversationId, initial, autoSend }:
       });
       else if (e.type === "ModelUsage") upd((a) => { a.usage = { tokens: e.data.usage.total, cost: e.data.cost_usd }; });
       else if (e.type === "Progress") upd((a) => { (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text, status: e.data.status, key: e.data.key }); });
+      else if (e.type === "RunStarted") runIdRef.current = e.data.run_id;
+      else if (e.type === "ApprovalRequired") setApproval({ approvalId: e.data.approval_id, command: e.data.command, reason: e.data.reason });
+      else if (e.type === "ApprovalResolved") setApproval(null);
       else if (e.type === "RunError") upd((a) => { a.content += `\n[出错] ${e.data.error}`; });
     };
     try {
@@ -114,6 +122,15 @@ export function ChatView({ conversationId, initial, autoSend }:
     if (autoSend) void send(autoSend);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 危险命令弹窗：批准/拒绝 → 回传后端；无论成败都关闭弹窗（后端有超时兜底）
+  async function decide(ok: boolean) {
+    const cur = approval;
+    setApproval(null);
+    if (cur && runIdRef.current) {
+      try { await sendDecision(runIdRef.current, cur.approvalId, ok); } catch { /* 后端超时兜底 */ }
+    }
+  }
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -209,6 +226,27 @@ export function ChatView({ conversationId, initial, autoSend }:
         <Button variant="contained" onClick={() => send()} disabled={busy}
           sx={{ flexShrink: 0, mb: 0.25 }}>发送</Button>
       </Box>
+
+      {/* 危险命令人工确认：不设 onClose，backdrop/Esc 不关闭，须显式选择（走后端超时兜底） */}
+      <Dialog open={approval !== null}
+        slotProps={{ paper: { sx: { width: 420 } } }}>
+        <DialogTitle>⚠️ 危险命令需要确认</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 1 }}>
+            AI 想在沙箱内执行以下命令，可能造成破坏（{approval?.reason}）。是否允许？
+          </DialogContentText>
+          <Box component="pre" sx={{
+            m: 0, p: 1, borderRadius: 1, bgcolor: "action.hover",
+            fontFamily: "monospace", fontSize: 13, whiteSpace: "pre-wrap",
+            wordBreak: "break-all", maxHeight: 200, overflow: "auto",
+          }}>{approval?.command}</Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => decide(false)}>拒绝</Button>
+          <Button variant="contained" color="error" disableElevation
+            onClick={() => decide(true)}>批准执行</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

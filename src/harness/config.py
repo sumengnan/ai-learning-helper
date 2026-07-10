@@ -45,7 +45,12 @@ class HarnessConfig(BaseSettings):
     sandbox_docker_tls_client_cert: str = ""    # 客户端证书路径
     sandbox_docker_tls_client_key: str = ""     # 客户端私钥路径
     sandbox_docker_tls_verify: bool = True      # 是否校验服务端证书
-    sandbox_image: str = "python:3.12-slim"
+    sandbox_image: str = "python:3.12-slim"     # 路由未启用时的单镜像；也是 base/shell 容器镜像
+    # 语言->镜像；空=禁用路由（向后兼容单容器）。
+    # 例: {"python":"python:3.12-slim","node":"node:20-slim","java":"eclipse-temurin:21-jdk"}
+    sandbox_images: dict = {}
+    sandbox_default_language: str = "python"     # 协议方法（shell/fs）委托到的容器语言
+    sandbox_approval_timeout: float = 120.0      # 危险命令人工确认超时（秒）；超时自动拒绝
     sandbox_workspace: str = "/workspace"
     sandbox_user: str = "1000:1000"
     sandbox_network: str = "none"
@@ -67,6 +72,11 @@ class HarnessConfig(BaseSettings):
     browser_wait_until: str = "networkidle"   # load | domcontentloaded | networkidle
     browser_output_max_chars: int = 8000
     browser_user_agent: str = ""
+    # 在沙箱容器内跑无头 Chromium 时的启动参数（cap_drop=ALL/非 root/小 shm 下必备）
+    sandbox_browser_launch_args: list = [
+        "--no-sandbox", "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage", "--disable-gpu",
+    ]
     # 技能（渐进式披露）
     skills_dir: str = "skills"            # 技能目录：<skills_dir>/<name>/SKILL.md
     skill_resource_max_chars: int = 8000  # read_skill_resource 单次读取上限
