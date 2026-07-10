@@ -19,7 +19,7 @@ HARNESS_MODEL=gpt-4o-mini
 其余可选开关（默认关闭，不配也不会报错）：
 
 ```bash
-HARNESS_ENABLE_BROWSER=false     # true 则注册 browse 工具（需 playwright 浏览器已安装）
+HARNESS_ENABLE_BROWSER=false     # true 则注册 browse 工具；若同时启用沙箱则在容器内跑 Chromium（镜像须含 Playwright+curl、可出网、非只读），否则回退宿主 Playwright
 HARNESS_ENABLE_SANDBOX=false     # true 且配了 HARNESS_SANDBOX_DOCKER_HOST 才注册代码执行工具
 HARNESS_ENABLE_DISPATCH=false    # 多 agent 编排（App-1 暂不使用）
 HARNESS_EMBEDDING_API_KEY=       # 留空则回退用 HARNESS_API_KEY；配了才注册 search_memory/remember

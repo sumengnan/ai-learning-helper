@@ -83,7 +83,7 @@ def build_harness(config) -> Harness:
         from harness.browser.factory import build_browser
         from harness.tools.builtins.browse_tool import BrowseTool
         _reg(BrowseTool(
-            build_browser(config), config.http_allowed_domains, config.http_block_private,
+            build_browser(config, sandbox), config.http_allowed_domains, config.http_block_private,
             config.browser_nav_timeout, config.browser_wait_until, config.browser_output_max_chars))
 
     if sandbox is not None:
