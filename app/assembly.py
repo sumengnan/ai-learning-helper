@@ -11,6 +11,8 @@ from harness.tools.base import ToolRegistry
 from harness.tools.builtins.calculator import CalculatorTool
 from harness.tools.builtins.http_tool import HttpRequestTool
 
+from .tools.plan_tool import UpdatePlanTool, PLAN_SYSTEM_GUIDANCE
+
 
 @dataclass
 class Harness:
@@ -43,6 +45,7 @@ def build_harness(config) -> Harness:
         pool[tool.name] = tool
 
     _reg(CalculatorTool())
+    _reg(UpdatePlanTool())
 
     # 沙箱（若启用）：会话级隔离。绑进工具的是 SandboxProxy（按当前会话解析真实容器），
     # 真实容器由 SandboxManager 按 conv_id 惰性建/缓存/销毁。
@@ -146,6 +149,6 @@ def build_harness(config) -> Harness:
         client=client, registry=reg,
         checkpoint_store=CheckpointStore(config.persistence_db_path),
         trajectory_store=traj, sink=TrajectorySink(traj),
-        system_prompt=config.app_system_prompt,
+        system_prompt=config.app_system_prompt + PLAN_SYSTEM_GUIDANCE,
         memory=memory, memory_store=memory_store, download_store=dstore,
         skill_registry=skill_registry, sandbox=sandbox, sandbox_manager=sandbox_manager)

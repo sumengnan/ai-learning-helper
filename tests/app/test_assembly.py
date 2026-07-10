@@ -118,3 +118,9 @@ def test_skills_gated_on_empty_dir_registers_nothing(tmp_path):
     h = build_harness(_cfg(enable_skills=True, skills_dir=str(tmp_path / "empty")))
     assert h.registry.get("load_skill") is None
     assert h.skill_registry is None
+
+
+def test_update_plan_registered_and_prompt_has_guidance():
+    h = build_harness(_cfg())
+    assert h.registry.get("update_plan") is not None
+    assert "update_plan" in h.system_prompt
