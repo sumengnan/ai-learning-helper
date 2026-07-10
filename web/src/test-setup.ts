@@ -4,5 +4,6 @@ class ResizeObserverStub {
   unobserve() {}
   disconnect() {}
 }
-// @ts-expect-error jsdom 环境无此全局，测试期打桩即可
-globalThis.ResizeObserver = globalThis.ResizeObserver || ResizeObserverStub;
+// jsdom 环境无此全局，测试期打桩即可（stub 不完整实现接口，显式 cast 以在各 TS 版本下都过）
+globalThis.ResizeObserver = globalThis.ResizeObserver
+  || (ResizeObserverStub as unknown as typeof ResizeObserver);
