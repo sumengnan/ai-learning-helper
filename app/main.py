@@ -84,6 +84,14 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
     app.include_router(make_questions_router(quiz_service, question_store, config))
     app.include_router(make_wrong_answers_router(wrong_store))
 
+    # 关停时释放沙箱容器（RoutingSandbox 会关闭其全部语言容器；单容器亦然）。
+    # 修复此前无人调用 close() 导致的容器泄漏。
+    sandbox = getattr(harness, "sandbox", None)
+    if sandbox is not None:
+        @app.on_event("shutdown")
+        async def _close_sandbox() -> None:
+            await sandbox.close()
+
     if os.path.isdir("web/dist"):  # prod：托管前端静态产物
         app.mount("/", StaticFiles(directory="web/dist", html=True), name="static")
     return app

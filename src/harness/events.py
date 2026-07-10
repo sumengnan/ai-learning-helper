@@ -65,6 +65,24 @@ class Progress(Event):
 
 
 @dataclass
+class ApprovalRequired(Event):
+    """检出危险命令、需要人工确认时发出；前端据此弹窗，用 approval_id 回传决策。"""
+    run_id: str
+    approval_id: str
+    tool: str
+    command: str
+    reason: str
+
+
+@dataclass
+class ApprovalResolved(Event):
+    """审批已决（批准/拒绝/超时）；前端据此关闭弹窗。"""
+    approval_id: str
+    approved: bool
+    reason: str | None = None
+
+
+@dataclass
 class ModelUsage(Event):
     usage: Usage
     cost_usd: float | None

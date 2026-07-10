@@ -24,6 +24,7 @@ class Harness:
     memory_store: object | None = None
     download_store: object | None = None
     skill_registry: object | None = None
+    sandbox: object | None = None   # 供 app 关停时 close() 释放容器
 
 
 def build_harness(config) -> Harness:
@@ -83,18 +84,22 @@ def build_harness(config) -> Harness:
         from harness.browser.factory import build_browser
         from harness.tools.builtins.browse_tool import BrowseTool
         _reg(BrowseTool(
-            build_browser(config), config.http_allowed_domains, config.http_block_private,
+            build_browser(config, sandbox), config.http_allowed_domains, config.http_block_private,
             config.browser_nav_timeout, config.browser_wait_until, config.browser_output_max_chars))
 
     if sandbox is not None:
         from harness.tools.builtins.fs_tools import WriteFileTool, ReadFileTool, ListFilesTool
         from harness.tools.builtins.shell_tool import RunShellTool
-        from harness.tools.builtins.code_tool import RunPythonTool
+        from harness.tools.builtins.code_tool import RunPythonTool, RunNodeTool, RunJavaTool
         _reg(WriteFileTool(sandbox))
         _reg(ReadFileTool(sandbox, config.sandbox_output_max_chars))
         _reg(ListFilesTool(sandbox))
         _reg(RunShellTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
         _reg(RunPythonTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
+        # 仅路由沙箱（配置了 sandbox_images）下暴露多语言代码工具
+        if getattr(sandbox, "sandbox_for", None) is not None:
+            _reg(RunNodeTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
+            _reg(RunJavaTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
 
     if config.enable_dispatch:
         from harness.orchestration.roster_loader import load_roster
@@ -139,4 +144,4 @@ def build_harness(config) -> Harness:
         trajectory_store=traj, sink=TrajectorySink(traj),
         system_prompt=config.app_system_prompt,
         memory=memory, memory_store=memory_store, download_store=dstore,
-        skill_registry=skill_registry)
+        skill_registry=skill_registry, sandbox=sandbox)

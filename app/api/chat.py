@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from harness.approval import reset_context, resolve, set_context
 from harness.events import Progress, RunError, RunFinished, ToolFinished, ToolStarted
 from harness.loop.agent_loop import AgentLoop
 from harness.persistence.serialize import event_to_dict
@@ -38,6 +39,11 @@ class _ChatRequest(BaseModel):
     conversation_id: str
     message: str
     save_wrong: bool = False        # 「考试答错自动保存错题集」开关（默认关）
+
+
+class _Decision(BaseModel):
+    approval_id: str
+    approved: bool
 
 
 def make_chat_router(harness, store, config, question_store=None, wrong_store=None) -> APIRouter:
@@ -88,12 +94,15 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
 
             async def pump():
                 token = set_emitter(queue.put_nowait)
+                # 审批上下文：run_id 由 loop 内 set_run_id 回填，此处先占位；超时来自配置
+                atoken = set_context(run_id="", timeout=config.sandbox_approval_timeout)
                 try:
                     async for ev in harness.sink.wrap(loop.run(req.message)):
                         queue.put_nowait(ev)
                 except Exception as e:  # 兜底成 RunError，避免流卡死
                     queue.put_nowait(RunError(error=str(e)))
                 finally:
+                    reset_context(atoken)
                     reset_emitter(token)
                     queue.put_nowait(sentinel)
 
@@ -135,5 +144,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     steps=steps or None, progress=progress or None)
 
         return StreamingResponse(gen(), media_type="text/event-stream")
+
+    @router.post("/api/chat/{run_id}/decision")
+    async def decision(run_id: str, body: _Decision, user_id: str = Depends(current_user)):
+        # run_id 用于 REST 语义/审计；实际解析按全局唯一的 approval_id
+        if not resolve(body.approval_id, body.approved):
+            raise HTTPException(status_code=404, detail="审批已失效或不存在")
+        return {"ok": True}
 
     return router

@@ -87,6 +87,17 @@ export async function streamChat(
   }
 }
 
+/** 危险命令人工确认：把批准/拒绝决策回传给挂起的后端协程。 */
+export async function sendDecision(
+  runId: string, approvalId: string, approved: boolean,
+): Promise<void> {
+  const r = await authFetch(`/api/chat/${runId}/decision`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ approval_id: approvalId, approved }),
+  });
+  if (!r.ok) throw new Error(`decision 失败：${r.status}`);
+}
+
 export const api = {
   list: (): Promise<Conversation[]> => authFetch("/api/conversations").then((r) => r.json()),
   create: (title?: string): Promise<{ id: string }> =>
