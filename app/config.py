@@ -20,6 +20,7 @@ class AppConfig(HarnessConfig):
     enable_sandbox: bool = False
     enable_dispatch: bool = False
     enable_skills: bool = False
+    enable_mcp: bool = False          # MCP 客户端总开关；开则按 mcp_config_path 连接 server
     cors_origins: list = ["http://localhost:5173"]
     app_max_upload_mb: int = 20
     quiz_max_count: int = 20
