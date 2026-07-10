@@ -70,4 +70,21 @@ describe("ChatView", () => {
     const call = calls[calls.length - 1];
     expect(call[4]).toBe(true);        // saveWrong 为第 5 个参数
   });
+
+  it("Progress scope=plan → 渲染任务步骤清单", async () => {
+    vi.mocked(streamChat).mockImplementationOnce(
+      async (_cid: string, _msg: string, onEvent: (e: any) => void) => {
+        onEvent({ type: "RunStarted", data: { run_id: "r1" } });
+        onEvent({ type: "Progress", data: {
+          scope: "plan", key: "plan",
+          text: JSON.stringify([{ title: "第一步查资料", status: "running" }]),
+        } });
+        onEvent({ type: "TextDelta", data: { text: "好" } });
+        onEvent({ type: "RunFinished", data: {} });
+      });
+    render(<ChatView conversationId="c1" initial={[]} />);
+    fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "hi" } });
+    fireEvent.click(screen.getByText("发送"));
+    await waitFor(() => expect(screen.getByText("第一步查资料")).toBeTruthy());
+  });
 });

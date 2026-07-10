@@ -9,6 +9,7 @@ import { streamChat, sendDecision } from "../api/client";
 import { AgentProgress } from "./AgentProgress";
 import { EmptyHint } from "./EmptyHint";
 import { ProgressBlock } from "./ProgressBlock";
+import { PlanBlock } from "./PlanBlock";
 import { Markdown } from "./Markdown";
 import { RollingNumber } from "./RollingNumber";
 import { bubbleVariants } from "./motion";
@@ -148,6 +149,11 @@ export function ChatView({ conversationId, initial, autoSend }:
                 color: m.role === "user" ? "primary.contrastText" : "text.primary",
               }}
             >
+              {m.role === "assistant" && m.progress && (() => {
+                const planItems = m.progress.filter((p) => p.scope === "plan");
+                const plan = planItems[planItems.length - 1];
+                return plan ? <PlanBlock text={plan.text} /> : null;
+              })()}
               {showTools && m.role === "assistant" && m.progress && m.progress.length > 0 && (() => {
                 const sandbox = m.progress.filter((p) => p.scope === "sandbox");
                 const sub = m.progress.filter((p) => p.scope.startsWith("subagent:"));
