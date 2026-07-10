@@ -1,0 +1,20 @@
+{
+  "servers": [
+    {
+      "name": "example",
+      "enabled": true,
+      "transport": "stdio",
+      "command": "python",
+      "args": ["-m", "app.mcp_servers.example_server"],
+      "env": {}
+    },
+    {
+      "name": "weather",
+      "enabled": false,
+      "transport": "http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": {"Authorization": "Bearer ${WEATHER_TOKEN}"},
+      "timeout": 30
+    }
+  ]
+}

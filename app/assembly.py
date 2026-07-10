@@ -28,6 +28,7 @@ class Harness:
     skill_registry: object | None = None
     sandbox: object | None = None            # 绑进工具的会话级沙箱代理（SandboxProxy）
     sandbox_manager: object | None = None    # 会话级容器生命周期管理（销毁/关停/清扫）
+    mcp_manager: object | None = None        # MCP 客户端管理器（startup 期连接、注册远程工具）
 
 
 def build_harness(config) -> Harness:
@@ -144,6 +145,13 @@ def build_harness(config) -> Harness:
     dstore = DownloadStore(config.downloads_dir, db_path=config.app_db_path)
     _reg(SaveDownloadTool(dstore, config.download_max_mb * 1024 * 1024))
 
+    # MCP 客户端：此处只构造管理器（不连接——build_harness 是同步的）。
+    # 实际连接与工具注册在 FastAPI startup 钩子里 await（见 app/main.py）。
+    mcp_manager = None
+    if getattr(config, "enable_mcp", False):
+        from harness.mcp import MCPManager
+        mcp_manager = MCPManager(config)
+
     traj = TrajectoryStore(config.persistence_db_path)
     return Harness(
         client=client, registry=reg,
@@ -151,4 +159,5 @@ def build_harness(config) -> Harness:
         trajectory_store=traj, sink=TrajectorySink(traj),
         system_prompt=config.app_system_prompt + PLAN_SYSTEM_GUIDANCE,
         memory=memory, memory_store=memory_store, download_store=dstore,
-        skill_registry=skill_registry, sandbox=sandbox, sandbox_manager=sandbox_manager)
+        skill_registry=skill_registry, sandbox=sandbox, sandbox_manager=sandbox_manager,
+        mcp_manager=mcp_manager)

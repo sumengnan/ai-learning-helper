@@ -106,6 +106,24 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
         async def _close_sandboxes() -> None:
             await sandbox_manager.close_all()
 
+    # MCP 客户端：startup 时连接 server 并把远程工具注册进全局 registry（请求期 _build_registry
+    # 会全量复制，故自动进入每次对话）；关停时断开（防遗留 stdio 僵尸子进程）。连接失败只 warning，
+    # 不影响 app 启动。
+    mcp_manager = getattr(harness, "mcp_manager", None)
+    if mcp_manager is not None:
+        from .api.mcp import make_mcp_router
+        app.include_router(make_mcp_router(harness))
+
+        @app.on_event("startup")
+        async def _start_mcp() -> None:
+            await mcp_manager.start()
+            for t in mcp_manager.tools():
+                harness.registry.register(t)
+
+        @app.on_event("shutdown")
+        async def _close_mcp() -> None:
+            await mcp_manager.close()
+
     if os.path.isdir("web/dist"):  # prod：托管前端静态产物
         app.mount("/", StaticFiles(directory="web/dist", html=True), name="static")
     return app
