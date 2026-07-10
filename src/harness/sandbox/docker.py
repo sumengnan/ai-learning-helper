@@ -147,3 +147,15 @@ class DockerSandbox:
         real = resolve_in_workspace(self.workspace, path)  # #2：先约束路径再执行
         res = await self.exec(["ls", "-1", real], timeout=10)
         return [ln for ln in res.stdout.splitlines() if ln]
+
+    async def archive_workspace(self) -> bytes:
+        """把整个工作区打成 tar 字节（含 workspace 目录名），供跨容器整目录迁移。"""
+        await self.start()
+        bits, _ = await asyncio.to_thread(self._container.get_archive, self.workspace)
+        return b"".join(bits)
+
+    async def extract_workspace(self, data: bytes) -> None:
+        """把 archive_workspace() 产出的 tar 解回工作区（解到 workspace 的父目录即还原）。"""
+        await self.start()
+        parent = os.path.dirname(self.workspace) or "/"
+        await asyncio.to_thread(self._container.put_archive, parent, data)

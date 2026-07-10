@@ -139,6 +139,13 @@ cd web && npm run test        # 前端：Vitest（drainSSE 纯函数单测）
   事件循环线程运行，故这些连接可安全共享。若要多线程 / 多 worker 部署，需要另行
   处理跨线程 sqlite 访问（每线程独立连接或换连接池），否则会抛
   `sqlite3.ProgrammingError`。
-- **`enable_sandbox` 打开时无并发互斥**：LocalSandbox 共享同一个 workspace，同一
-  对话并发 `/api/chat` 之间没有互斥。单用户自用场景下可接受；多并发写同一
-  workspace 可能相互覆盖。
+- **`enable_sandbox` 打开时的沙箱模型**：容器按会话（`conversation_id`）隔离——每会话
+  惰性建一个基础容器（镜像 = `HARNESS_SANDBOX_IMAGE`，承载 shell/文件/http/browse 与
+  工作区），删除会话即销毁、并有空闲驱逐安全阀。**跨会话已隔离**；但同一会话并发
+  `/api/chat` 仍共享该会话基础工作区、无互斥，并发写可能相互覆盖（单用户自用可接受）。
+- **按语言/版本的一次性子沙箱**：配了 `HARNESS_SANDBOX_LANG_IMAGES`（语言[+版本]→镜像）后，
+  `run_python/run_node/run_java` 会按语言[+可选 `version`，如 java8/java21]另起一次性子沙箱
+  执行：执行前把会话基础工作区拷入子沙箱，执行后把产物拷回基础工作区，跑完即销毁子沙箱。
+  子沙箱默认禁网（`HARNESS_SANDBOX_SUB_NETWORK=none`，需 pip/maven 取包时置 `bridge`）。
+  未配该配置时代码仍在会话基础容器内直接执行（向后兼容）。基础容器要跑 Java 等，
+  建议把 `HARNESS_SANDBOX_IMAGE` 设为含 curl/chromium 的 ubuntu 基础镜像。

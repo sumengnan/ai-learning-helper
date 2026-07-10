@@ -4,13 +4,19 @@ from __future__ import annotations
 from .local import LocalSandbox
 
 
-def _docker_for(config, image: str, labels: dict | None = None):
-    """按 config 造一个指定镜像的 DockerSandbox（除 image 外参数完全一致）。"""
+def _docker_for(config, image: str, labels: dict | None = None,
+                network: str | None = None):
+    """按 config 造一个指定镜像的 DockerSandbox（除 image/labels/network 外参数完全一致）。
+
+    network 为 None 时取 config.sandbox_network；一次性代码子沙箱可传 config.sandbox_sub_network
+    强制禁网。
+    """
     from .docker import DockerSandbox
     return DockerSandbox(
         docker_host=config.sandbox_docker_host, image=image,
         workspace=config.sandbox_workspace, user=config.sandbox_user,
-        network=config.sandbox_network, mem_limit=config.sandbox_mem_limit,
+        network=network if network is not None else config.sandbox_network,
+        mem_limit=config.sandbox_mem_limit,
         cpus=config.sandbox_cpus, pids_limit=config.sandbox_pids_limit,
         read_only=config.sandbox_read_only,
         tls_ca_cert=config.sandbox_docker_tls_ca_cert,

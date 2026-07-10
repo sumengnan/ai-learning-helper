@@ -21,8 +21,10 @@ import time
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
+from harness.events import Progress
+from harness.progress import emit
 from harness.sandbox.base import SandboxError
-from harness.sandbox.factory import build_sandbox
+from harness.sandbox.factory import _docker_for, build_sandbox
 
 _log = logging.getLogger("app.sandbox")
 
@@ -138,6 +140,36 @@ class SandboxManager:
             _log.warning("启动清扫沙箱孤儿容器失败：%s", e)
 
 
+def _resolve_lang_image(images: dict, language: str, version: str | None) -> str | None:
+    """按 语言[+版本] 解析一次性子沙箱镜像。
+
+    显式给了 version 但无对应镜像 → 报错（让模型换版本）；未给 version 且该语言无镜像
+    → 返回 None（调用方回退到会话基础容器/路由容器）。
+    """
+    if version:
+        key = f"{language}{version}"
+        if key not in images:
+            avail = ", ".join(sorted(images)) or "（无）"
+            raise SandboxError(f"没有可用的语言/版本镜像：{key}。可用：{avail}")
+        return images[key]
+    return images.get(language)
+
+
+async def _copy_workspace(src, dst) -> None:
+    """把 src 工作区整体搬到 dst 工作区。Docker 用整目录 tar；否则逐文件回退。"""
+    archive = getattr(src, "archive_workspace", None)
+    extract = getattr(dst, "extract_workspace", None)
+    if archive is not None and extract is not None:
+        await extract(await archive())
+        return
+    for name in await src.list_files("."):
+        try:
+            content = await src.read_file(name)
+        except SandboxError:
+            continue
+        await dst.write_file(name, content)
+
+
 class SandboxProxy:
     """实现 Sandbox 协议：按当前会话上下文把调用委托给真实的会话容器。
 
@@ -176,3 +208,37 @@ class SandboxProxy:
 
     async def _sandbox_for(self, language: str):
         return await (await self._box()).sandbox_for(language)
+
+    async def run_code(self, language: str, version: str | None, filename: str,
+                       code: str, argv: list | None, shell: str | None, timeout: float):
+        """按语言[+版本]在一次性子沙箱内跑代码；跑完销毁子沙箱、产物回传会话基础容器。
+
+        未配置该语言/版本的子沙箱镜像时回退：会话基础容器（若配了多镜像路由则用其语言容器）。
+        """
+        base = await self._box()
+        cfg = self._m._config
+        images = getattr(cfg, "sandbox_lang_images", None) or {}
+        image = _resolve_lang_image(images, language, version)
+        cmd = argv if argv is not None else ["sh", "-c", shell]
+        if image is None:                       # 未配子沙箱镜像 → 回退基础/路由容器
+            route = getattr(base, "sandbox_for", None)
+            target = await route(language) if route is not None else base
+            await target.write_file(filename, code)
+            return await target.exec(cmd, timeout)
+        # 一次性语言/版本子沙箱
+        label = f"{language}{version}" if version else language
+        conv = _current_conv.get() or ""
+        labels = {_SANDBOX_LABEL: "true", "conv_id": conv, "role": "ephemeral"}
+        sub = _docker_for(cfg, image, labels=labels,
+                          network=getattr(cfg, "sandbox_sub_network", "none"))
+        emit(Progress("sandbox", f"启动 {label} 子沙箱（{image}）…"))
+        try:
+            await sub.start()
+            await _copy_workspace(base, sub)    # 执行前：基础工作区 → 子沙箱（输入）
+            await sub.write_file(filename, code)
+            res = await sub.exec(cmd, timeout)
+            await _copy_workspace(sub, base)     # 执行后：子沙箱 → 基础工作区（产物回传）
+            return res
+        finally:
+            await sub.close()                    # 用完即销毁
+            emit(Progress("sandbox", f"回收 {label} 子沙箱"))

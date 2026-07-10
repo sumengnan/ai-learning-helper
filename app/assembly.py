@@ -100,8 +100,8 @@ def build_harness(config) -> Harness:
         _reg(ListFilesTool(sandbox))
         _reg(RunShellTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
         _reg(RunPythonTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
-        # 仅路由沙箱（配置了 sandbox_images）下暴露多语言代码工具
-        if getattr(sandbox, "sandbox_for", None) is not None:
+        # 配了多镜像路由（sandbox_images）或语言/版本子沙箱（sandbox_lang_images）时暴露多语言代码工具
+        if getattr(sandbox, "sandbox_for", None) is not None or config.sandbox_lang_images:
             _reg(RunNodeTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
             _reg(RunJavaTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
 

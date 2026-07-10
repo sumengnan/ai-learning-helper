@@ -18,16 +18,27 @@ class LangSpec:
     shell: str | None = None # 需编译时的 sh -c 脚本（如 java 先 javac 再 java）
 
 
-async def _run_code(sandbox: Sandbox, spec: LangSpec, code: str,
+async def _run_code(sandbox: Sandbox, spec: LangSpec, code: str, version: str | None,
                     timeout: float, max_chars: int) -> str:
-    """把源码写进（按语言路由后的）容器并执行；非零退出/超时 → ToolError。"""
-    box = sandbox
-    route = getattr(sandbox, "sandbox_for", None)
-    if route is not None:                       # RoutingSandbox：取到语言专属容器
-        box = await route(spec.language)
-    await box.write_file(spec.filename, code)   # SandboxError→is_error
-    cmd = spec.argv if spec.argv is not None else ["sh", "-c", spec.shell]
-    res = await box.exec(cmd, timeout)
+    """执行某语言代码；非零退出/超时 → ToolError。
+
+    会话代理（有 run_code，SandboxProxy）：按语言[+版本]起一次性子沙箱，跑完销毁、
+    产物回传会话基础容器（子沙箱未配镜像时回退基础容器/路由容器）。
+    否则（直接注入 DockerSandbox/RoutingSandbox/LocalSandbox，测试用）：保留原
+    路由/直连逻辑。
+    """
+    run_code = getattr(sandbox, "run_code", None)
+    if run_code is not None:
+        res = await run_code(spec.language, version, spec.filename, code,
+                             spec.argv, spec.shell, timeout)   # SandboxError→is_error
+    else:
+        box = sandbox
+        route = getattr(sandbox, "sandbox_for", None)
+        if route is not None:                       # RoutingSandbox：取到语言专属容器
+            box = await route(spec.language)
+        await box.write_file(spec.filename, code)   # SandboxError→is_error
+        cmd = spec.argv if spec.argv is not None else ["sh", "-c", spec.shell]
+        res = await box.exec(cmd, timeout)
     out = format_exec(res, max_chars)
     if res.exit_code != 0 or res.timed_out:     # 非零退出/超时 → 标记失败
         raise ToolError(out)
@@ -40,6 +51,7 @@ class _CodeTool(Tool):
 
     class Params(BaseModel):
         code: str
+        version: str | None = None   # 语言版本（如 java 的 8/17/21）；空=用默认版本镜像
 
     def __init__(self, sandbox: Sandbox, timeout: float = 30.0, max_chars: int = 8000) -> None:
         self._sandbox = sandbox
@@ -47,7 +59,7 @@ class _CodeTool(Tool):
         self._max_chars = max_chars
 
     async def run(self, params: "_CodeTool.Params") -> str:
-        return await _run_code(self._sandbox, self.spec, params.code,
+        return await _run_code(self._sandbox, self.spec, params.code, params.version,
                                self._timeout, self._max_chars)
 
 
@@ -73,5 +85,7 @@ class RunNodeTool(_CodeTool):
 class RunJavaTool(_CodeTool):
     name = "run_java"
     description = ("在沙箱内执行 Java 代码，返回输出。"
-                   "入口类必须命名为 public class Main（含 public static void main）。")
+                   "入口类必须命名为 public class Main（含 public static void main）。"
+                   "可选 version 指定 JDK 版本（如 8/11/17/21，取决于服务端 sandbox_lang_images 配置），"
+                   "空则用默认 Java 镜像。")
     spec = LangSpec("java", "Main.java", None, shell="javac Main.java && java Main")

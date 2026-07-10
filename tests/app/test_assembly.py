@@ -35,6 +35,26 @@ def test_browser_gated_on():
     assert h.registry.get("browse") is not None
 
 
+def test_lang_images_expose_multilang_code_tools():
+    # 配了 sandbox_lang_images（语言/版本子沙箱）即注册 run_node/run_java；
+    # SandboxManager/SandboxProxy 惰性建容器，构建期不连 daemon。
+    h = build_harness(_cfg(enable_sandbox=True, sandbox_backend="docker",
+                           sandbox_docker_host="tcp://stub:2376",
+                           sandbox_lang_images={"java8": "eclipse-temurin:8-jdk"}))
+    assert h.registry.get("run_python") is not None
+    assert h.registry.get("run_java") is not None
+    assert h.registry.get("run_node") is not None
+
+
+def test_no_lang_images_no_multilang_code_tools():
+    # 未配 sandbox_lang_images 且未配路由 → 只有 run_python，无 run_java/run_node
+    h = build_harness(_cfg(enable_sandbox=True, sandbox_backend="docker",
+                           sandbox_docker_host="tcp://stub:2376"))
+    assert h.registry.get("run_python") is not None
+    assert h.registry.get("run_java") is None
+    assert h.registry.get("run_node") is None
+
+
 def _agents_dir(tmp_path, fname, content):
     (tmp_path / fname).write_text(content, encoding="utf-8")
     return str(tmp_path)

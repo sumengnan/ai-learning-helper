@@ -50,6 +50,15 @@ class HarnessConfig(BaseSettings):
     # 例: {"python":"python:3.12-slim","node":"node:20-slim","java":"eclipse-temurin:21-jdk"}
     sandbox_images: dict = {}
     sandbox_default_language: str = "python"     # 协议方法（shell/fs）委托到的容器语言
+    # 语言[+版本]->镜像；配置后 run_python/run_node/run_java 会按语言[+可选 version]
+    # 另起一次性子沙箱执行（跑完即销毁、产物回传会话基础容器）。key 优先 f"{language}{version}"
+    # （回退 language）；显式指定的 version 无对应镜像则报错。空=不启用子沙箱（代码在会话
+    # 基础容器内直接执行，向后兼容）。
+    # 例: {"python":"python:3.12-slim","node":"node:20-slim","java":"eclipse-temurin:21-jdk",
+    #      "java8":"eclipse-temurin:8-jdk","java11":"eclipse-temurin:11-jdk",
+    #      "java17":"eclipse-temurin:17-jdk","java21":"eclipse-temurin:21-jdk"}
+    sandbox_lang_images: dict = {}
+    sandbox_sub_network: str = "none"            # 一次性代码子沙箱的网络（默认禁网；需 pip/maven 取包时置 bridge）
     sandbox_approval_timeout: float = 120.0      # 危险命令人工确认超时（秒）；超时自动拒绝
     sandbox_workspace: str = "/workspace"
     sandbox_user: str = "1000:1000"
