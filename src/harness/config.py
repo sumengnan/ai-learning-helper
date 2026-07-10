@@ -48,7 +48,7 @@ class HarnessConfig(BaseSettings):
     sandbox_image: str = "python:3.12-slim"     # 路由未启用时的单镜像；也是 base/shell 容器镜像
     # 语言->镜像；空=禁用路由（向后兼容单容器）。
     # 例: {"python":"python:3.12-slim","node":"node:20-slim","java":"eclipse-temurin:21-jdk"}
-    sandbox_images: dict = {}
+    sandbox_images: dict = {"python":"python:3.12","node":"node:20","java":"eclipse-temurin:21-jdk","go":"golang:1.22","rust":"rust:1.77","ruby":"ruby:3.3","php":"php:8.3","perl":"perl:5.38","dotnet":"mcr.microsoft.com/dotnet/sdk:8.0","cpp":"gcc:13","c":"gcc:13","clang":"silkeh/clang:17","swift":"swift:5.10","kotlin":"eclipse-temurin:21-jdk","scala":"sbtscala/scala-sbt:eclipse-temurin-21.0.2_13_1.9.9_3.4.2","clojure":"clojure:temurin-21-tools-deps","groovy":"groovy:4.0-jdk21","dart":"dart:3.4","elixir":"elixir:1.16","erlang":"erlang:26","haskell":"haskell:9.8","julia":"julia:1.10","r":"r-base:4.4.0","lua":"nickblah/lua:5.4","nim":"nimlang/nim:2.0.4","crystal":"crystallang/crystal:1.12.1","typescript":"node:20","deno":"denoland/deno:1.43.6","bun":"oven/bun:1.1","ocaml":"ocaml/opam:debian-12-ocaml-5.1","fsharp":"mcr.microsoft.com/dotnet/sdk:8.0","vlang":"thevlang/vlang:latest","zig":"ziglang/static-base:0.12.0","fortran":"gcc:13","cobol":"esolang/cobol:latest","bash":"bash:5.2","powershell":"mcr.microsoft.com/powershell:7.4-ubuntu-22.04"}
     sandbox_default_language: str = "python"     # 协议方法（shell/fs）委托到的容器语言
     # 语言[+版本]->镜像；配置后 run_python/run_node/run_java 会按语言[+可选 version]
     # 另起一次性子沙箱执行（跑完即销毁、产物回传会话基础容器）。key 优先 f"{language}{version}"
@@ -57,7 +57,9 @@ class HarnessConfig(BaseSettings):
     # 例: {"python":"python:3.12-slim","node":"node:20-slim","java":"eclipse-temurin:21-jdk",
     #      "java8":"eclipse-temurin:8-jdk","java11":"eclipse-temurin:11-jdk",
     #      "java17":"eclipse-temurin:17-jdk","java21":"eclipse-temurin:21-jdk"}
-    sandbox_lang_images: dict = {}
+    sandbox_lang_images: dict = {"python":"python:3.12-slim","node":"node:20-slim","java":"eclipse-temurin:21-jdk",
+          "java8":"eclipse-temurin:8-jdk","java11":"eclipse-temurin:11-jdk",
+          "java17":"eclipse-temurin:17-jdk","java21":"eclipse-temurin:21-jdk"}
     sandbox_sub_network: str = "none"            # 一次性代码子沙箱的网络（默认禁网；需 pip/maven 取包时置 bridge）
     sandbox_approval_timeout: float = 120.0      # 危险命令人工确认超时（秒）；超时自动拒绝
     sandbox_workspace: str = "/workspace"
