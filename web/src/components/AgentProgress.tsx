@@ -1,6 +1,6 @@
 import type { ChatMessage } from "../types";
 import {
-  Accordion, AccordionSummary, AccordionDetails, Typography, Box, CircularProgress,
+  Accordion, AccordionSummary, AccordionDetails, Typography, Box, CircularProgress, Chip,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
@@ -9,6 +9,25 @@ import CancelIcon from "@mui/icons-material/Cancel";
 import BuildIcon from "@mui/icons-material/Build";
 import { CollapsibleBlock } from "./CollapsibleBlock";
 import { EllipsisText } from "./EllipsisText";
+
+// MCP 工具名为 mcp__<server>__<tool>；拆出来友好展示为「server · tool」并挂 MCP 标签。
+function mcpParts(name: string): { server: string; tool: string } | null {
+  const m = /^mcp__(.+?)__(.+)$/.exec(name);
+  return m ? { server: m[1], tool: m[2] } : null;
+}
+
+// 工具名标签：MCP 工具显示「MCP」小标签 + server·tool，普通工具原样显示。
+function ToolLabel({ name, sx }: { name: string; sx?: object }) {
+  const mcp = mcpParts(name);
+  if (!mcp) return <EllipsisText text={name} sx={sx} />;
+  return (
+    <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, minWidth: 0, ...sx }}>
+      <Chip label="MCP" size="small" color="secondary" variant="outlined"
+        sx={{ height: 16, "& .MuiChip-label": { px: 0.5, fontSize: 10, fontWeight: 700 } }} />
+      <EllipsisText text={`${mcp.server} · ${mcp.tool}`} />
+    </Box>
+  );
+}
 
 export function AgentProgress({ steps }: { steps: NonNullable<ChatMessage["steps"]> }) {
   if (!steps.length) return null;
@@ -27,7 +46,7 @@ export function AgentProgress({ steps }: { steps: NonNullable<ChatMessage["steps
       ) : (
         <CheckCircleIcon sx={{ fontSize: 14 }} color="success" />
       )}
-      <EllipsisText text={last.tool} sx={{ ml: 0.5 }} />
+      <ToolLabel name={last.tool} sx={{ ml: 0.5 }} />
     </>
   );
   return (
@@ -59,8 +78,9 @@ export function AgentProgress({ steps }: { steps: NonNullable<ChatMessage["steps
               ) : (
                 <CancelIcon sx={{ fontSize: 16 }} color="error" />
               )}
-              <Typography variant="caption" color={s.isError ? "error" : "text.primary"}>
-                {s.tool}
+              <Typography variant="caption" component="div"
+                color={s.isError ? "error" : "text.primary"}>
+                <ToolLabel name={s.tool} />
               </Typography>
             </AccordionSummary>
             <AccordionDetails sx={{ px: 0, pt: 0 }}>
