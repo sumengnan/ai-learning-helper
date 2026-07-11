@@ -87,17 +87,76 @@ class ConversationStore:
             seq += 1
         self._conn.commit()
 
+    def start_turn(self, conv_id: str, user_msg: Message, run_id: str,
+                   attachments: list[dict] | None = None) -> None:
+        """一轮开头：原子写入 user 消息 + 一条 streaming 占位 assistant（空内容，带 run_id），
+        供刷新后前端识别「有一轮在进行、对应此 run」而发起接回。attachments 挂 user 那条。"""
+        seq = self._conn.execute(
+            "SELECT COALESCE(MAX(seq), -1) + 1 FROM conversation_messages WHERE conv_id = ?",
+            (conv_id,)).fetchone()[0]
+        ud = message_to_dict(user_msg)
+        att_json = json.dumps(attachments, ensure_ascii=False) if attachments else None
+        _cols = ("conv_id, seq, role, content, tool_calls, tool_call_id, steps, progress, "
+                 "attachments, run_id, status, created_at")
+        _ph = "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        self._conn.execute(
+            f"INSERT INTO conversation_messages({_cols}) {_ph}",
+            (conv_id, seq, ud["role"], ud["content"], None, None, None, None,
+             att_json, run_id, "done", _now()))
+        self._conn.execute(
+            f"INSERT INTO conversation_messages({_cols}) {_ph}",
+            (conv_id, seq + 1, "assistant", "", None, None, None, None,
+             None, run_id, "streaming", _now()))
+        self._conn.commit()
+
+    def finish_turn(self, conv_id: str, run_id: str, content: str,
+                    steps: list[dict] | None = None, progress: list[dict] | None = None,
+                    status: str = "done") -> None:
+        """一轮结束：按 run_id 把 streaming 占位 assistant UPDATE 为最终内容 + steps/progress + 状态。"""
+        self._conn.execute(
+            "UPDATE conversation_messages SET content=?, steps=?, progress=?, status=? "
+            "WHERE conv_id=? AND run_id=? AND role='assistant'",
+            (content,
+             json.dumps(steps, ensure_ascii=False) if steps else None,
+             json.dumps(progress, ensure_ascii=False) if progress else None,
+             status, conv_id, run_id))
+        self._conn.commit()
+
+    def flush_partial(self, conv_id: str, run_id: str, content: str) -> None:
+        """生成中把已累积的部分文本写进 streaming 占位（不改 status/steps）——仅为服务重启后
+        还能看到断点前的部分兜底；客户端刷新的主路径靠内存总线，不依赖它。"""
+        self._conn.execute(
+            "UPDATE conversation_messages SET content=? "
+            "WHERE conv_id=? AND run_id=? AND role='assistant' AND status='streaming'",
+            (content, conv_id, run_id))
+        self._conn.commit()
+
+    def reconcile_streaming(self) -> int:
+        """启动对账：把残留的 streaming 助手消息标 interrupted（进程重启丢了在途后台任务）。"""
+        cur = self._conn.execute(
+            "UPDATE conversation_messages SET status='interrupted' "
+            "WHERE role='assistant' AND status='streaming'")
+        self._conn.commit()
+        return cur.rowcount
+
+    def conv_of_run(self, run_id: str) -> str | None:
+        """run_id → 所属 conv_id（供 attach/stop 归属校验）。"""
+        row = self._conn.execute(
+            "SELECT conv_id FROM conversation_runs WHERE run_id = ?", (run_id,)).fetchone()
+        return row[0] if row else None
+
     def ui_messages(self, conv_id: str) -> list[dict]:
         """供前端渲染：role + content + steps（工具调用轨迹）+ progress（沙箱/子代理进度）
-        + attachments（用户上传附件元数据）。"""
+        + attachments（用户上传附件元数据）+ run_id + status（续传用）。"""
         rows = self._conn.execute(
-            "SELECT role, content, steps, progress, attachments FROM conversation_messages "
-            "WHERE conv_id = ? ORDER BY seq", (conv_id,)).fetchall()
+            "SELECT role, content, steps, progress, attachments, run_id, status "
+            "FROM conversation_messages WHERE conv_id = ? ORDER BY seq", (conv_id,)).fetchall()
         return [{"role": role, "content": content,
                  "steps": json.loads(steps) if steps else None,
                  "progress": json.loads(progress) if progress else None,
-                 "attachments": json.loads(attachments) if attachments else None}
-                for role, content, steps, progress, attachments in rows]
+                 "attachments": json.loads(attachments) if attachments else None,
+                 "run_id": run_id, "status": status}
+                for role, content, steps, progress, attachments, run_id, status in rows]
 
     def rename(self, user_id: str, conv_id: str, title: str) -> bool:
         cur = self._conn.execute(

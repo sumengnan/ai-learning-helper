@@ -64,20 +64,9 @@ export function drainSSE(buffer: string): { events: AgentEvent[]; rest: string }
   return { events, rest: buffer };
 }
 
-export async function streamChat(
-  conversationId: string, message: string, onEvent: (e: AgentEvent) => void,
-  signal?: AbortSignal, saveWrong = false, attachmentIds: string[] = [],
-): Promise<void> {
-  const resp = await authFetch("/api/chat", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      conversation_id: conversationId, message, save_wrong: saveWrong,
-      attachment_ids: attachmentIds,
-    }),
-    signal,
-  });
-  if (!resp.ok || !resp.body) throw new Error(`chat 失败：${resp.status}`);
-  const reader = resp.body.getReader();
+/** 消费一个 SSE 响应体：逐块解析事件回调，直到流结束或断开。 */
+async function consumeSSE(resp: Response, onEvent: (e: AgentEvent) => void): Promise<void> {
+  const reader = resp.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   for (;;) {
@@ -88,6 +77,42 @@ export async function streamChat(
     buffer = rest;
     events.forEach(onEvent);
   }
+}
+
+export async function streamChat(
+  conversationId: string, message: string, onEvent: (e: AgentEvent) => void,
+  signal?: AbortSignal, saveWrong = false, attachmentIds: string[] = [],
+  onRunId?: (runId: string) => void,
+): Promise<void> {
+  const resp = await authFetch("/api/chat", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      conversation_id: conversationId, message, save_wrong: saveWrong,
+      attachment_ids: attachmentIds,
+    }),
+    signal,
+  });
+  if (resp.status === 409) throw new Error("上一轮还在进行中，请稍候");
+  if (!resp.ok || !resp.body) throw new Error(`chat 失败：${resp.status}`);
+  // X-Run-Id：本轮句柄，供 stop / 刷新后接回
+  const rid = resp.headers.get("X-Run-Id");
+  if (rid) onRunId?.(rid);
+  await consumeSSE(resp, onEvent);
+}
+
+/** 刷新后接回一个在途 run：回放已生成部分 + 实时续流。run 已结束返回 409（调用方改重载消息）。 */
+export async function attachChat(
+  runId: string, onEvent: (e: AgentEvent) => void, signal?: AbortSignal,
+): Promise<void> {
+  const resp = await authFetch(`/api/chat/attach/${runId}`, { signal });
+  if (resp.status === 409) { const e = new Error("run 已结束"); e.name = "RunEnded"; throw e; }
+  if (!resp.ok || !resp.body) throw new Error(`attach 失败：${resp.status}`);
+  await consumeSSE(resp, onEvent);
+}
+
+/** 停止一个在途 run（取消后端后台任务，落已生成部分 + status=stopped）。 */
+export async function stopRun(runId: string): Promise<void> {
+  await authFetch(`/api/chat/stop/${runId}`, { method: "POST" }).catch(() => undefined);
 }
 
 /** 危险命令人工确认：把批准/拒绝决策回传给挂起的后端协程。 */
@@ -114,6 +139,8 @@ export const api = {
     steps?: { tool: string; args: unknown; result?: string; is_error?: boolean }[] | null;
     progress?: { scope: string; text: string; status?: "running" | "ok" | "error" | null; key?: string | null }[] | null;
     attachments?: Attachment[] | null;
+    run_id?: string | null;
+    status?: string | null;
   }[]> =>
     authFetch(`/api/conversations/${id}/messages`).then((r) => r.json()),
   remove: (id: string): Promise<void> =>

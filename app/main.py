@@ -76,17 +76,35 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
     app.state.auth = auth
     app.add_middleware(
         CORSMiddleware, allow_origins=config.cors_origins,
-        allow_methods=["*"], allow_headers=["*"], expose_headers=["X-Refresh-Token"])
+        allow_methods=["*"], allow_headers=["*"],
+        expose_headers=["X-Refresh-Token", "X-Run-Id"])
     # 回答交付前校验门（开关开时装配；测试可注入 verifier）：用单发 completer 做
     # grounding/judge，代码块在会话沙箱实跑。
     if verifier is None and config.enable_answer_gate:
         from .verify import AnswerVerifier
         verifier = AnswerVerifier(build_completer(harness.client, config.model), config)
+    # 断点续传：进程内运行管理器（后台任务 + 内存事件总线），供 /api/chat 起后台生成、
+    # attach 刷新接回。启动时对账残留的 streaming 消息（上次进程重启丢了在途任务）。
+    from .run_manager import RunManager
+    run_manager = RunManager()
+    app.state.run_manager = run_manager
+    try:
+        n = store.reconcile_streaming()
+        if n:
+            logging.getLogger("app").info("启动对账：%d 条残留生成中消息标为中断", n)
+    except Exception:  # 对账失败不应阻断启动
+        pass
+
+    @app.on_event("shutdown")
+    async def _close_runs() -> None:
+        await run_manager.close()
+
     app.include_router(make_auth_router(auth))
     app.include_router(make_conversations_router(store, harness, attachment_store))
     app.include_router(make_chat_router(harness, store, config,
                                         question_store=question_store, wrong_store=wrong_store,
-                                        verifier=verifier, attachment_store=attachment_store))
+                                        verifier=verifier, attachment_store=attachment_store,
+                                        run_manager=run_manager))
     app.include_router(make_documents_router(service, doc_store, config))
     app.include_router(make_attachments_router(attachment_store, store, config))
 

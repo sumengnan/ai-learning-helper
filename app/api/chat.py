@@ -72,8 +72,13 @@ class _Decision(BaseModel):
 
 
 def make_chat_router(harness, store, config, question_store=None, wrong_store=None,
-                     verifier=None, attachment_store=None) -> APIRouter:
+                     verifier=None, attachment_store=None, run_manager=None) -> APIRouter:
     router = APIRouter()
+    # 断点续传：一轮生成跑成脱离请求的后台任务，事件走 RunManager 内存总线（见 app/run_manager.py）。
+    # 未注入时退化为每路由独立实例（测试/无续传场景），行为仍正确、只是跨请求接不上。
+    if run_manager is None:
+        from ..run_manager import RunManager
+        run_manager = RunManager()
 
     # 分层上下文：full（默认）时不构造摘要/检索依赖，行为与历史一致。
     _strategy = getattr(config, "context_strategy", "full")
@@ -229,7 +234,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                                     "status": ev.status, "key": ev.key})
                     # 交付门下缓冲终态事件（不转发）；直通模式转发全部
                     if passthrough or not isinstance(ev, (TextDelta, RunFinished, RunError)):
-                        yield _sse(ev)
+                        yield ev
             finally:
                 if not task.done():
                     task.cancel()
@@ -238,17 +243,28 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 except (asyncio.CancelledError, Exception):
                     pass
 
-        async def gen():
+        async def gen(turn_run_id: str):
+            """产出 Event 对象的生成器，由 RunManager 后台驱动（不随请求取消）。
+            结束时按 turn_run_id 把 streaming 占位消息 UPDATE 为最终态。"""
             steps: list[dict] = []       # 工具调用轨迹（落库供 UI 还原）
             progress: list[dict] = []    # 沙箱/子代理/校验进度（落库）
             question = req.message
             delivered = None
+            errored = False
+            parts: list[str] = []        # 累积客户端面 TextDelta，供 stop/重启保留已生成部分
+
+            def _acc(ev):
+                if isinstance(ev, TextDelta):
+                    parts.append(ev.text)
+                    if len(parts) % 25 == 0:   # 去抖 flush：仅为服务重启后能看到断点前部分
+                        store.flush_partial(req.conversation_id, turn_run_id, "".join(parts))
+                return ev
 
             def _emit_verify(text, status=None, key=None):
                 ev = Progress("verify", text, status=status, key=key)
                 progress.append({"scope": ev.scope, "text": ev.text,
                                  "status": ev.status, "key": ev.key})
-                return _sse(ev)
+                return ev
 
             try:
                 if not gate_on:
@@ -258,78 +274,128 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     run_id_a = uuid4().hex
                     store.add_run(req.conversation_id, run_id_a)
                     async for s in _drain(_new_loop(run_id_a), run_id_a, model_message, True, collect):
-                        yield s
+                        yield _acc(s)
                     delivered = collect["final"] or (
                         "（本轮未能完成，请重试）" if collect["error"] else "（本轮未完成）")
-                    return
+                    errored = collect["final"] is None
+                else:
+                    # 交付门：缓冲 → 校验 → 不过则回灌重答，最多 answer_gate_max_retries 次
+                    corrective = None
+                    max_attempts = config.answer_gate_max_retries + 1
+                    for attempt in range(max_attempts):
+                        msg = model_message if corrective is None else corrective
+                        collect = {"final": None, "error": None, "steps": [],
+                                   "grounding": [], "progress": progress}
+                        run_id_a = uuid4().hex
+                        store.add_run(req.conversation_id, run_id_a)
+                        async for s in _drain(_new_loop(run_id_a), run_id_a, msg, False, collect):
+                            yield s
+                        steps.extend(collect["steps"])
+                        draft = (collect["final"] or "").strip()
 
-                # 交付门：缓冲 → 校验 → 不过则回灌重答，最多 answer_gate_max_retries 次
-                corrective = None
-                max_attempts = config.answer_gate_max_retries + 1
-                for attempt in range(max_attempts):
-                    msg = model_message if corrective is None else corrective
-                    collect = {"final": None, "error": None, "steps": [],
-                               "grounding": [], "progress": progress}
-                    run_id_a = uuid4().hex
-                    store.add_run(req.conversation_id, run_id_a)
-                    async for s in _drain(_new_loop(run_id_a), run_id_a, msg, False, collect):
-                        yield s
-                    steps.extend(collect["steps"])
-                    draft = (collect["final"] or "").strip()
+                        ekey = uuid4().hex
+                        yield _emit_verify("校验中…", status="running", key=ekey)
+                        if not draft:
+                            verdict = Verdict(ok=False, failed=["empty"],
+                                              critique=collect["error"] or "本轮未产出答案",
+                                              summary="未产出答案")
+                        else:
+                            stoken = set_sandbox_conv(req.conversation_id)
+                            try:
+                                verdict = await verifier.verify(
+                                    question, draft, collect["grounding"], registry)
+                            finally:
+                                reset_sandbox_conv(stoken)
 
-                    ekey = uuid4().hex
-                    yield _emit_verify("校验中…", status="running", key=ekey)
-                    if not draft:
-                        verdict = Verdict(ok=False, failed=["empty"],
-                                          critique=collect["error"] or "本轮未产出答案",
-                                          summary="未产出答案")
-                    else:
-                        # 校验期的代码执行需要会话沙箱上下文
-                        stoken = set_sandbox_conv(req.conversation_id)
-                        try:
-                            verdict = await verifier.verify(
-                                question, draft, collect["grounding"], registry)
-                        finally:
-                            reset_sandbox_conv(stoken)
+                        if verdict.ok:
+                            yield _emit_verify("校验通过", status="ok", key=ekey)
+                            delivered = draft
+                            break
+                        yield _emit_verify(f"未通过（{verdict.summary}）", status="error", key=ekey)
+                        if attempt == max_attempts - 1:      # 用尽次数 → 降级交付
+                            delivered = draft or "（本轮未完成）"
+                            errored = not draft
+                            if verdict.summary:
+                                delivered = (f"⚠️ 此回答未通过自动校验（{verdict.summary}），"
+                                             f"请谨慎参考。\n\n" + delivered)
+                            break
+                        yield _emit_verify("重答中…", status="running")
+                        corrective = (f"你上一版回答未通过自动校验。问题：{verdict.critique}。"
+                                      f"请针对性修正后，重新完整回答原问题：{question}")
 
-                    if verdict.ok:
-                        yield _emit_verify("校验通过", status="ok", key=ekey)
-                        delivered = draft
-                        break
-                    yield _emit_verify(f"未通过（{verdict.summary}）", status="error", key=ekey)
-                    if attempt == max_attempts - 1:      # 用尽次数 → 降级交付
-                        delivered = draft or "（本轮未完成）"
-                        if verdict.summary:
-                            delivered = (f"⚠️ 此回答未通过自动校验（{verdict.summary}），"
-                                         f"请谨慎参考。\n\n" + delivered)
-                        break
-                    yield _emit_verify("重答中…", status="running")
-                    corrective = (f"你上一版回答未通过自动校验。问题：{verdict.critique}。"
-                                  f"请针对性修正后，重新完整回答原问题：{question}")
+                    # 交付：终稿以 TextDelta 补发（保留打字机）+ 合成 RunFinished
+                    delivered = delivered or "（本轮未完成）"
+                    for chunk in _chunks(delivered):
+                        yield _acc(TextDelta(text=chunk))
+                    yield RunFinished(message=Message(role=Role.ASSISTANT, content=delivered))
 
-                # 交付：终稿以 TextDelta 补发（保留打字机）+ 合成 RunFinished
-                delivered = delivered or "（本轮未完成）"
-                for chunk in _chunks(delivered):
-                    yield _sse(TextDelta(text=chunk))
-                yield _sse(RunFinished(message=Message(role=Role.ASSISTANT, content=delivered)))
-            finally:
-                # 客户端断开或异常时仍落库，避免本轮用户消息丢失
-                store.append(req.conversation_id, [
-                    Message(role=Role.USER, content=req.message),
-                    Message(role=Role.ASSISTANT, content=delivered or "（本轮未完成）")],
-                    steps=steps or None, progress=progress or None,
-                    attachments=attachment_metas or None)
-                # L3：本轮结束后把对话文本写入向量库供后续语义召回（best-effort，不阻断）。
-                # seq=len(history) 即该轮 user 消息在历史中的前缀位置，用于窗口外过滤。
-                if _conv_memory is not None and delivered:
+                # 正常完成：UPDATE 占位消息为最终态
+                status = "error" if errored else "done"
+                final_content = delivered or "".join(parts) or "（本轮未完成）"
+                store.finish_turn(req.conversation_id, turn_run_id, final_content,
+                                  steps=steps or None, progress=progress or None, status=status)
+                # L3：把对话文本写入向量库供后续语义召回（best-effort，不阻断）
+                if _conv_memory is not None and not errored and final_content:
                     try:
                         await _conv_memory.record_turn(
                             req.conversation_id, len(history),
-                            f"用户：{req.message}\n助手：{delivered}")
+                            f"用户：{req.message}\n助手：{final_content}")
                     except Exception:
                         pass
+            except asyncio.CancelledError:
+                # stop：落已生成部分 + stopped，再放行取消
+                store.finish_turn(
+                    req.conversation_id, turn_run_id,
+                    delivered or "".join(parts) or "（已停止）",
+                    steps=steps or None, progress=progress or None, status="stopped")
+                raise
+            except Exception as e:  # noqa: BLE001  意外异常也要把占位落成 error，别永远 streaming
+                store.finish_turn(
+                    req.conversation_id, turn_run_id,
+                    delivered or "".join(parts) or "（本轮未能完成，请重试）",
+                    steps=steps or None, progress=progress or None, status="error")
+                yield RunError(error=str(e))
 
-        return StreamingResponse(gen(), media_type="text/event-stream")
+        turn_run_id = uuid4().hex
+        # 并发守卫：同一会话已有在途 run → 拒绝（前端 busy 守卫也拦）
+        if run_manager.active_run_for_conv(req.conversation_id):
+            raise HTTPException(status_code=409, detail="上一轮还在进行中，请稍候")
+        # 开头即落库：user 消息 + streaming 占位 assistant（带 turn_run_id），刷新后可据此接回
+        store.start_turn(req.conversation_id,
+                         Message(role=Role.USER, content=req.message),
+                         turn_run_id, attachment_metas or None)
+        store.add_run(req.conversation_id, turn_run_id)
+        await run_manager.start(turn_run_id, req.conversation_id, gen(turn_run_id))
+
+        async def sse_stream():
+            async for ev in run_manager.subscribe(turn_run_id):
+                yield _sse(ev)
+        # X-Run-Id 让前端拿到本轮句柄（供 stop / 刷新后接回）
+        return StreamingResponse(sse_stream(), media_type="text/event-stream",
+                                 headers={"X-Run-Id": turn_run_id})
+
+    @router.get("/api/chat/attach/{run_id}")
+    async def attach(run_id: str, user_id: str = Depends(current_user)):
+        """刷新后接回一个在途 run：回放已缓冲事件 + 实时后续，直到完成。"""
+        conv = store.conv_of_run(run_id)
+        if conv is None or not store.exists(user_id, conv):
+            raise HTTPException(status_code=404, detail="run 不存在")
+        if not run_manager.is_active(run_id):
+            # 已结束或服务重启丢失 → 让前端改为重载消息（库里已是最终态）
+            raise HTTPException(status_code=409, detail="run 已结束")
+
+        async def sse_stream():
+            async for ev in run_manager.subscribe(run_id):
+                yield _sse(ev)
+        return StreamingResponse(sse_stream(), media_type="text/event-stream")
+
+    @router.post("/api/chat/stop/{run_id}")
+    async def stop(run_id: str, user_id: str = Depends(current_user)):
+        """停止一个在途 run：取消后台任务，落已生成部分 + status=stopped。"""
+        conv = store.conv_of_run(run_id)
+        if conv is None or not store.exists(user_id, conv):
+            raise HTTPException(status_code=404, detail="run 不存在")
+        return {"ok": run_manager.cancel(run_id)}
 
     @router.post("/api/chat/{run_id}/decision")
     async def decision(run_id: str, body: _Decision, user_id: str = Depends(current_user)):

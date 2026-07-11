@@ -10,7 +10,7 @@ import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 import StopCircleIcon from "@mui/icons-material/StopCircle";
 import { motion } from "framer-motion";
 import type { ChatMessage } from "../types";
-import { streamChat, sendDecision, api } from "../api/client";
+import { streamChat, attachChat, stopRun, sendDecision, api } from "../api/client";
 import { AgentProgress } from "./AgentProgress";
 import { EmptyHint } from "./EmptyHint";
 import { ProgressBlock } from "./ProgressBlock";
@@ -58,12 +58,13 @@ function StreamingHint() {
   );
 }
 
-// 助手回复的终态状态行：完成 / 失败 / 已停止
-function ReplyStatus({ kind }: { kind: "done" | "error" | "stopped" }) {
+// 助手回复的终态状态行：完成 / 失败 / 已停止 / 已中断
+function ReplyStatus({ kind }: { kind: "done" | "error" | "stopped" | "interrupted" }) {
   const map = {
     done: { icon: <CheckCircleIcon sx={{ fontSize: 14 }} color="success" />, text: "已完成", color: "success.main" },
     error: { icon: <ErrorOutlineIcon sx={{ fontSize: 14 }} color="error" />, text: "回复失败", color: "error.main" },
     stopped: { icon: <StopCircleIcon sx={{ fontSize: 14 }} color="disabled" />, text: "已停止", color: "text.disabled" },
+    interrupted: { icon: <ErrorOutlineIcon sx={{ fontSize: 14 }} color="warning" />, text: "已中断（服务重启）", color: "warning.main" },
   }[kind];
   return (
     <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mt: 0.5 }}>
@@ -84,6 +85,8 @@ export function ChatView({ conversationId, initial, autoSend }:
   const busyRef = useRef(false);
   // 危险命令人工确认：run_id 来自 RunStarted 事件，用于拼回传 URL
   const runIdRef = useRef<string | null>(null);
+  // 本轮 turn 句柄（来自 X-Run-Id / 接回的 runId），用于 stop 与刷新后接回
+  const turnRunIdRef = useRef<string | null>(null);
   const [approval, setApproval] = useState<
     { approvalId: string; command: string; reason: string } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -178,6 +181,22 @@ export function ChatView({ conversationId, initial, autoSend }:
       return copy;
     });
 
+  // 把一个 SSE 事件应用到最后一条（助手）消息上；RunError 时调 markError。
+  const applyEvent = (e: any, markError: () => void) => {
+    if (e.type === "TextDelta") upd((a) => { a.content += e.data.text; });
+    else if (e.type === "ToolStarted") upd((a) => a.steps!.push({ tool: e.data.tool_call.name, args: e.data.tool_call.arguments }));
+    else if (e.type === "ToolFinished") upd((a) => {
+      const s = a.steps![a.steps!.length - 1];
+      if (s) { s.result = e.data.result.content; s.isError = e.data.result.is_error; }
+    });
+    else if (e.type === "ModelUsage") upd((a) => { a.usage = { tokens: e.data.usage.total, cost: e.data.cost_usd }; });
+    else if (e.type === "Progress") upd((a) => { (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text, status: e.data.status, key: e.data.key }); });
+    else if (e.type === "RunStarted") runIdRef.current = e.data.run_id;
+    else if (e.type === "ApprovalRequired") setApproval({ approvalId: e.data.approval_id, command: e.data.command, reason: e.data.reason });
+    else if (e.type === "ApprovalResolved") setApproval(null);
+    else if (e.type === "RunError") { upd((a) => { a.content += `\n[出错] ${e.data.error}`; }); markError(); }
+  };
+
   async function send(text?: string) {
     const msg = (text ?? input).trim();
     // 仅取上传成功的附件（排除上传中/失败）
@@ -196,23 +215,11 @@ export function ChatView({ conversationId, initial, autoSend }:
     setInput(""); setPending([]); setBusy(true); busyRef.current = true;
     const controller = new AbortController();
     abortRef.current = controller;
-    const onEvent = (e: any) => {
-      if (e.type === "TextDelta") upd((a) => { a.content += e.data.text; });
-      else if (e.type === "ToolStarted") upd((a) => a.steps!.push({ tool: e.data.tool_call.name, args: e.data.tool_call.arguments }));
-      else if (e.type === "ToolFinished") upd((a) => {
-        const s = a.steps![a.steps!.length - 1];
-        if (s) { s.result = e.data.result.content; s.isError = e.data.result.is_error; }
-      });
-      else if (e.type === "ModelUsage") upd((a) => { a.usage = { tokens: e.data.usage.total, cost: e.data.cost_usd }; });
-      else if (e.type === "Progress") upd((a) => { (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text, status: e.data.status, key: e.data.key }); });
-      else if (e.type === "RunStarted") runIdRef.current = e.data.run_id;
-      else if (e.type === "ApprovalRequired") setApproval({ approvalId: e.data.approval_id, command: e.data.command, reason: e.data.reason });
-      else if (e.type === "ApprovalResolved") setApproval(null);
-      else if (e.type === "RunError") upd((a) => { a.content += `\n[出错] ${e.data.error}`; outcome = "error"; });
-    };
+    const onEvent = (e: any) => applyEvent(e, () => { outcome = "error"; });
     try {
       await streamChat(conversationId, msg, onEvent, controller.signal, saveWrongRef.current,
-        attachments.map((a) => a.id));
+        attachments.map((a) => a.id),
+        (rid) => { turnRunIdRef.current = rid; upd((a) => { a.runId = rid; }); });
     } catch (err: any) {
       if (err?.name === "AbortError") outcome = "stopped";
       else { upd((a) => { a.content += `\n[连接失败] ${err}`; }); outcome = "error"; }
@@ -222,11 +229,58 @@ export function ChatView({ conversationId, initial, autoSend }:
     }
   }
 
-  // 停止本轮生成：中断 SSE fetch（AbortError 被 send() 静默处理），后端在客户端断开时
-  // 取消 loop 并保留已生成的部分回答落库；已流式到气泡的文本原样保留。
+  // 停止本轮生成：显式取消后端后台任务（断开已不再取消它）+ 断开本地流。
   function stop() {
+    const tid = turnRunIdRef.current;
+    if (tid) void stopRun(tid);
     abortRef.current?.abort();
   }
+
+  // 刷新/切换对话后接回一个在途 run：先清空该气泡（attach 会从头回放全部事件，避免与占位
+  // 里 flush 的部分文本重复），再回放+实时续流直到结束。
+  async function reattach(runId: string) {
+    if (busyRef.current) return;
+    turnRunIdRef.current = runId;
+    setBusy(true); busyRef.current = true;
+    upd((a) => { a.content = ""; a.steps = []; a.progress = undefined; });
+    let outcome: "done" | "error" | "stopped" = "done";
+    let reloaded = false;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const onEvent = (e: any) => applyEvent(e, () => { outcome = "error"; });
+    try {
+      await attachChat(runId, onEvent, controller.signal);
+    } catch (err: any) {
+      if (err?.name === "RunEnded") {
+        // run 已结束（宽限期外/服务重启）→ 重载该消息的最终态
+        reloaded = true;
+        try {
+          const msgs = await api.messages(conversationId);
+          const fin = [...msgs].reverse().find((m) => m.run_id === runId && m.role === "assistant");
+          if (fin) upd((a) => {
+            a.content = fin.content;
+            a.status = (fin.status as ChatMessage["status"]) ?? "done";
+            a.steps = fin.steps?.map((s) => ({ tool: s.tool, args: s.args, result: s.result, isError: s.is_error })) ?? a.steps;
+            a.progress = fin.progress ?? a.progress;
+          });
+        } catch { /* 重载失败保持原样 */ }
+      } else if (err?.name === "AbortError") outcome = "stopped";
+      else outcome = "error";
+    } finally {
+      if (!reloaded) upd((a) => { a.status = outcome; });
+      setBusy(false); busyRef.current = false;
+    }
+  }
+
+  // 断点续传：挂载（刷新/切换对话，App 用 key=activeId remount）时，若最后一条助手消息仍在
+  // 生成中（streaming）→ 自动接回那个在途 run，续上流式而非停留在"未完成"。
+  useEffect(() => {
+    const last = initial[initial.length - 1];
+    if (last && last.role === "assistant" && last.status === "streaming" && last.runId) {
+      void reattach(last.runId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 空态默认问题：挂载时若带 autoSend 则自动发问（key=对话 id，每对话仅触发一次）
   useEffect(() => {
@@ -326,6 +380,7 @@ export function ChatView({ conversationId, initial, autoSend }:
                 if (m.status === "done") return <ReplyStatus kind="done" />;
                 if (m.status === "error") return <ReplyStatus kind="error" />;
                 if (m.status === "stopped") return <ReplyStatus kind="stopped" />;
+                if (m.status === "interrupted") return <ReplyStatus kind="interrupted" />;
                 return null;
               })()}
               {showTools && m.usage && (
