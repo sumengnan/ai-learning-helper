@@ -142,6 +142,9 @@ export const api = {
     attachments?: Attachment[] | null;
     run_id?: string | null;
     status?: string | null;
+    tokens?: number | null;
+    cost?: number | null;
+    elapsed_ms?: number | null;
   }[]> =>
     authFetch(`/api/conversations/${id}/messages`).then((r) => r.json()),
   remove: (id: string): Promise<void> =>

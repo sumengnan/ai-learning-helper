@@ -146,6 +146,17 @@ describe("ChatView", () => {
     expect(screen.getByText("tokens")).toBeTruthy();
   });
 
+  it("刷新还原：已完成的历史消息带持久化的耗时与 tokens 时照常显示", () => {
+    render(<ChatView conversationId="c1" initial={[
+      { role: "user", content: "问题" },
+      { role: "assistant", content: "答案", status: "done",
+        usage: { tokens: 1234, cost: 0.02 }, elapsedMs: 65_000 },
+    ]} />);
+    expect(screen.getByText("已完成")).toBeTruthy();
+    expect(screen.getByText("1 分 5 秒")).toBeTruthy();   // 耗时来自持久化
+    expect(screen.getByText("tokens")).toBeTruthy();
+  });
+
   it("生成中显示「停止」按钮，点击后中断并恢复「发送」", async () => {
     vi.mocked(streamChat).mockImplementationOnce(
       (_cid: string, _msg: string, _onEvent: (e: any) => void, signal?: AbortSignal) =>

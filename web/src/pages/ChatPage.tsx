@@ -43,6 +43,9 @@ export function ChatPage() {
       attachments: m.attachments ?? undefined,
       status: (m.status as "streaming" | "done" | "error" | "stopped" | "interrupted") ?? undefined,
       runId: m.run_id ?? undefined,   // 供刷新后接回在途生成
+      // 刷新后仍还原用量与耗时
+      usage: m.tokens != null ? { tokens: m.tokens, cost: m.cost ?? null } : undefined,
+      elapsedMs: m.elapsed_ms ?? undefined,
     })));
     setActiveId(id);
   }

@@ -45,6 +45,28 @@ def test_delete_clears_runs_but_not_other_conversations():
     assert s.run_ids("u1", c2) == ["r2"]         # 其他会话不受影响
 
 
+def test_finish_turn_persists_usage_and_elapsed():
+    s = ConversationStore(":memory:")
+    cid = s.create("u1", "计时")
+    s.start_turn(cid, Message(role=Role.USER, content="问题"), run_id="R1")
+    s.finish_turn(cid, "R1", "答案", status="done",
+                  tokens=1234, cost=0.02, elapsed_ms=65000)
+    ui = s.ui_messages(cid)
+    asst = [m for m in ui if m["role"] == "assistant"][-1]
+    assert asst["tokens"] == 1234
+    assert asst["cost"] == 0.02
+    assert asst["elapsed_ms"] == 65000
+
+
+def test_finish_turn_defaults_meta_to_none():
+    s = ConversationStore(":memory:")
+    cid = s.create("u1", "无用量")
+    s.start_turn(cid, Message(role=Role.USER, content="q"), run_id="R2")
+    s.finish_turn(cid, "R2", "a", status="done")   # 不传用量/耗时
+    asst = [m for m in s.ui_messages(cid) if m["role"] == "assistant"][-1]
+    assert asst["tokens"] is None and asst["cost"] is None and asst["elapsed_ms"] is None
+
+
 def test_append_steps_persist_for_ui_only():
     s = ConversationStore(":memory:")
     cid = s.create("u1")

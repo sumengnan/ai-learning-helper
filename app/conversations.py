@@ -111,17 +111,19 @@ class ConversationStore:
 
     def finish_turn(self, conv_id: str, run_id: str, content: str,
                     steps: list[dict] | None = None, progress: list[dict] | None = None,
-                    status: str = "done", sources: list[dict] | None = None) -> None:
+                    status: str = "done", sources: list[dict] | None = None,
+                    tokens: int | None = None, cost: float | None = None,
+                    elapsed_ms: int | None = None) -> None:
         """一轮结束：按 run_id 把 streaming 占位 assistant UPDATE 为最终内容 + steps/progress/
-        sources（参考来源）+ 状态。"""
+        sources（参考来源）+ 状态 + 用量（tokens/cost）+ 耗时（elapsed_ms）——刷新后仍能还原。"""
         self._conn.execute(
             "UPDATE conversation_messages SET content=?, steps=?, progress=?, sources=?, "
-            "status=? WHERE conv_id=? AND run_id=? AND role='assistant'",
+            "status=?, tokens=?, cost=?, elapsed_ms=? WHERE conv_id=? AND run_id=? AND role='assistant'",
             (content,
              json.dumps(steps, ensure_ascii=False) if steps else None,
              json.dumps(progress, ensure_ascii=False) if progress else None,
              json.dumps(sources, ensure_ascii=False) if sources else None,
-             status, conv_id, run_id))
+             status, tokens, cost, elapsed_ms, conv_id, run_id))
         self._conn.commit()
 
     def flush_partial(self, conv_id: str, run_id: str, content: str) -> None:
@@ -151,15 +153,18 @@ class ConversationStore:
         """供前端渲染：role + content + steps（工具调用轨迹）+ progress（沙箱/子代理进度）
         + attachments（用户上传附件元数据）+ run_id + status（续传用）。"""
         rows = self._conn.execute(
-            "SELECT role, content, steps, progress, sources, attachments, run_id, status "
+            "SELECT role, content, steps, progress, sources, attachments, run_id, status, "
+            "tokens, cost, elapsed_ms "
             "FROM conversation_messages WHERE conv_id = ? ORDER BY seq", (conv_id,)).fetchall()
         return [{"role": role, "content": content,
                  "steps": json.loads(steps) if steps else None,
                  "progress": json.loads(progress) if progress else None,
                  "sources": json.loads(sources) if sources else None,
                  "attachments": json.loads(attachments) if attachments else None,
-                 "run_id": run_id, "status": status}
-                for role, content, steps, progress, sources, attachments, run_id, status in rows]
+                 "run_id": run_id, "status": status,
+                 "tokens": tokens, "cost": cost, "elapsed_ms": elapsed_ms}
+                for role, content, steps, progress, sources, attachments, run_id, status,
+                tokens, cost, elapsed_ms in rows]
 
     def rename(self, user_id: str, conv_id: str, title: str) -> bool:
         cur = self._conn.execute(
