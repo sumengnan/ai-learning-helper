@@ -61,16 +61,18 @@ def build_harness(config) -> Harness:
         sandbox_manager = SandboxManager(config)
         sandbox = SandboxProxy(sandbox_manager)
 
-    # http_request：有沙箱时在容器内用 curl 出网，否则回退到宿主 httpx
+    # http_request：有沙箱时在容器内用 curl 出网，否则回退到宿主 httpx。
+    # 保留实例引用，稍后浏览器就绪时挂上「抓取失败/被防抓自动改用浏览器」的兜底。
     if sandbox is not None:
         from harness.tools.builtins.sandbox_http_tool import SandboxedHttpRequestTool
-        _reg(SandboxedHttpRequestTool(
+        http_tool = SandboxedHttpRequestTool(
             sandbox, config.http_allowed_domains, config.http_block_private,
-            config.http_timeout, config.http_max_response_bytes, config.http_max_redirects))
+            config.http_timeout, config.http_max_response_bytes, config.http_max_redirects)
     else:
-        _reg(HttpRequestTool(
+        http_tool = HttpRequestTool(
             config.http_allowed_domains, config.http_block_private, config.http_timeout,
-            config.http_max_response_bytes, config.http_max_redirects))
+            config.http_max_response_bytes, config.http_max_redirects)
+    _reg(http_tool)
 
     # 记忆（有 api_key 即可注册；知识库为空时检索返回空，不报错）
     if config.api_key or config.embedding_api_key:
@@ -138,11 +140,15 @@ def build_harness(config) -> Harness:
             browser_sub_factory = lambda: _docker_for(   # noqa: E731
                 config, config.browser_sandbox_image, labels=_blabels,
                 network=config.sandbox_network, display_name="浏览器子沙箱")
-        _reg(BrowseTool(
+        browse_tool = BrowseTool(
             build_browser(config, sandbox, sub_factory=browser_sub_factory),
             config.http_allowed_domains, config.http_block_private,
             config.browser_nav_timeout, config.browser_wait_until, config.browser_output_max_chars,
-            sandbox=sandbox))   # 有沙箱则 DNS 解析下沉到容器内（与 http_request 对称）
+            sandbox=sandbox)   # 有沙箱则 DNS 解析下沉到容器内（与 http_request 对称）
+        _reg(browse_tool)
+        # 自动兜底：http_request 抓取出错或疑似被防抓/需 JS 时，改用浏览器抓取同一 URL
+        http_tool.set_browser_fallback(
+            lambda url: browse_tool.run(BrowseTool.Params(url=url)))
 
     if sandbox is not None:
         from harness.tools.builtins.fs_tools import WriteFileTool, ReadFileTool, ListFilesTool

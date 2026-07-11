@@ -95,3 +95,81 @@ async def test_redirect_to_internal_blocked():
     r = await ex.execute(ToolCall(id="c1", name="http_request",
                                   arguments={"url": "http://example.com/"}))
     assert r.is_error is True   # 第二跳内网被策略拦截
+
+
+# ---------- 浏览器自动兜底 ----------
+
+from harness.tools.builtins.http_tool import looks_blocked  # noqa: E402
+
+
+def test_looks_blocked_heuristics():
+    assert looks_blocked(403, "") is True
+    assert looks_blocked(429, "") is True
+    assert looks_blocked(200, "Just a moment... Cloudflare") is True
+    assert looks_blocked(200, "请开启JavaScript后重试") is True
+    assert looks_blocked(200, "正常正文内容") is False
+
+
+def _fallback(record, text="浏览器抓到的正文", fail=False):
+    async def fn(url):
+        record.append(url)
+        if fail:
+            raise RuntimeError("ModuleNotFoundError: No module named 'playwright'")
+        return text
+    return fn
+
+
+async def test_fallback_on_network_error():
+    def handler(req):
+        raise httpx.ConnectError("boom")
+    calls = []
+    tool = HttpRequestTool([], True, 5.0, 1000, 3, client_factory=_factory(handler),
+                           resolve=_public, browser_fallback=_fallback(calls))
+    out = await tool.run(tool.Params(url="http://example.com/"))
+    assert calls == ["http://example.com/"]
+    assert "已自动改用浏览器抓取" in out and "浏览器抓到的正文" in out
+
+
+async def test_fallback_on_blocked_status():
+    def handler(req):
+        return httpx.Response(403, text="Access Denied")
+    calls = []
+    tool = HttpRequestTool([], True, 5.0, 2000, 3, client_factory=_factory(handler),
+                           resolve=_public, browser_fallback=_fallback(calls))
+    out = await tool.run(tool.Params(url="http://example.com/"))
+    assert calls and "浏览器抓到的正文" in out
+
+
+async def test_policy_error_does_not_fallback():
+    def handler(req):
+        return httpx.Response(200, text="secret")
+    calls = []
+    tool = HttpRequestTool([], True, 5.0, 1000, 3, client_factory=_factory(handler),
+                           resolve=lambda h: ["127.0.0.1"], browser_fallback=_fallback(calls))
+    reg = ToolRegistry(); reg.register(tool)
+    r = await ToolExecutor(reg).execute(
+        ToolCall(id="c1", name="http_request", arguments={"url": "http://internal/"}))
+    assert r.is_error is True
+    assert calls == []          # 安全拦截不触发浏览器兜底
+
+
+async def test_blocked_but_fallback_fails_returns_http_result():
+    def handler(req):
+        return httpx.Response(403, text="Access Denied")
+    calls = []
+    tool = HttpRequestTool([], True, 5.0, 2000, 3, client_factory=_factory(handler),
+                           resolve=_public, browser_fallback=_fallback(calls, fail=True))
+    out = await tool.run(tool.Params(url="http://example.com/"))
+    assert calls                # 尝试过兜底
+    assert "403" in out and "Access Denied" in out   # 兜底失败 → 退回 http 原结果
+
+
+async def test_normal_page_no_fallback():
+    def handler(req):
+        return httpx.Response(200, text="<html><body>正文很充实的内容</body></html>")
+    calls = []
+    tool = HttpRequestTool([], True, 5.0, 2000, 3, client_factory=_factory(handler),
+                           resolve=_public, browser_fallback=_fallback(calls))
+    out = await tool.run(tool.Params(url="http://example.com/"))
+    assert calls == []          # 正常页面不触发兜底
+    assert "200" in out
