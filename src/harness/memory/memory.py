@@ -50,6 +50,7 @@ class Memory:
         owner_id, kind = collection_to_scope(collection)
         hits = await self._retriever.retrieve(
             query, MemoryFilter(owner_id=owner_id, kind=kind), k)
+        # distance = 1 - 加权融合分（score 可 >1 故 distance 可能为负）；仅保留“越小越相关”的序，非 cosine 距离
         return [MemoryHit(text=h.record.text, collection=collection,
                           metadata=h.record.metadata, distance=1.0 - h.score)
                 for h in hits]

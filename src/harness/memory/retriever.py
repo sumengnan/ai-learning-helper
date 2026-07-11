@@ -104,11 +104,12 @@ class Retriever:
     async def retrieve(self, query_text: str, filters: MemoryFilter, k: int,
                        *, config: RetrievalConfig | None = None) -> list[ScoredHit]:
         cfg = config or self._config
+        pool = max(k, cfg.candidate_pool)
         query_vec = (await self._embedder.embed([query_text]))[0]
         vec_hits = self._backend.vector_search(
-            query_vec, filters=filters, k=cfg.candidate_pool)
+            query_vec, filters=filters, k=pool)
         kw_hits = (self._backend.keyword_search(
-            query_text, filters=filters, k=cfg.candidate_pool) if cfg.use_keyword else [])
+            query_text, filters=filters, k=pool) if cfg.use_keyword else [])
 
         records: dict[str, MemoryRecord] = {}
         for h in vec_hits:

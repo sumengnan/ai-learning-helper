@@ -134,8 +134,9 @@ class SqliteVecBackend:
                        filters: MemoryFilter, k: int) -> list[MemoryHit]:
         if not query_text or not query_text.strip():
             return []
+        match_query = '"' + query_text.replace('"', '""') + '"'   # 作为短语匹配，避开 FTS5 特殊字符语法
         conds = ["memory_fts MATCH ?", "r.owner_id = ?"]
-        params: list = [query_text, filters.owner_id]
+        params: list = [match_query, filters.owner_id]
         if filters.kind is not None:
             conds.append("r.kind = ?"); params.append(filters.kind)
         if filters.mem_type is not None:

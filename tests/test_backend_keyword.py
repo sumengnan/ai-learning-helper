@@ -61,3 +61,19 @@ def test_get_embeddings_by_id():
     embs = b.get_embeddings(["a", "c", "missing"])
     assert set(embs.keys()) == {"a", "c"}
     assert embs["a"] == [1.0, 0.0, 0.0]
+
+
+def test_keyword_punctuation_queries():
+    b = _b()
+    b.upsert([_rec("u1", "k", "C++ 是一门系统编程语言", [1.0, 0.0, 0.0]),
+              _rec("u1", "k", "foo-bar 是占位命名", [0.0, 1.0, 0.0]),
+              _rec("u1", "k", "冒号语法 a:b 的示例", [0.0, 0.0, 1.0])])
+    assert [h.record.text for h in b.keyword_search("C++", filters=MemoryFilter(owner_id="u1"), k=5)] == ["C++ 是一门系统编程语言"]
+    assert [h.record.text for h in b.keyword_search("foo-bar", filters=MemoryFilter(owner_id="u1"), k=5)] == ["foo-bar 是占位命名"]
+    assert [h.record.text for h in b.keyword_search("a:b", filters=MemoryFilter(owner_id="u1"), k=5)] == ["冒号语法 a:b 的示例"]
+
+
+def test_keyword_cjk_still_works_after_escape():
+    b = _b()
+    b.upsert([_rec("u1", "k", "快速排序算法讲解", [1.0, 0.0, 0.0])])
+    assert [h.record.text for h in b.keyword_search("排序算法", filters=MemoryFilter(owner_id="u1"), k=5)] == ["快速排序算法讲解"]

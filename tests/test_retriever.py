@@ -85,3 +85,16 @@ async def test_reranker_is_applied(mock_embedder):
     rev = [h.record.id for h in await _retriever(b, emb, cfg, ReverseReranker()).retrieve(
         "aaa bbb", MemoryFilter(owner_id="u1"), k=2)]
     assert rev == list(reversed(base))
+
+
+async def test_k_larger_than_pool_not_truncated(mock_embedder):
+    emb = mock_embedder(dimension=64)
+    b = SqliteVecBackend(":memory:", dimension=64)
+    for i in range(30):
+        v = (await emb.embed([f"item number {i}"]))[0]
+        b.upsert([_rec(f"item number {i}", v, f"r{i}")])
+    cfg = RetrievalConfig(candidate_pool=20, use_keyword=False, use_mmr=False,
+                          w_recency=0.0, w_importance=0.0)
+    hits = await _retriever(b, emb, cfg).retrieve(
+        "item number", MemoryFilter(owner_id="u1"), k=25)
+    assert len(hits) == 25          # 不被 candidate_pool=20 截断
