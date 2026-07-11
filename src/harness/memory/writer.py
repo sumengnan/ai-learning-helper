@@ -68,6 +68,45 @@ def _parse_facts(raw: str) -> list[ExtractedFact]:
     return facts
 
 
+_RECONCILE_SYS = (
+    "你在维护一个记忆库。给你【新事实】列表和与之相关的【已有记忆】。"
+    "对每个新事实，决定操作并输出 JSON 数组，元素："
+    "{\"op\": \"ADD\"|\"NOOP\"|\"REPLACE\", \"fact_index\": 新事实下标, "
+    "\"supersede_ids\": 该事实要作废的已有记忆 id 列表（仅 REPLACE）}。"
+    "规则：与某条已有记忆语义等同 → NOOP；是同一实体的更新、或与某条已有记忆矛盾 → "
+    "REPLACE 并在 supersede_ids 填被取代的已有记忆 id；全新信息 → ADD。只输出 JSON。"
+)
+
+
+def _parse_ops(raw: str, facts: list[ExtractedFact]) -> list[MemoryOp]:
+    try:
+        data = json.loads(_strip_fence(raw))
+        if not isinstance(data, list):
+            raise ValueError("not a list")
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return [MemoryOp("ADD", f) for f in facts]
+    ops: list[MemoryOp] = []
+    covered: set[int] = set()
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        op = item.get("op")
+        idx = item.get("fact_index")
+        if op not in ("ADD", "NOOP", "REPLACE"):
+            continue
+        if not isinstance(idx, int) or not (0 <= idx < len(facts)):
+            continue
+        covered.add(idx)
+        sup = item.get("supersede_ids", []) if op == "REPLACE" else []
+        if not isinstance(sup, list):
+            sup = []
+        ops.append(MemoryOp(op, facts[idx], [str(x) for x in sup]))
+    for i, f in enumerate(facts):
+        if i not in covered:
+            ops.append(MemoryOp("ADD", f))
+    return ops
+
+
 class MemoryWriter:
     """LLM 驱动的智能写入：提炼 → 找候选 → 调和 → 应用。"""
 
@@ -86,3 +125,33 @@ class MemoryWriter:
             log.warning("memory extract LLM failed: %s", e)
             return []
         return _parse_facts(raw)
+
+    async def _gather_candidates(self, owner_id: str, kind: str,
+                                 facts: list[ExtractedFact]) -> list[MemoryRecord]:
+        from .record import MemoryFilter
+        cand: dict[str, MemoryRecord] = {}
+        for f in facts:
+            if f.entity_key:
+                for r in self._backend.list_by_entity(owner_id, kind, f.entity_key):
+                    cand[r.id] = r
+            hits = await self._retriever.retrieve(
+                f.text, MemoryFilter(owner_id=owner_id, kind=kind), self._candidate_k)
+            for h in hits:
+                cand[h.record.id] = h.record
+        return list(cand.values())
+
+    async def _reconcile(self, facts: list[ExtractedFact],
+                         candidates: list[MemoryRecord]) -> list[MemoryOp]:
+        if not candidates:
+            return [MemoryOp("ADD", f) for f in facts]
+        payload = json.dumps({
+            "new_facts": [{"fact_index": i, "text": f.text} for i, f in enumerate(facts)],
+            "existing_memories": [{"id": c.id, "text": c.text, "entity_key": c.entity_key}
+                                  for c in candidates],
+        }, ensure_ascii=False)
+        try:
+            raw = await self._complete(_RECONCILE_SYS, payload)
+        except Exception as e:
+            log.warning("memory reconcile LLM failed: %s", e)
+            return [MemoryOp("ADD", f) for f in facts]
+        return _parse_ops(raw, facts)
