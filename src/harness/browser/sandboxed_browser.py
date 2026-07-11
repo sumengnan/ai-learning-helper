@@ -29,13 +29,16 @@ class SandboxedBrowser:
 
     def __init__(self, sandbox, allowed_domains, block_private: bool = True,
                  user_agent: str = "", launch_args=None,
-                 timeout_margin: float = 10.0) -> None:
+                 timeout_margin: float = 10.0, sub_factory=None) -> None:
         self._sandbox = sandbox
         self._allowed = list(allowed_domains)
         self._block_private = block_private
         self._user_agent = user_agent
         self._launch_args = list(launch_args) if launch_args else list(DEFAULT_LAUNCH_ARGS)
         self._timeout_margin = timeout_margin
+        # 提供则每次抓取起一次性「浏览器子沙箱」（专用 playwright 镜像），基础容器可保持轻量；
+        # 为 None 时复用基础容器（需基础镜像自带 playwright）。
+        self._sub_factory = sub_factory
         self._provisioned = False
 
     async def start(self) -> None:
@@ -44,32 +47,42 @@ class SandboxedBrowser:
     async def close(self) -> None:
         pass   # 共享容器由其属主（assembly/sandbox）关闭
 
-    async def _provision(self) -> None:
-        if self._provisioned:
-            return
-        await self._sandbox.write_file("_browse_runner.py", _RUNNER_SRC)
-        await self._sandbox.write_file("_policy.py", _POLICY_SRC)
-        self._provisioned = True
+    async def _provision_into(self, box) -> None:
+        await box.write_file("_browse_runner.py", _RUNNER_SRC)
+        await box.write_file("_policy.py", _POLICY_SRC)
 
-    async def fetch(self, url: str, timeout: float, wait_until: str,
-                    url_validator=None) -> PageResult:
-        await self._provision()
-        await self._sandbox.write_file("_browse_input.json", json.dumps({
+    async def _fetch_in(self, box, url: str, timeout: float, wait_until: str) -> PageResult:
+        await box.write_file("_browse_input.json", json.dumps({
             "url": url, "timeout": timeout, "wait_until": wait_until,
             "allowed_domains": self._allowed, "block_private": self._block_private,
             "user_agent": self._user_agent, "launch_args": self._launch_args,
         }))
-        res = await self._sandbox.exec(
-            ["python3", "_browse_runner.py"], timeout + self._timeout_margin)
-
+        res = await box.exec(["python3", "_browse_runner.py"], timeout + self._timeout_margin)
         out = None
         try:
-            out = json.loads(await self._sandbox.read_file("_browse_output.json"))
+            out = json.loads(await box.read_file("_browse_output.json"))
         except Exception:
             out = None   # runner 崩溃前未落盘 → 下面用 stderr 兜底
         if not out or not out.get("ok"):
-            err = out.get("error") if out else None
-            raise RuntimeError(
-                err or res.stderr.strip() or f"browse 失败（exit {res.exit_code}）")
-        return PageResult(final_url=out["final_url"], title=out["title"],
-                          html=out["html"])
+            err = out.get("error") if out else (res.stderr.strip() or f"browse 失败（exit {res.exit_code}）")
+            if "playwright" in err.lower():
+                err += ("；浏览器沙箱镜像缺少 Playwright——请设 HARNESS_BROWSER_SANDBOX_IMAGE "
+                        "为含 Playwright+Chromium+curl 的镜像，或让基础镜像自带 playwright")
+            raise RuntimeError(err)
+        return PageResult(final_url=out["final_url"], title=out["title"], html=out["html"])
+
+    async def fetch(self, url: str, timeout: float, wait_until: str,
+                    url_validator=None) -> PageResult:
+        if self._sub_factory is not None:
+            box = self._sub_factory()          # 一次性浏览器子沙箱（专用 playwright 镜像）
+            await box.start()
+            try:
+                await self._provision_into(box)
+                return await self._fetch_in(box, url, timeout, wait_until)
+            finally:
+                await box.close()              # 用完即销毁
+        # 复用会话基础容器（需基础镜像自带 playwright）
+        if not self._provisioned:
+            await self._provision_into(self._sandbox)
+            self._provisioned = True
+        return await self._fetch_in(self._sandbox, url, timeout, wait_until)

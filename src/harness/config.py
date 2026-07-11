@@ -86,6 +86,11 @@ class HarnessConfig(BaseSettings):
     browser_wait_until: str = "networkidle"   # load | domcontentloaded | networkidle
     browser_output_max_chars: int = 8000
     browser_user_agent: str = ""
+    # 浏览器专用沙箱镜像（须含 Playwright+Chromium+curl，如 mcr playwright 镜像 + curl）。
+    # 配了则每次抓取在该镜像的一次性子沙箱内跑 Chromium，基础镜像可保持轻量（如 python:3.12
+    # 无需装 playwright）；留空则复用基础容器（需基础镜像自带 playwright，否则 browse 会报
+    # ModuleNotFoundError: No module named 'playwright'）。
+    browser_sandbox_image: str = ""
     # 在沙箱容器内跑无头 Chromium 时的启动参数（cap_drop=ALL/非 root/小 shm 下必备）
     sandbox_browser_launch_args: list = [
         "--no-sandbox", "--disable-setuid-sandbox",

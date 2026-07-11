@@ -91,8 +91,18 @@ def build_harness(config) -> Harness:
     if config.enable_browser:
         from harness.browser.factory import build_browser
         from harness.tools.builtins.browse_tool import BrowseTool
+        # 配了浏览器专用镜像 → 每次抓取起一次性 playwright 子沙箱（基础镜像可保持轻量）
+        browser_sub_factory = None
+        if sandbox is not None and config.browser_sandbox_image:
+            from harness.sandbox.factory import _docker_for
+            from .sandbox_manager import _SANDBOX_LABEL
+            _blabels = {_SANDBOX_LABEL: "true", "role": "ephemeral-browser"}
+            browser_sub_factory = lambda: _docker_for(   # noqa: E731
+                config, config.browser_sandbox_image, labels=_blabels,
+                network=config.sandbox_network, display_name="浏览器子沙箱")
         _reg(BrowseTool(
-            build_browser(config, sandbox), config.http_allowed_domains, config.http_block_private,
+            build_browser(config, sandbox, sub_factory=browser_sub_factory),
+            config.http_allowed_domains, config.http_block_private,
             config.browser_nav_timeout, config.browser_wait_until, config.browser_output_max_chars,
             sandbox=sandbox))   # 有沙箱则 DNS 解析下沉到容器内（与 http_request 对称）
 

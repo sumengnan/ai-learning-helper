@@ -65,6 +65,41 @@ async def test_fetch_ships_runner_and_policy_verbatim():
     assert sb.writes["_policy.py"] == Path(policy_mod.__file__).read_text()
 
 
+class _CountingSandbox(FakeSandbox):
+    def __init__(self, output):
+        super().__init__(output)
+        self.started = 0
+        self.closed = 0
+
+    async def start(self):
+        self.started += 1
+
+    async def close(self):
+        self.closed += 1
+
+
+async def test_fetch_uses_ephemeral_browser_sub_when_factory_given():
+    # 配了浏览器子沙箱工厂 → 抓取在一次性子沙箱内进行，基础容器不参与
+    base = FakeSandbox(None)
+    sub = _CountingSandbox(_ok_output(title="子沙箱标题"))
+    br = SandboxedBrowser(base, allowed_domains=[], block_private=True,
+                          sub_factory=lambda: sub)
+    page = await br.fetch("https://example.com/a", timeout=5, wait_until="load")
+    assert page.title == "子沙箱标题"
+    assert sub.started == 1 and sub.closed == 1          # 一次性：起→用→销毁
+    assert "_browse_runner.py" in sub.writes             # runner 写进了子沙箱
+    assert base.writes == {} and base.exec_calls == []   # 基础容器未被用于抓取
+
+
+async def test_fetch_playwright_missing_gives_actionable_hint():
+    sb = FakeSandbox(json.dumps(
+        {"ok": False, "error": "ModuleNotFoundError: No module named 'playwright'"}))
+    br = SandboxedBrowser(sb, allowed_domains=[], block_private=True)
+    with pytest.raises(RuntimeError) as ei:
+        await br.fetch("https://example.com/a", timeout=5, wait_until="load")
+    assert "HARNESS_BROWSER_SANDBOX_IMAGE" in str(ei.value)
+
+
 async def test_fetch_writes_input_json_with_policy_params():
     sb = FakeSandbox(_ok_output())
     br = SandboxedBrowser(sb, allowed_domains=["example.com"], block_private=True,
