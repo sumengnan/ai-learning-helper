@@ -29,4 +29,20 @@ describe("PlanBlock", () => {
     expect(all[0]).toBe("重试：换沙箱");
     expect(all.slice(1)).toEqual(["查资料", "计算", "重试：换沙箱", "汇总"]);
   });
+
+  it("生成中：运行中的步骤显示进度圈", () => {
+    const snap = JSON.stringify([{ title: "计算中", status: "running" }]);
+    const { container } = render(<PlanBlock text={snap} live />);
+    expect(container.querySelector('[role="progressbar"]')).toBeTruthy();
+  });
+
+  it("用户停止后：运行中的步骤标『已取消』且不再转圈（issue 2）", () => {
+    const snap = JSON.stringify([
+      { title: "查资料", status: "done" },
+      { title: "计算中", status: "running" },
+    ]);
+    const { container } = render(<PlanBlock text={snap} live={false} stopped />);
+    expect(screen.getByText(/计算中（已取消）/)).toBeTruthy();
+    expect(container.querySelector('[role="progressbar"]')).toBeNull();
+  });
 });

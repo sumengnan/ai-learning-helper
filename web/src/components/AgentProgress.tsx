@@ -6,6 +6,7 @@ import { alpha } from "@mui/material/styles";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
+import StopCircleIcon from "@mui/icons-material/StopCircle";
 import BuildIcon from "@mui/icons-material/Build";
 import { CollapsibleBlock } from "./CollapsibleBlock";
 import { EllipsisText } from "./EllipsisText";
@@ -32,24 +33,44 @@ function ToolLabel({ name, sx, maxChars }: { name: string; sx?: object; maxChars
   );
 }
 
-export function AgentProgress({ steps }: { steps: NonNullable<ChatMessage["steps"]> }) {
+// 未完成步骤的图标：仅生成中(live)转圈；用户停止→灰色停止；其余终态→红叉（被打断，未完成）
+function pendingIcon(live: boolean, stopped: boolean, size: number) {
+  if (live) return <CircularProgress size={size} />;
+  if (stopped) return <StopCircleIcon sx={{ fontSize: size + 3 }} color="disabled" />;
+  return <CancelIcon sx={{ fontSize: size + 3 }} color="error" />;
+}
+
+// live=本条消息仍在生成；stopped=用户已停止本轮。停止后未完成的工具调用不再转圈，标「已取消」。
+export function AgentProgress({ steps, live = false, stopped = false }: {
+  steps: NonNullable<ChatMessage["steps"]>; live?: boolean; stopped?: boolean;
+}) {
   if (!steps.length) return null;
   const pending = steps.some((s) => s.result === undefined);
   const anyError = steps.some((s) => s.isError);
-  const status = pending ? "running" : anyError ? "error" : "ok";
+  const status: "running" | "ok" | "error" | "stopped" =
+    live && pending ? "running"
+      : anyError ? "error"
+        : pending ? (stopped ? "stopped" : "error")
+          : "ok";
   // 标题右侧显示最后一步（工具名 + 其状态）
   const last = steps[steps.length - 1];
   const lastPending = last.result === undefined;
+  const cutLabel = stopped ? "（已取消）" : "（未完成）";
   const summary = (
     <>
       {lastPending ? (
-        <CircularProgress size={11} />
+        pendingIcon(live, stopped, 11)
       ) : last.isError ? (
         <CancelIcon sx={{ fontSize: 14 }} color="error" />
       ) : (
         <CheckCircleIcon sx={{ fontSize: 14 }} color="success" />
       )}
       <ToolLabel name={last.tool} sx={{ ml: 0.5 }} maxChars={SUMMARY_MAX} />
+      {lastPending && !live && (
+        <Typography variant="caption" color="text.secondary" sx={{ ml: 0.5, flexShrink: 0 }}>
+          {cutLabel}
+        </Typography>
+      )}
     </>
   );
   return (
@@ -75,7 +96,7 @@ export function AgentProgress({ steps }: { steps: NonNullable<ChatMessage["steps
               }}
             >
               {sp ? (
-                <CircularProgress size={14} />
+                pendingIcon(live, stopped, 14)
               ) : ok ? (
                 <CheckCircleIcon sx={{ fontSize: 16 }} color="success" />
               ) : (
@@ -84,6 +105,7 @@ export function AgentProgress({ steps }: { steps: NonNullable<ChatMessage["steps
               <Typography variant="caption" component="div"
                 color={s.isError ? "error" : "text.primary"}>
                 <ToolLabel name={s.tool} />
+                {sp && !live ? cutLabel : ""}
               </Typography>
             </AccordionSummary>
             <AccordionDetails sx={{ px: 0, pt: 0 }}>

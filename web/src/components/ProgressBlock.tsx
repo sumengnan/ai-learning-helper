@@ -6,6 +6,7 @@ import FactCheckIcon from "@mui/icons-material/FactCheck";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
 import RemoveCircleOutlineIcon from "@mui/icons-material/RemoveCircleOutlined";
+import StopCircleIcon from "@mui/icons-material/StopCircle";
 import { CollapsibleBlock } from "./CollapsibleBlock";
 import { EllipsisText } from "./EllipsisText";
 
@@ -26,7 +27,10 @@ function agentOf(p: ProgressItem, kind: string): string {
 }
 
 // 每步状态图标：优先用后端下发的显式 status（子 agent 每步）；否则回退到文本启发式（沙箱）
-function stepIcon(p: ProgressItem, isLast: boolean, running: boolean) {
+// stopped：用户已停止——最后一条仍在进行中的步骤标灰色「停止」，不再转圈也不冒充成功
+function stepIcon(p: ProgressItem, isLast: boolean, running: boolean, stopped = false) {
+  if (stopped && isLast && (p.status === "running" || (!p.status && p.text.endsWith("…"))))
+    return <StopCircleIcon sx={{ fontSize: 14 }} color="disabled" />;
   if (p.status) {
     if (p.status === "error") return <CancelIcon sx={{ fontSize: 14 }} color="error" />;
     if (p.status === "ok") return <CheckCircleIcon sx={{ fontSize: 14 }} color="success" />;
@@ -70,8 +74,9 @@ export function ProgressBlock({ title, kind, items, status }: {
   title: string;
   kind: "sandbox" | "subagent" | "skill" | "verify";
   items: ProgressItem[];
-  status: "running" | "ok" | "error";
+  status: "running" | "ok" | "error" | "stopped";
 }) {
+  const stopped = status === "stopped";
   if (!items.length) return null;
   // 折叠开始/完成为一行；成功的收尾文字（如「任务完成」）不进正文，状态已由块头图标表达
   const rows = mergeByKey(items).filter((p) => p.text !== "任务完成");
@@ -87,10 +92,13 @@ export function ProgressBlock({ title, kind, items, status }: {
   const last = rows[rows.length - 1];
   const lastAgent = agentOf(last, kind);
   const summaryText = lastAgent ? `${lastAgent}: ${last.text}` : last.text;
+  const lastCancelled = stopped
+    && (last.status === "running" || (!last.status && last.text.endsWith("…")));
   const summary = (
     <>
-      {stepIcon(last, true, status === "running")}
-      <EllipsisText text={summaryText} sx={{ ml: 0.5 }} maxChars={SUMMARY_MAX} />
+      {stepIcon(last, true, status === "running", stopped)}
+      <EllipsisText text={lastCancelled ? `${summaryText}（已取消）` : summaryText}
+        sx={{ ml: 0.5 }} maxChars={SUMMARY_MAX} />
     </>
   );
   return (
@@ -99,13 +107,16 @@ export function ProgressBlock({ title, kind, items, status }: {
         const agent = agentOf(p, kind);
         return (
           <Box key={p.key ?? i} sx={{ display: "flex", alignItems: "center", gap: 0.75, py: 0.15 }}>
-            {stepIcon(p, i === rows.length - 1, status === "running")}
+            {stepIcon(p, i === rows.length - 1, status === "running", stopped)}
             {/* 子 agent 归属用彩色小标签区分（尤其沙箱执行中混入的子代理步骤） */}
             {agent ? (
               <Chip label={agent} size="small" color="secondary" variant="outlined"
                 sx={{ height: 16, flexShrink: 0, "& .MuiChip-label": { px: 0.5, fontSize: 10, fontWeight: 700 } }} />
             ) : null}
-            <Typography variant="caption" color="text.secondary">{p.text}</Typography>
+            <Typography variant="caption" color="text.secondary">
+              {p.text}
+              {stopped && i === rows.length - 1 && lastCancelled ? "（已取消）" : ""}
+            </Typography>
           </Box>
         );
       })}

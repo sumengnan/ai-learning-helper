@@ -1,6 +1,7 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { ChatView, fmtDuration } from "./ChatView";
 import { streamChat, attachChat, stopRun, sendDecision } from "../api/client";
 
@@ -210,5 +211,21 @@ describe("ChatView", () => {
     await waitFor(() => expect(screen.getByText("已核对的答案")).toBeTruthy());
     // 校验块可见（展示工具默认开）
     expect(screen.getByText("校验")).toBeTruthy();
+  });
+
+  it("『展示数据来源和引用』开关：默认展示来源，关闭后隐藏（issue 4）", async () => {
+    render(
+      <MemoryRouter>
+        <ChatView conversationId="c1" initial={[
+          { role: "user", content: "光合作用?" },
+          { role: "assistant", content: "见知识库[1]。", status: "done",
+            sources: [{ index: 1, type: "knowledge", label: "bio.pdf" }] },
+        ]} />
+      </MemoryRouter>);
+    // 默认开：来源清单可见
+    expect(screen.getByText(/参考来源/)).toBeTruthy();
+    // 关闭开关 → 隐藏
+    fireEvent.click(screen.getByLabelText("展示数据来源和引用"));
+    await waitFor(() => expect(screen.queryByText(/参考来源/)).toBeNull());
   });
 });

@@ -6,6 +6,19 @@ import asyncio
 from .base import PageResult
 
 
+def friendly_browser_error(exc: Exception) -> Exception:
+    """把 Playwright「浏览器内核未安装」的晦涩报错翻译成可操作的中文提示。
+
+    其余异常原样返回。这样 browse 工具在缺内核时给出明确的安装指引，而非
+    一长串英文 launch 堆栈。"""
+    msg = str(exc)
+    if "Executable doesn't exist" in msg or "playwright install" in msg:
+        return RuntimeError(
+            "浏览器内核未安装：browse 工具需要 Chromium。请在项目环境执行 "
+            "`uv run playwright install chromium`（或 `playwright install chromium`）后重试。")
+    return exc
+
+
 class PlaywrightBrowser:
     """本地 chromium headless。每次 fetch 用独立 context/page、无跨页状态。
 
@@ -27,7 +40,12 @@ class PlaywrightBrowser:
                 return
             from playwright.async_api import async_playwright
             self._pw = await async_playwright().start()
-            self._browser = await self._pw.chromium.launch(headless=self._headless)
+            try:
+                self._browser = await self._pw.chromium.launch(headless=self._headless)
+            except Exception as e:   # 缺内核等启动失败：清理并给出可操作提示
+                await self._pw.stop()
+                self._pw = None
+                raise friendly_browser_error(e) from e
 
     async def close(self) -> None:
         try:
