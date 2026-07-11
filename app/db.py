@@ -44,7 +44,8 @@ _SCHEMA = (
 # 历史库若建于某列引入之前，需在此补齐（CREATE TABLE IF NOT EXISTS 不改既有表结构）
 _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
     "conversations": {"user_id": "TEXT"},
-    "conversation_messages": {"steps": "TEXT", "progress": "TEXT", "attachments": "TEXT"},
+    "conversation_messages": {"steps": "TEXT", "progress": "TEXT", "attachments": "TEXT",
+                              "run_id": "TEXT", "status": "TEXT"},
     "documents": {"user_id": "TEXT"},
     "questions": {"user_id": "TEXT"},
     "wrong_answers": {"user_id": "TEXT"},

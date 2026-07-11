@@ -40,6 +40,8 @@ export function ChatPage() {
         : undefined,
       progress: m.progress ?? undefined,
       attachments: m.attachments ?? undefined,
+      status: (m.status as "streaming" | "done" | "error" | "stopped" | "interrupted") ?? undefined,
+      runId: m.run_id ?? undefined,   // 供刷新后接回在途生成
     })));
     setActiveId(id);
   }

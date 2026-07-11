@@ -170,8 +170,9 @@ def test_delete_conversation_cascades_runs_and_sandbox(make_mock, text_turn):
                        json={"conversation_id": cid, "message": "hi"}, headers=h) as resp:
         _sse_events(resp)
     run_ids = store.run_ids(uid, cid)
-    assert len(run_ids) == 1                      # run 已关联到会话
-    rid = run_ids[0]
+    # 一轮登记两个 run：turn 句柄（RunManager/接回用）+ 内部 loop run（trajectory 挂它）
+    assert len(run_ids) == 2
+    rid = next(r for r in run_ids if traj.load(r))   # 带轨迹的那个（内部 loop run）
     ckpt.save(RunState(run_id=rid))
     assert traj.load(rid) != [] and ckpt.load(rid) is not None
 

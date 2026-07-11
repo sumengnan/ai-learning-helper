@@ -2,7 +2,7 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { ChatView } from "./ChatView";
-import { streamChat, sendDecision } from "../api/client";
+import { streamChat, attachChat, stopRun, sendDecision } from "../api/client";
 
 // mock streamChat：依次回调 TextDelta "你" / TextDelta "好" / RunFinished
 vi.mock("../api/client", () => ({
@@ -11,16 +11,49 @@ vi.mock("../api/client", () => ({
     onEvent({ type: "TextDelta", data: { text: "好" } });
     onEvent({ type: "RunFinished", data: {} });
   }),
+  attachChat: vi.fn(async () => undefined),
+  stopRun: vi.fn(async () => undefined),
   sendDecision: vi.fn(async () => undefined),
+  api: { messages: vi.fn(async () => []) },
 }));
 
 describe("ChatView", () => {
   beforeEach(() => {
     localStorage.clear();
     vi.mocked(streamChat).mockClear();
+    vi.mocked(attachChat).mockClear();
+    vi.mocked(stopRun).mockClear();
     vi.mocked(sendDecision).mockClear();
   });
   afterEach(() => cleanup());
+
+  it("刷新后：最后一条助手消息 streaming → 自动接回续流至完成", async () => {
+    vi.mocked(attachChat).mockImplementationOnce(
+      async (_rid: string, onEvent: (e: any) => void) => {
+        onEvent({ type: "TextDelta", data: { text: "续上" } });
+        onEvent({ type: "TextDelta", data: { text: "了" } });
+        onEvent({ type: "RunFinished", data: {} });
+      });
+    render(<ChatView conversationId="c1" initial={[
+      { role: "user", content: "问题" },
+      { role: "assistant", content: "断点前部分", status: "streaming", runId: "R1" },
+    ]} />);
+    // 自动用该 run_id 接回
+    await waitFor(() => expect(vi.mocked(attachChat)).toHaveBeenCalledWith(
+      "R1", expect.anything(), expect.anything()));
+    // 回放重建后气泡为续上后的完整内容（清空占位再由回放重建，不与"断点前部分"重复）
+    await waitFor(() => expect(screen.getByText("续上了")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("已完成")).toBeTruthy());
+  });
+
+  it("非 streaming 的历史消息不触发接回", async () => {
+    render(<ChatView conversationId="c1" initial={[
+      { role: "user", content: "q" },
+      { role: "assistant", content: "已完成的答案", status: "done", runId: "R0" },
+    ]} />);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(vi.mocked(attachChat)).not.toHaveBeenCalled();
+  });
 
   it("StrictMode 下 TextDelta 累加不重复（不可变更新）", async () => {
     render(
