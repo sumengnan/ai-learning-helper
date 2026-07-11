@@ -85,7 +85,11 @@ async def test_proxy_without_context_raises():
 
 
 def test_proxy_exposes_sandbox_for_only_when_routing():
-    # 单镜像：不暴露 sandbox_for（保持 assembly 多语言工具注册判定不变）
-    assert getattr(SandboxProxy(SandboxManager(_cfg())), "sandbox_for", None) is None
-    routed = _cfg(sandbox_images={"python": "python:3.12-slim", "node": "node:20-slim"})
+    # 单镜像（sandbox_images 空）：不暴露 sandbox_for（保持 assembly 多语言工具注册判定不变）。
+    # 显式 _env_file=None + sandbox_images={}：config 默认已预置多镜像映射，且不依赖 .env，
+    # 否则在无 .env 的环境（如 worktree）下会读到非空默认导致本测试假阴/假阳。
+    assert getattr(SandboxProxy(SandboxManager(
+        _cfg(_env_file=None, sandbox_images={}))), "sandbox_for", None) is None
+    routed = _cfg(_env_file=None,
+                  sandbox_images={"python": "python:3.12-slim", "node": "node:20-slim"})
     assert getattr(SandboxProxy(SandboxManager(routed)), "sandbox_for", None) is not None

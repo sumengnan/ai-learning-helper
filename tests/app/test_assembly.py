@@ -47,9 +47,11 @@ def test_lang_images_expose_multilang_code_tools():
 
 
 def test_no_lang_images_no_multilang_code_tools():
-    # 未配 sandbox_lang_images 且未配路由 → 只有 run_python，无 run_java/run_node
+    # 未配 sandbox_lang_images 且未配路由（sandbox_images 空）→ 只有 run_python，无 run_java/run_node。
+    # 显式清空两者：config 默认已预置多语言镜像映射，这里要测的是「操作者未配置」的场景。
     h = build_harness(_cfg(enable_sandbox=True, sandbox_backend="docker",
-                           sandbox_docker_host="tcp://stub:2376"))
+                           sandbox_docker_host="tcp://stub:2376",
+                           sandbox_images={}, sandbox_lang_images={}))
     assert h.registry.get("run_python") is not None
     assert h.registry.get("run_java") is None
     assert h.registry.get("run_node") is None
