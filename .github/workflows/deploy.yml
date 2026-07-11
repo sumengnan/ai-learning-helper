@@ -1,0 +1,57 @@
+name: Deploy to server
+
+# main 有变动即部署；也可在 Actions 页手动触发
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 同一时间只允许一个部署在跑，避免并发构建互相打架
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+env:
+  DEPLOY_DIR: /opt/ai-learning-helper
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 sshpass 与 rsync
+        run: sudo apt-get update && sudo apt-get install -y sshpass rsync
+
+      - name: rsync 源码到服务器
+        env:
+          SSHPASS: ${{ secrets.SERVER_PASSWORD }}
+        run: |
+          rsync -az --delete \
+            -e "sshpass -e ssh -p ${{ secrets.SERVER_PORT }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude '.venv' \
+            --exclude 'web/node_modules' \
+            --exclude 'web/dist' \
+            --exclude '__pycache__' \
+            --exclude '*.db' --exclude '*.db-wal' --exclude '*.db-shm' \
+            --exclude '.env' \
+            --exclude 'data' \
+            --exclude 'downloads' --exclude 'attachments' \
+            --exclude '.idea' --exclude '.codegraph' --exclude '.claude' --exclude '.superpowers' \
+            --exclude 'tests' --exclude '.pytest_cache' \
+            ./ "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ env.DEPLOY_DIR }}/"
+
+      - name: 服务器上构建并启动
+        env:
+          SSHPASS: ${{ secrets.SERVER_PASSWORD }}
+        run: |
+          sshpass -e ssh -p ${{ secrets.SERVER_PORT }} \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
+            "set -e; cd ${{ env.DEPLOY_DIR }}; \
+             test -f .env || { echo '缺少 .env，请先在服务器 ${{ env.DEPLOY_DIR }}/.env 放好密钥'; exit 1; }; \
+             docker compose up -d --build; \
+             docker image prune -f; \
+             docker compose ps"

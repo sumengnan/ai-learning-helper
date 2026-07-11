@@ -1,0 +1,32 @@
+# 构建上下文瘦身：这些要么在镜像里重建，要么是运行时数据/机密，不应进镜像
+.git
+.github
+.venv
+venv
+web/node_modules
+web/dist
+**/__pycache__
+*.py[cod]
+*.egg-info
+
+# 运行时数据 / 机密（.env 含密钥；db 与产物目录挂载在卷里）
+.env
+.env.*
+*.db
+*.db-wal
+*.db-shm
+data/
+downloads/
+attachments/
+
+# 本地工具产物
+.idea
+.vscode
+.DS_Store
+.pytest_cache
+.codegraph
+.claude
+.superpowers
+tests
+docs
+examples

@@ -1,0 +1,27 @@
+services:
+  app:
+    build: .
+    image: ai-learning-helper:latest
+    container_name: ai-learning-helper
+    restart: unless-stopped
+    # 机密与模型配置从服务器上的 .env 读取（含 HARNESS_API_KEY / AUTH_SECRET 等）
+    env_file:
+      - .env
+    environment:
+      # 容器内对外监听
+      HARNESS_APP_HOST: "0.0.0.0"
+      HARNESS_APP_PORT: "8000"
+      # 全部持久化数据落到挂载卷 /app/data，重建容器不丢
+      HARNESS_APP_DB_PATH: /app/data/app.db
+      HARNESS_PERSISTENCE_DB_PATH: /app/data/harness.db
+      HARNESS_MEMORY_DB_PATH: /app/data/memory.db
+      HARNESS_DOWNLOADS_DIR: /app/data/downloads
+      HARNESS_ATTACHMENTS_DIR: /app/data/attachments
+    ports:
+      # 宿主 8000 -> 容器 8000；如需 80 端口改成 "80:8000"
+      - "8000:8000"
+    volumes:
+      # 持久化数据（SQLite 库 + 下载/附件产物）
+      - ./data:/app/data
+      # 应用会调用宿主 Docker 起代码/浏览器子沙箱（启用 HARNESS_ENABLE_SANDBOX/BROWSER 时）
+      - /var/run/docker.sock:/var/run/docker.sock
