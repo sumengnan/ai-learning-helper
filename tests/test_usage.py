@@ -1,4 +1,4 @@
-from harness.usage import Usage, estimate_usage, cost_usd, count_message_tokens
+from harness.usage import Usage, estimate_usage, cost_usd, count_message_tokens, tiered_cost
 from harness.types import Message, Role, ToolCall
 
 
@@ -23,6 +23,33 @@ def test_cost_usd_with_price():
 
 def test_cost_usd_without_price_is_none():
     assert cost_usd(Usage(1, 1, 2), "m", {}) is None
+
+
+# 分层计费（qwen-plus 档位，¥/百万 token）
+_TIERS = [[256000, 1.6, 6.4], [1000000, 4.8, 19.2]]
+
+
+def test_tiered_cost_empty_is_none():
+    assert tiered_cost(1000, 1000, []) is None
+
+
+def test_tiered_cost_first_tier():
+    # 输入 100 万分之 1_000_000 → 100万；这里用 1M token 输入 + 0 输出，落第 2 档
+    # 先测第 1 档：输入 250K ≤ 256K → 1.6，输出 6.4
+    got = tiered_cost(250_000, 100_000, _TIERS)
+    assert got == 250_000 / 1_000_000 * 1.6 + 100_000 / 1_000_000 * 6.4
+
+
+def test_tiered_cost_second_tier_by_input_size():
+    # 输入 300K 超过 256K → 落第 2 档：输入 4.8、输出 19.2（输出费率也随档变）
+    got = tiered_cost(300_000, 100_000, _TIERS)
+    assert got == 300_000 / 1_000_000 * 4.8 + 100_000 / 1_000_000 * 19.2
+
+
+def test_tiered_cost_above_cap_uses_last_tier():
+    # 输入 200 万超过末档上限 → 用末档封顶价
+    got = tiered_cost(2_000_000, 0, _TIERS)
+    assert got == 2_000_000 / 1_000_000 * 4.8
 
 
 _M = "gpt-4o-mini"

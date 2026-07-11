@@ -112,6 +112,26 @@ def test_ops_totals():
     assert t["p95_latency_ms"] == 2900
 
 
+def test_ops_cost_from_tiers_and_currency():
+    # 配了分层单价表：成本由 token 现算（回溯历史事件），不依赖事件里存的 cost_usd。
+    # run1 输入60/输出40 + run2 输入30/输出20，均落第 1 档（≤256K）：输入1.6、输出6.4 /百万。
+    tc = _traj_conn(); _seed_traj(tc)
+    svc = StatsService(trajectory_conn=tc, app_conn=_app_conn(), memory_conn=_mem_conn(),
+                       price_tiers=[[256000, 1.6, 6.4], [1000000, 4.8, 19.2]],
+                       currency="¥", now=lambda: FIXED_NOW)
+    t = svc.overview("u")["ops"]["totals"]
+    expected = (60 + 30) / 1_000_000 * 1.6 + (40 + 20) / 1_000_000 * 6.4
+    assert t["cost_usd"] == round(expected, 4)
+    assert t["cost_currency"] == "¥"
+
+
+def test_ops_cost_currency_default_dollar_without_tiers():
+    # 不配分层表：回退累加事件里已存的 cost_usd（0.01），货币符号默认 $
+    t = _svc().overview("u")["ops"]["totals"]
+    assert t["cost_usd"] == 0.01
+    assert t["cost_currency"] == "$"
+
+
 def test_ops_tools_with_error_correlation():
     tools = {x["name"]: x for x in _svc().overview("u")["ops"]["tools"]}
     assert tools["http_request"]["count"] == 1 and tools["http_request"]["success_rate"] == 1.0

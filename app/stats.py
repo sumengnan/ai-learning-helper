@@ -19,6 +19,8 @@ import sqlite3
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
+from harness.usage import tiered_cost
+
 # 原始工具名 → 面向学习者的「能力」分组（图标, 标签, 归入的工具名集合）。
 # 未列出的工具归入「其他能力」。顺序即展示顺序的兜底（实际按调用次数倒排）。
 _ABILITY_GROUPS: list[tuple[str, str, set[str]]] = [
@@ -65,10 +67,16 @@ class StatsService:
     def __init__(self, *, trajectory_conn: sqlite3.Connection,
                  app_conn: sqlite3.Connection,
                  memory_conn: sqlite3.Connection | None = None,
+                 price_tiers: list | None = None,
+                 currency: str = "$",
                  now=None) -> None:
         self._traj = trajectory_conn
         self._app = app_conn
         self._mem = memory_conn
+        # 分层单价表（按输入长度分档）；配置后由 token 数现算成本，可回溯历史事件。
+        # 为空则回退累加事件里已存的 cost_usd（旧口径）。
+        self._price_tiers = price_tiers or []
+        self._currency = currency
         self._now = now or (lambda: datetime.now(timezone.utc))
 
     # ---------- 公开入口 ----------
@@ -151,10 +159,18 @@ class StatsService:
                     latencies.append(float(lat))
                 if (d.get("attempts") or 1) > 1:
                     retries += 1
-                cost = d.get("cost_usd")
-                if isinstance(cost, (int, float)):
-                    any_cost = True
-                    total_cost += float(cost)
+                if self._price_tiers:
+                    # 由本次调用的输入/输出 token 现算，历史事件也能回溯出成本
+                    c = tiered_cost(u.get("prompt", 0) or 0, u.get("completion", 0) or 0,
+                                    self._price_tiers)
+                    if c is not None:
+                        any_cost = True
+                        total_cost += c
+                else:
+                    cost = d.get("cost_usd")
+                    if isinstance(cost, (int, float)):
+                        any_cost = True
+                        total_cost += float(cost)
             elif typ == "ToolStarted":
                 tc = d.get("tool_call", {}) or {}
                 name = tc.get("name") or "?"
@@ -342,6 +358,7 @@ class StatsService:
                 "p95_latency_ms": agg["p95_latency_ms"],
                 "retries": agg["retries"],
                 "cost_usd": agg["cost_usd"],
+                "cost_currency": self._currency,
                 "conversations": app_counts["conversations"],
                 "messages": app_counts["messages"],
             },
