@@ -5,11 +5,11 @@ from .local import LocalSandbox
 
 
 def _docker_for(config, image: str, labels: dict | None = None,
-                network: str | None = None):
+                network: str | None = None, display_name: str = "基础沙箱"):
     """按 config 造一个指定镜像的 DockerSandbox（除 image/labels/network 外参数完全一致）。
 
     network 为 None 时取 config.sandbox_network；一次性代码子沙箱可传 config.sandbox_sub_network
-    强制禁网。
+    强制禁网。display_name 用于前端进度里区分基础沙箱/子沙箱。
     """
     from .docker import DockerSandbox
     return DockerSandbox(
@@ -22,7 +22,8 @@ def _docker_for(config, image: str, labels: dict | None = None,
         tls_ca_cert=config.sandbox_docker_tls_ca_cert,
         tls_client_cert=config.sandbox_docker_tls_client_cert,
         tls_client_key=config.sandbox_docker_tls_client_key,
-        tls_verify=config.sandbox_docker_tls_verify, labels=labels)
+        tls_verify=config.sandbox_docker_tls_verify, labels=labels,
+        display_name=display_name)
 
 
 def build_sandbox(config, labels: dict | None = None):

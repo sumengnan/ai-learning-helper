@@ -28,8 +28,9 @@ class DockerSandbox:
                  cpus: float = 1.0, pids_limit: int = 128, read_only: bool = False,
                  tls_ca_cert: str = "", tls_client_cert: str = "",
                  tls_client_key: str = "", tls_verify: bool = True,
-                 labels: dict | None = None) -> None:
+                 labels: dict | None = None, display_name: str = "沙箱") -> None:
         self.workspace = workspace
+        self._display_name = display_name   # 前端进度里区分基础沙箱/子沙箱
         self._docker_host = docker_host
         self._image = image
         self._user = user
@@ -61,7 +62,11 @@ class DockerSandbox:
         if self._container is not None:
             return
         import docker
-        emit(Progress("sandbox", "连接沙箱 Docker daemon…"))
+        # 「启动 X…」running→ok 同 key 折叠成一行：成功即变绿勾，不再单独发「已就绪」；
+        # 连接 daemon 是实现细节，不上报。
+        start_key = uuid.uuid4().hex
+        emit(Progress("sandbox", f"启动 {self._display_name}…",
+                      status="running", key=start_key))
         self._client = await asyncio.to_thread(
             docker.DockerClient, base_url=self._docker_host, tls=self._tls_config())
         # 镜像缺失则显式拉取，让"拉取镜像"这一步在前端可见
@@ -70,8 +75,6 @@ class DockerSandbox:
         except docker.errors.ImageNotFound:
             emit(Progress("sandbox", f"拉取镜像 {self._image}…（首次较慢）"))
             await asyncio.to_thread(self._client.images.pull, self._image)
-            emit(Progress("sandbox", f"镜像 {self._image} 拉取完成"))
-        emit(Progress("sandbox", "启动沙箱容器…"))
         # 工作区用 tmpfs（临时、限容量、支持只读根）。关键：带 uid/gid/mode 挂载选项让
         # 非 root 沙箱用户可写——cap_drop=ALL 下连 root 都没 CAP_CHOWN，无法事后 chown，
         # 只能在挂载时由内核设属主。
@@ -85,7 +88,8 @@ class DockerSandbox:
             pids_limit=self._pids_limit, cap_drop=["ALL"],
             security_opt=["no-new-privileges"], auto_remove=False,
             labels=self._labels)
-        emit(Progress("sandbox", "沙箱容器已就绪"))
+        emit(Progress("sandbox", f"启动 {self._display_name}…",
+                      status="ok", key=start_key))
 
     async def close(self) -> None:
         try:

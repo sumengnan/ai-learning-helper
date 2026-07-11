@@ -232,9 +232,10 @@ class SandboxProxy:
         label = f"{language}{version}" if version else language
         conv = _current_conv.get() or ""
         labels = {_SANDBOX_LABEL: "true", "conv_id": conv, "role": "ephemeral"}
+        # 子沙箱的「启动…」进度由 sub.start() 按 display_name 上报（与基础沙箱区分）
         sub = _docker_for(cfg, image, labels=labels,
-                          network=getattr(cfg, "sandbox_sub_network", "none"))
-        emit(Progress("sandbox", f"启动 {label} 子沙箱（{image}）…"))
+                          network=getattr(cfg, "sandbox_sub_network", "none"),
+                          display_name=f"{label} 子沙箱（{image}）")
         try:
             await sub.start()
             await _copy_workspace(base, sub)    # 执行前：基础工作区 → 子沙箱（输入）
@@ -244,4 +245,5 @@ class SandboxProxy:
             return res
         finally:
             await sub.close()                    # 用完即销毁
-            emit(Progress("sandbox", f"回收 {label} 子沙箱"))
+            # 收尾：绿色成功状态标识
+            emit(Progress("sandbox", f"执行完成，回收 {label} 子沙箱", status="ok"))

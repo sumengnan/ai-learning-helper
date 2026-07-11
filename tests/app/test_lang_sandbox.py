@@ -68,10 +68,11 @@ def _stub_docker(monkeypatch):
     _StubSub.made = []
     captured = {}
 
-    def fake_docker_for(config, image, labels=None, network=None):
+    def fake_docker_for(config, image, labels=None, network=None, display_name="基础沙箱"):
         captured["image"] = image
         captured["labels"] = labels
         captured["network"] = network
+        captured["display_name"] = display_name
         return _StubSub(image, produce=captured.get("produce"))
     monkeypatch.setattr(sm, "_docker_for", fake_docker_for)
     return captured
