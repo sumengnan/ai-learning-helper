@@ -19,9 +19,12 @@ venv/
 # 前端
 web/node_modules/
 web/dist/
-# tsc -b（build 脚本）会把 .tsx 编译产物吐进 src，忽略以防误入库
+# tsc 现已设 noEmit（web/tsconfig.json），正常不再向 src 吐编译产物；
+# 以下忽略作为兜底，防误配置/旧产物入库（.js 还会 shadow 掉同名 .tsx）
 web/tsconfig.tsbuildinfo
 web/src/**/*.js
+web/src/**/*.js.map
+web/src/**/*.d.ts
 
 # 运行时数据（应用启动/测试时生成，非源码）
 *.db
