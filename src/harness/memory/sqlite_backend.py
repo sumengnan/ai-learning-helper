@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 
 import sqlite_vec
 from sqlite_vec import serialize_float32
@@ -18,8 +19,9 @@ _COLS = ("id", "owner_id", "kind", "mem_type", "text", "entity_key", "version",
 class SqliteVecBackend:
     """MemoryBackend 的 sqlite-vec 实现：vec0 过滤表 + companion 数据表，rowid 对齐。"""
 
-    def __init__(self, db_path: str, dimension: int) -> None:
+    def __init__(self, db_path: str, dimension: int, *, now_fn=None) -> None:
         self._dim = dimension
+        self._now_fn = now_fn or (lambda: int(time.time()))
         self._conn = sqlite3.connect(db_path)
         self._conn.enable_load_extension(True)
         sqlite_vec.load(self._conn)
@@ -101,6 +103,17 @@ class SqliteVecBackend:
                 "UPDATE memory_vec SET superseded = 1 WHERE rowid = ?", (row[0],))
         self._conn.commit()
 
+    def purge_expired(self, now: int) -> int:
+        rows = self._conn.execute(
+            "SELECT rowid FROM memory_records WHERE expires_at != 0 AND expires_at <= ?",
+            (now,)).fetchall()
+        for (rowid,) in rows:
+            self._conn.execute("DELETE FROM memory_records WHERE rowid = ?", (rowid,))
+            self._conn.execute("DELETE FROM memory_vec WHERE rowid = ?", (rowid,))
+            self._conn.execute("DELETE FROM memory_fts WHERE rowid = ?", (rowid,))
+        self._conn.commit()
+        return len(rows)
+
     # ---- 读 ----
     def get(self, ids: list[str]) -> list[MemoryRecord]:
         out: list[MemoryRecord] = []
@@ -147,7 +160,9 @@ class SqliteVecBackend:
             conds.append("mem_type = ?"); params.append(filters.mem_type)
         if not filters.include_superseded:
             conds.append("superseded = ?"); params.append(0)
-        # 注：SP1 不过滤 expires_at（恒 0），TTL 剔除留 SP4。
+        if not filters.include_expired:
+            conds.append("(expires_at = 0 OR expires_at > ?)")
+            params.append(self._now_fn())
         sql = ("SELECT rowid, distance FROM memory_vec WHERE "
                + " AND ".join(conds) + " ORDER BY distance")
         rows = self._conn.execute(sql, params).fetchall()

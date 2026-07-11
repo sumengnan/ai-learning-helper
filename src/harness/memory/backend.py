@@ -40,3 +40,7 @@ class MemoryBackend(Protocol):
     def set_superseded(self, ids: list[str]) -> None:
         """把指定记录标记 superseded=1（检索默认排除，行保留可恢复）。"""
         ...
+
+    def purge_expired(self, now: int) -> int:
+        """删除已过期记录（expires_at!=0 且 <=now），返回删除条数。"""
+        ...
