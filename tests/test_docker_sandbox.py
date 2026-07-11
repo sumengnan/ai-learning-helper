@@ -60,6 +60,39 @@ async def test_start_builds_tls_client(monkeypatch):
     assert captured["tls_kwargs"]["verify"] is True
 
 
+def test_tmpfs_owner_opts_numeric_and_named():
+    # 数字 uid:gid → 内核层设属主，让非 root 沙箱用户可写（cap_drop=ALL 下无法事后 chown）
+    sb = DockerSandbox(docker_host="tcp://h:2376", image="img", user="1000:1000")
+    assert sb._tmpfs_owner_opts() == "uid=1000,gid=1000,mode=0700"
+    # 单值 uid 复用为 gid
+    assert DockerSandbox("tcp://h", "img", user="1001")._tmpfs_owner_opts() == "uid=1001,gid=1001,mode=0700"
+    # 非数字用户名无法作 uid= 挂载选项 → 退回人人可写
+    assert DockerSandbox("tcp://h", "img", user="appuser")._tmpfs_owner_opts() == "mode=0777"
+
+
+async def test_start_tmpfs_is_writable_by_sandbox_user(monkeypatch):
+    # 回归护栏：工作区 tmpfs 必须带 uid/gid/mode 属主选项，否则非 root 用户无法写、
+    # 且 docker cp 写不进 tmpfs——会导致 run_java 等「file not found」失败。
+    import docker
+    captured = {}
+
+    def fake_docker_client(base_url, tls):
+        client = Mock()
+        def run(image, **kw):
+            captured.update(kw)
+            return Mock()
+        client.containers.run.side_effect = run
+        client.images.get.return_value = Mock()
+        return client
+
+    monkeypatch.setattr(docker, "DockerClient", fake_docker_client)
+    sb = DockerSandbox(docker_host="tcp://h:2376", image="img", user="1000:1000",
+                       workspace="/workspace")
+    await sb.start()
+    tmpfs = captured["tmpfs"]["/workspace"]
+    assert "uid=1000" in tmpfs and "gid=1000" in tmpfs and "mode=07" in tmpfs
+
+
 async def test_list_files_enforces_path_constraint():
     # #2：list_files 必须先 resolve_in_workspace，逃逸路径抛 SandboxError
     sb, container = _mock_docker_sandbox()

@@ -8,7 +8,7 @@ import os
 import tarfile
 import uuid
 
-from .base import ExecResult, resolve_in_workspace
+from .base import ExecResult, SandboxError, resolve_in_workspace
 from ..events import Progress
 from ..progress import emit
 
@@ -72,11 +72,15 @@ class DockerSandbox:
             await asyncio.to_thread(self._client.images.pull, self._image)
             emit(Progress("sandbox", f"镜像 {self._image} 拉取完成"))
         emit(Progress("sandbox", "启动沙箱容器…"))
+        # 工作区用 tmpfs（临时、限容量、支持只读根）。关键：带 uid/gid/mode 挂载选项让
+        # 非 root 沙箱用户可写——cap_drop=ALL 下连 root 都没 CAP_CHOWN，无法事后 chown，
+        # 只能在挂载时由内核设属主。
         self._container = await asyncio.to_thread(
             self._client.containers.run,
             self._image, command="sleep infinity", detach=True,
             working_dir=self.workspace, user=self._user, network_mode=self._network,
-            read_only=self._read_only, tmpfs={self.workspace: "rw,size=64m"},
+            read_only=self._read_only,
+            tmpfs={self.workspace: f"rw,size=64m,{self._tmpfs_owner_opts()}"},
             mem_limit=self._mem_limit, nano_cpus=int(self._cpus * 1e9),
             pids_limit=self._pids_limit, cap_drop=["ALL"],
             security_opt=["no-new-privileges"], auto_remove=False,
@@ -92,6 +96,49 @@ class DockerSandbox:
             if self._client is not None:
                 await asyncio.to_thread(self._client.close)
                 self._client = None
+
+    def _tmpfs_owner_opts(self) -> str:
+        """从 self._user（"uid:gid" 或 "uid"）解析 tmpfs 的 uid/gid/mode 挂载选项。
+
+        非数字用户名无法作为 tmpfs uid= 选项，此时退回仅 mode=0777（人人可写），
+        保证沙箱进程仍可写工作区。
+        """
+        parts = str(self._user).split(":")
+        uid = parts[0]
+        gid = parts[1] if len(parts) > 1 else parts[0]
+        if uid.isdigit() and gid.isdigit():
+            return f"uid={uid},gid={gid},mode=0700"
+        return "mode=0777"
+
+    # docker cp（put_archive/get_archive）无法读写 tmpfs 挂载点——文件会被静默丢弃。
+    # 工作区是 tmpfs，故所有传输经非 tmpfs 的 /tmp 暂存中转：写=put 到 /tmp 再容器内
+    # cp 进工作区；读=容器内 cp 到 /tmp 再 get。cp 用 argv（非 shell），受控路径无注入。
+    async def _put_via_stage(self, dest_dir: str, tar_bytes: bytes) -> None:
+        stage = f"/tmp/.mcpx_{uuid.uuid4().hex}"
+        r = await self.exec(["mkdir", "-p", stage], 15)
+        if r.exit_code != 0:
+            raise SandboxError(f"创建暂存目录失败：{(r.stderr or r.stdout).strip()}")
+        await asyncio.to_thread(self._container.put_archive, stage, tar_bytes)
+        r = await self.exec(["cp", "-a", f"{stage}/.", f"{dest_dir}/"], 60)
+        await self.exec(["rm", "-rf", stage], 15)
+        if r.exit_code != 0:
+            raise SandboxError(f"写入工作区失败：{(r.stderr or r.stdout).strip()}")
+
+    async def _get_via_stage(self, real: str) -> bytes:
+        stage = f"/tmp/.mcpx_{uuid.uuid4().hex}"
+        r = await self.exec(["mkdir", "-p", stage], 15)
+        if r.exit_code != 0:
+            raise SandboxError(f"创建暂存目录失败：{(r.stderr or r.stdout).strip()}")
+        # real 已被 resolve_in_workspace 约束在工作区内；用 argv 传参避免 shell 注入
+        r = await self.exec(["cp", "-a", real, f"{stage}/"], 60)
+        if r.exit_code != 0:
+            await self.exec(["rm", "-rf", stage], 15)
+            raise SandboxError(f"读取失败：{(r.stderr or r.stdout).strip()}")
+        bits, _ = await asyncio.to_thread(
+            self._container.get_archive, f"{stage}/{os.path.basename(real)}")
+        data = b"".join(bits)
+        await self.exec(["rm", "-rf", stage], 15)
+        return data
 
     async def exec(self, command: list[str], timeout: float) -> ExecResult:
         await self.start()
@@ -121,38 +168,33 @@ class DockerSandbox:
         return ExecResult(stdout, stderr, res.exit_code,
                           timed_out=(res.exit_code == 124))
 
-    async def write_file(self, path: str, content: str) -> None:
-        await self.start()
-        real = resolve_in_workspace(self.workspace, path)
-        data = content.encode()
-        stream = io.BytesIO()
-        with tarfile.open(fileobj=stream, mode="w") as tar:
-            info = tarfile.TarInfo(name=os.path.basename(real))
-            info.size = len(data)
-            tar.addfile(info, io.BytesIO(data))
-        await asyncio.to_thread(
-            self._container.put_archive, os.path.dirname(real), stream.getvalue())
-
-    async def write_bytes(self, path: str, data: bytes) -> None:
-        """写裸字节到工作区（支持子目录，如 uploads/foo.png——tar 成员用相对路径，
-        解到工作区根即自动建子目录，无需目标目录预先存在）。"""
-        await self.start()
-        real = resolve_in_workspace(self.workspace, path)
-        workspace_real = os.path.realpath(self.workspace)
-        member = os.path.relpath(real, workspace_real)
+    def _member_tar(self, member: str, data: bytes) -> bytes:
+        """把单个文件打成 tar 字节，成员名为相对工作区根的路径（可含子目录）。"""
         stream = io.BytesIO()
         with tarfile.open(fileobj=stream, mode="w") as tar:
             info = tarfile.TarInfo(name=member)
             info.size = len(data)
             tar.addfile(info, io.BytesIO(data))
-        await asyncio.to_thread(
-            self._container.put_archive, workspace_real, stream.getvalue())
+        return stream.getvalue()
+
+    async def write_file(self, path: str, content: str) -> None:
+        await self.start()
+        real = resolve_in_workspace(self.workspace, path)
+        member = os.path.relpath(real, os.path.realpath(self.workspace))
+        await self._put_via_stage(self.workspace, self._member_tar(member, content.encode()))
+
+    async def write_bytes(self, path: str, data: bytes) -> None:
+        """写裸字节到工作区（支持子目录，如 uploads/foo.png——tar 成员用相对路径，
+        cp -a 进工作区时自动建子目录）。"""
+        await self.start()
+        real = resolve_in_workspace(self.workspace, path)
+        member = os.path.relpath(real, os.path.realpath(self.workspace))
+        await self._put_via_stage(self.workspace, self._member_tar(member, data))
 
     async def read_file(self, path: str) -> str:
         await self.start()
         real = resolve_in_workspace(self.workspace, path)
-        bits, _ = await asyncio.to_thread(self._container.get_archive, real)
-        stream = io.BytesIO(b"".join(bits))
+        stream = io.BytesIO(await self._get_via_stage(real))
         with tarfile.open(fileobj=stream) as tar:
             member = tar.next()
             return tar.extractfile(member).read().decode(errors="replace")
@@ -164,13 +206,41 @@ class DockerSandbox:
         return [ln for ln in res.stdout.splitlines() if ln]
 
     async def archive_workspace(self) -> bytes:
-        """把整个工作区打成 tar 字节（含 workspace 目录名），供跨容器整目录迁移。"""
+        """把整个工作区打成 tar 字节（含 workspace 目录名），供跨容器整目录迁移。
+
+        工作区是 tmpfs、无法直接 get_archive，故先在容器内 cp 到 /tmp 暂存再打包；暂存副本
+        保留 workspace 目录名，使产出的 tar 顶层成员仍是 "workspace/…"，与 extract_workspace 对称。
+        """
         await self.start()
-        bits, _ = await asyncio.to_thread(self._container.get_archive, self.workspace)
-        return b"".join(bits)
+        base = os.path.basename(self.workspace)
+        stage = f"/tmp/.mcpws_{uuid.uuid4().hex}"
+        r = await self.exec(["mkdir", "-p", stage], 15)
+        if r.exit_code != 0:
+            raise SandboxError(f"创建暂存目录失败：{(r.stderr or r.stdout).strip()}")
+        # cp -a /workspace /tmp/stage/ → /tmp/stage/workspace
+        r = await self.exec(["cp", "-a", self.workspace, f"{stage}/"], 120)
+        if r.exit_code != 0:
+            await self.exec(["rm", "-rf", stage], 15)
+            raise SandboxError(f"归档工作区失败：{(r.stderr or r.stdout).strip()}")
+        bits, _ = await asyncio.to_thread(self._container.get_archive, f"{stage}/{base}")
+        data = b"".join(bits)
+        await self.exec(["rm", "-rf", stage], 15)
+        return data
 
     async def extract_workspace(self, data: bytes) -> None:
-        """把 archive_workspace() 产出的 tar 解回工作区（解到 workspace 的父目录即还原）。"""
+        """把 archive_workspace() 产出的 tar（顶层 "workspace/…"）解回工作区。
+
+        工作区是 tmpfs、put_archive 写不进去，故先解到 /tmp 暂存再容器内 cp 进工作区。
+        """
         await self.start()
-        parent = os.path.dirname(self.workspace) or "/"
-        await asyncio.to_thread(self._container.put_archive, parent, data)
+        base = os.path.basename(self.workspace)
+        stage = f"/tmp/.mcpws_{uuid.uuid4().hex}"
+        r = await self.exec(["mkdir", "-p", stage], 15)
+        if r.exit_code != 0:
+            raise SandboxError(f"创建暂存目录失败：{(r.stderr or r.stdout).strip()}")
+        await asyncio.to_thread(self._container.put_archive, stage, data)  # → stage/workspace/…
+        # 把 stage/workspace 的内容 cp 进真正的工作区
+        r = await self.exec(["cp", "-a", f"{stage}/{base}/.", f"{self.workspace}/"], 120)
+        await self.exec(["rm", "-rf", stage], 15)
+        if r.exit_code != 0:
+            raise SandboxError(f"还原工作区失败：{(r.stderr or r.stdout).strip()}")
