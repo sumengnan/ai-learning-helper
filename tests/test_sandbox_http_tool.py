@@ -28,6 +28,39 @@ async def test_sandboxed_http_get_runs_curl_in_sandbox():
     assert "https://example.com/" in sb.calls[0]
 
 
+_ARTICLE = (
+    "<html><head><title>光合作用</title></head><body>"
+    "<nav>首页 登录 注册</nav>"
+    "<article><h1>光合作用的原理</h1>"
+    "<p>光合作用是绿色植物利用光能，把二氧化碳和水转化为储存能量的有机物，并释放氧气的过程。"
+    "这一过程主要发生在叶绿体中，是地球上几乎所有生命能量的最终来源，对维持大气与二氧化碳平衡至关重要。</p>"
+    "</article><footer>版权所有 © 2026</footer></body></html>"
+)
+
+
+async def test_sandboxed_html_returns_parsed_title_and_text():
+    sb = FakeSandbox([f"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n{_ARTICLE}"])
+    tool = SandboxedHttpRequestTool(sb, [], block_private=False)
+    out = await tool.run(tool.Params(url="https://example.com/"))
+    assert "标题：光合作用" in out
+    assert "光合作用是绿色植物" in out
+    assert "<nav>" not in out
+
+
+async def test_sandboxed_html_raw_flag_returns_original():
+    sb = FakeSandbox([f"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n{_ARTICLE}"])
+    tool = SandboxedHttpRequestTool(sb, [], block_private=False)
+    out = await tool.run(tool.Params(url="https://example.com/", raw=True))
+    assert "<nav>" in out
+
+
+async def test_sandboxed_json_passthrough():
+    sb = FakeSandbox(['HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{"ok": true}'])
+    tool = SandboxedHttpRequestTool(sb, [], block_private=False)
+    out = await tool.run(tool.Params(url="https://example.com/api"))
+    assert out == 'HTTP 200\n{"ok": true}'
+
+
 async def test_sandboxed_http_follows_redirect():
     sb = FakeSandbox([
         "HTTP/1.1 302 Found\r\nLocation: https://example.com/final\r\n\r\n",

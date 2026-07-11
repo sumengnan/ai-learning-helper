@@ -1,4 +1,4 @@
-from harness.browser.extract import extract_main_text
+from harness.browser.extract import extract_main_text, extract_title_and_text
 
 ARTICLE_HTML = """
 <html><head><title>光合作用</title></head><body>
@@ -29,3 +29,26 @@ def test_extract_strips_boilerplate():
 
 def test_extract_empty_html():
     assert extract_main_text("") == ""
+
+
+def test_extract_title_and_text_returns_both():
+    title, text = extract_title_and_text(ARTICLE_HTML)
+    assert "光合作用" in title           # trafilatura 可能取 <title> 或 <h1>，均含此词
+    assert "光合作用是绿色植物" in text
+    assert "登录 注册" not in text
+
+
+def test_extract_title_falls_back_to_title_tag():
+    # 无正文可抽，但 <title> 仍能取到（转义实体被还原）
+    html = "<html><head><title>Tom &amp; Jerry</title></head><body></body></html>"
+    title, text = extract_title_and_text(html)
+    assert title == "Tom & Jerry"
+
+
+def test_extract_title_and_text_empty():
+    assert extract_title_and_text("") == ("", "")
+
+
+def test_extract_no_title_returns_empty_title():
+    title, _ = extract_title_and_text("<html><body><p>no title here</p></body></html>")
+    assert title == ""

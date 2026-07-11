@@ -8,10 +8,11 @@ from pydantic import BaseModel
 from ..base import Tool
 from ...net.policy import check_url
 from ...net.sandbox_dns import resolve_in_sandbox
+from .http_tool import render_http_result
 
 
-def _parse_response(raw: str) -> tuple[int, str | None, str]:
-    """解析 curl -i 的输出：返回 (status, location, body)。"""
+def _parse_response(raw: str) -> tuple[int, str | None, str, str]:
+    """解析 curl -i 的输出：返回 (status, location, content_type, body)。"""
     sep = "\r\n\r\n" if "\r\n\r\n" in raw else "\n\n"
     head, _, body = raw.partition(sep)
     lines = head.splitlines()
@@ -21,23 +22,28 @@ def _parse_response(raw: str) -> tuple[int, str | None, str]:
         if len(parts) >= 2 and parts[1].isdigit():
             status = int(parts[1])
     location = None
+    content_type = ""
     for ln in lines[1:]:
-        if ln.lower().startswith("location:"):
+        low = ln.lower()
+        if location is None and low.startswith("location:"):
             location = ln.split(":", 1)[1].strip()
-            break
-    return status, location, body
+        elif not content_type and low.startswith("content-type:"):
+            content_type = ln.split(":", 1)[1].strip()
+    return status, location, content_type, body
 
 
 class SandboxedHttpRequestTool(Tool):
     name = "http_request"
     description = ("发起 HTTP(S) 请求抓取网页或调用外部 API（在沙箱容器内用 curl 执行，"
-                   "出网来自沙箱）。默认可访问公网，禁止内网地址。")
+                   "出网来自沙箱）。默认可访问公网，禁止内网地址。"
+                   "网页默认返回解析后的标题+正文；需要原始 HTML 时传 raw=true。")
 
     class Params(BaseModel):
         url: str
         method: str = "GET"
         headers: dict | None = None
         body: str | None = None
+        raw: bool = False
 
     def __init__(self, sandbox, allowed_domains, block_private: bool = True,
                  timeout: float = 30.0, max_bytes: int = 5_000_000,
@@ -83,10 +89,11 @@ class SandboxedHttpRequestTool(Tool):
                 raise RuntimeError(
                     f"curl 无输出（exit {res.exit_code}）："
                     f"{res.stderr.strip() or '容器内可能缺少 curl，请使用含 curl 的镜像'}")
-            status, location, body = _parse_response(res.stdout)
+            status, location, ctype, body = _parse_response(res.stdout)
             if 300 <= status < 400 and location:
                 url = urljoin(url, location)
                 continue
             suffix = "…(已截断)" if len(body) > self._max_bytes else ""
-            return f"HTTP {status}\n{body[: self._max_bytes]}{suffix}"
+            body = body[: self._max_bytes]
+            return render_http_result(status, url, ctype, body, suffix, params.raw)
         raise RuntimeError(f"超过最大重定向次数（{self._max_redirects}）")
