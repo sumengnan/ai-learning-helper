@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Box, Card, CardContent, Typography, Stack, Chip, Button, CircularProgress, Alert,
-  ToggleButtonGroup, ToggleButton, useTheme,
+  Box, Card, CardContent, Typography, Stack, Button, CircularProgress, Alert,
+  ToggleButtonGroup, ToggleButton, useTheme, Select, MenuItem, IconButton, Tooltip,
 } from "@mui/material";
 import type { Theme } from "@mui/material/styles";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
@@ -11,7 +11,23 @@ import UploadFileIcon from "@mui/icons-material/UploadFile";
 import EditNoteIcon from "@mui/icons-material/EditNote";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlined";
 import DownloadIcon from "@mui/icons-material/Download";
+import VisibilityIcon from "@mui/icons-material/Visibility";
 import { statsApi, type StatsOverview, type DailyPoint } from "../api/stats";
+import { api } from "../api/client";
+import { DownloadPreviewDialog, type PreviewFile } from "./DownloadPreviewDialog";
+import { previewKind } from "./downloadsUtils";
+import { MemoryDrawer } from "./MemoryDrawer";
+
+// 时间范围选项（默认近 3 天）
+const RANGES: { label: string; days: number }[] = [
+  { label: "今日", days: 1 },
+  { label: "近 3 天", days: 3 },
+  { label: "近 7 天", days: 7 },
+  { label: "近 14 天", days: 14 },
+  { label: "近 30 天", days: 30 },
+];
+const DEFAULT_DAYS = 3;
+const rangeLabel = (days: number): string => RANGES.find((r) => r.days === days)?.label ?? `近 ${days} 天`;
 
 // ---------- 格式化 ----------
 const fmtTokens = (n: number): string =>
@@ -122,16 +138,30 @@ export default function HomeView() {
   const nav = useNavigate();
   const theme = useTheme();
   const [view, setView] = useState<"learn" | "ops">("learn");
+  const [days, setDays] = useState<number>(DEFAULT_DAYS);
   const [data, setData] = useState<StatsOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<PreviewFile | null>(null);
+  const [memoryOpen, setMemoryOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
-    statsApi.overview(14)
+    setError(null);
+    statsApi.overview(days)
       .then((d) => { if (alive) setData(d); })
       .catch((e) => { if (alive) setError(e instanceof Error ? e.message : "加载失败"); });
     return () => { alive = false; };
-  }, []);
+  }, [days]);
+
+  // 下载：需带 Bearer，取鉴权 blob 再触发保存
+  async function download(id: string, filename: string) {
+    const blob = await api.downloads.blob(id);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
 
   const greeting = useMemo(() => {
     const h = new Date().getHours();
@@ -151,8 +181,8 @@ export default function HomeView() {
     : r >= 0.9 ? theme.palette.warning.main : theme.palette.error.main);
 
   return (
-    <Box sx={{ maxWidth: 1080, mx: "auto", px: { xs: 2, sm: 3 }, py: 3, pb: 8 }}>
-      {/* 顶部：标题 + 视图切换 */}
+    <Box sx={{ width: "100%", maxWidth: 1600, mx: "auto", px: { xs: 2, sm: 2.5, md: 3 }, py: 3, pb: 8 }}>
+      {/* 顶部：标题 + 视图切换 + 时间范围 */}
       <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1, mb: 1 }}>
         <Typography sx={{ fontSize: 22, fontWeight: 700, letterSpacing: "-.02em", flex: 1 }}>概览台</Typography>
         <ToggleButtonGroup exclusive size="small" value={view}
@@ -161,7 +191,10 @@ export default function HomeView() {
           <ToggleButton value="learn">学习主场</ToggleButton>
           <ToggleButton value="ops">工程台</ToggleButton>
         </ToggleButtonGroup>
-        <Chip label="近 14 天" size="small" variant="outlined" />
+        <Select size="small" value={days} onChange={(e) => setDays(Number(e.target.value))}
+          aria-label="时间范围" sx={{ minWidth: 108, "& .MuiSelect-select": { py: 0.7 } }}>
+          {RANGES.map((r) => <MenuItem key={r.days} value={r.days}>{r.label}</MenuItem>)}
+        </Select>
       </Stack>
 
       {view === "learn" ? (
@@ -227,12 +260,13 @@ export default function HomeView() {
           <Eyebrow>我的积累</Eyebrow>
           <Box sx={{ display: "grid", gap: 1.75, gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4,1fr)" } }}>
             {[
-              { lbl: "📚 学习资料", v: learn.assets.documents, sub: "已建索引" },
-              { lbl: "🧠 AI 记的偏好", v: learn.assets.memory, sub: "它越来越懂你" },
-              { lbl: "✏️ 题库", v: learn.assets.questions, sub: learn.assets.questions ? "去练习 →" : "生成一套 →", act: true },
-              { lbl: "❌ 错题本", v: learn.assets.wrong_answers, sub: learn.assets.wrong_answers ? "去复习 →" : "目前全对 👍" },
+              { lbl: "📚 学习资料", v: learn.assets.documents, sub: "已建索引 · 查看 →", onClick: () => nav("/knowledge") },
+              { lbl: "🧠 AI 记的偏好", v: learn.assets.memory, sub: "点击查看它记住了什么 →", onClick: () => setMemoryOpen(true) },
+              { lbl: "✏️ 题库", v: learn.assets.questions, sub: learn.assets.questions ? "去练习 →" : "生成一套 →", act: true, onClick: () => nav("/questions") },
+              { lbl: "❌ 错题本", v: learn.assets.wrong_answers, sub: learn.assets.wrong_answers ? "去复习 →" : "目前全对 👍", onClick: () => nav("/wrong") },
             ].map((a) => (
-              <Card key={a.lbl} sx={cardSx}>
+              <Card key={a.lbl} onClick={a.onClick} sx={(t) => ({ ...cardSx(t), cursor: "pointer",
+                transition: ".15s", "&:hover": { borderColor: "primary.main", transform: "translateY(-1px)" } })}>
                 <CardContent>
                   <Typography sx={{ fontSize: 12.5, color: "text.secondary" }}>{a.lbl}</Typography>
                   <Typography sx={{ fontSize: 29, fontWeight: 700, letterSpacing: "-.025em",
@@ -245,12 +279,26 @@ export default function HomeView() {
           </Box>
           {learn.recent_downloads.length > 0 && (
             <Card sx={(t) => ({ ...cardSx(t), mt: 1.75 })}>
-              <CardContent sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap",
+              <CardContent sx={{ display: "flex", alignItems: "center", gap: 1.25, flexWrap: "wrap",
                 py: 1.5, "&:last-child": { pb: 1.5 } }}>
-                <Typography sx={{ fontSize: 12.5, color: "text.secondary", fontWeight: 600 }}>最近生成的产物</Typography>
-                {learn.recent_downloads.map((d, i) => (
-                  <Chip key={i} icon={<DownloadIcon />} label={d.filename} size="small" variant="outlined" />
-                ))}
+                <Typography sx={{ fontSize: 12.5, color: "text.secondary", fontWeight: 600, mr: 0.5 }}>最近生成的产物</Typography>
+                {learn.recent_downloads.map((d) => {
+                  const canPreview = previewKind(d.content_type) !== "none";
+                  return (
+                    <Stack key={d.id} direction="row" spacing={0.25} sx={{ alignItems: "center",
+                      border: 1, borderColor: "divider", borderRadius: 5, pl: 1.25, pr: 0.25, py: 0.25 }}>
+                      <Typography noWrap sx={{ fontSize: 13, maxWidth: 220 }}>{d.filename}</Typography>
+                      {canPreview && (
+                        <Tooltip title="预览"><IconButton size="small" aria-label={`预览 ${d.filename}`}
+                          onClick={() => setPreview({ id: d.id, filename: d.filename, content_type: d.content_type })}>
+                          <VisibilityIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
+                      )}
+                      <Tooltip title="下载"><IconButton size="small" aria-label={`下载 ${d.filename}`}
+                        onClick={() => download(d.id, d.filename)}>
+                        <DownloadIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
+                    </Stack>
+                  );
+                })}
                 <Box sx={{ flex: 1 }} />
                 <Typography onClick={() => nav("/downloads")}
                   sx={{ fontSize: 13, color: "primary.main", fontWeight: 600, cursor: "pointer" }}>
@@ -267,7 +315,7 @@ export default function HomeView() {
               <CardContent>
                 <Typography sx={{ fontSize: 15, fontWeight: 650 }}>它用过的能力</Typography>
                 <Typography sx={{ fontSize: 12.5, color: "text.secondary", mb: 2 }}>
-                  近 14 天，AI 为回答你的问题实际动用的工具 —— 用得越多条越长
+                  {rangeLabel(days)}，AI 为回答你的问题实际动用的工具 —— 用得越多条越长
                 </Typography>
                 {learn.abilities.length === 0 ? (
                   <Typography sx={{ fontSize: 13, color: "text.disabled" }}>还没有调用记录</Typography>
@@ -330,7 +378,7 @@ export default function HomeView() {
       ) : (
         <>
           {/* 运行概览 tiles */}
-          <Eyebrow note="近 14 天">运行概览</Eyebrow>
+          <Eyebrow note={rangeLabel(days)}>运行概览</Eyebrow>
           <Box sx={{ display: "grid", gap: 1.75,
             gridTemplateColumns: { xs: "1fr 1fr", sm: "repeat(3,1fr)", md: "repeat(6,1fr)" } }}>
             <StatTile label="运行次数" value={String(ops.totals.runs)} hint={`今日事件 ${learn.activity[learn.activity.length - 1]?.runs ?? 0}`} stripe={theme.palette.primary.main} />
@@ -412,11 +460,11 @@ export default function HomeView() {
               )}
             </CardContent>
           </Card>
-          <Typography sx={{ fontSize: 12, color: "text.disabled", mt: 3 }}>
-            全部指标源自 harness.db · trajectory_events 与 app.db，与「学习主场」共用同一聚合接口 —— 只是换了讲法。
-          </Typography>
         </>
       )}
+
+      <DownloadPreviewDialog file={preview} onClose={() => setPreview(null)} />
+      <MemoryDrawer open={memoryOpen} onClose={() => setMemoryOpen(false)} />
     </Box>
   );
 }

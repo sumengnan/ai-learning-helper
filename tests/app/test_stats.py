@@ -55,21 +55,26 @@ def _app_conn():
         "CREATE TABLE wrong_answers(id TEXT, user_id TEXT);"
         "CREATE TABLE conversations(id TEXT, user_id TEXT, title TEXT, created_at TEXT);"
         "CREATE TABLE conversation_messages(conv_id TEXT, seq INTEGER, created_at TEXT);"
-        "CREATE TABLE downloads(id TEXT, user_id TEXT, filename TEXT, created_at TEXT, seq INTEGER);")
+        "CREATE TABLE downloads(id TEXT, user_id TEXT, filename TEXT, size INTEGER, "
+        "content_type TEXT, created_at TEXT, seq INTEGER);")
     conn.executemany("INSERT INTO documents VALUES (?,?)", [("d1", "u"), ("d2", "u")])
     conn.execute("INSERT INTO conversations VALUES ('cv1','u','二叉树','2026-07-10T09:00:00+00:00')")
     conn.executemany("INSERT INTO conversation_messages VALUES (?,?,?)",
                      [("cv1", 0, "2026-07-11T08:00:00+00:00"), ("cv1", 1, "2026-07-11T08:05:00+00:00")])
-    conn.executemany("INSERT INTO downloads VALUES (?,?,?,?,?)",
-                     [("dl1", "u", "提纲.md", "2026-07-11T07:00:00+00:00", 1)])
+    conn.execute("INSERT INTO downloads(id,user_id,filename,size,content_type,created_at,seq) "
+                 "VALUES ('dl1','u','提纲.md',12,'text/markdown','2026-07-11T07:00:00+00:00',1)")
     conn.commit()
     return conn
 
 
 def _mem_conn():
     conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE memory_items(id INTEGER PRIMARY KEY, text TEXT)")
-    conn.executemany("INSERT INTO memory_items(text) VALUES (?)", [("a",), ("b",), ("c",)])
+    conn.execute("CREATE TABLE memory_items(id INTEGER PRIMARY KEY, collection TEXT, "
+                 "text TEXT, metadata TEXT, created_at TEXT)")
+    conn.executemany(
+        "INSERT INTO memory_items(collection, text, created_at) VALUES ('semantic', ?, ?)",
+        [("a", "2026-07-11T01:00:00+00:00"), ("b", "2026-07-11T02:00:00+00:00"),
+         ("c", "2026-07-11T03:00:00+00:00")])
     conn.commit()
     return conn
 
@@ -135,7 +140,22 @@ def test_learn_last_conversation_and_downloads():
     learn = _svc().overview("u")["learn"]
     assert learn["last_conversation"]["title"] == "二叉树"
     assert learn["last_conversation"]["message_count"] == 2
-    assert learn["recent_downloads"] == [{"filename": "提纲.md", "created_at": "2026-07-11T07:00:00+00:00"}]
+    # 产物需带 id/content_type/size 供前端预览+下载
+    assert learn["recent_downloads"] == [{
+        "id": "dl1", "filename": "提纲.md", "content_type": "text/markdown", "size": 12,
+        "created_at": "2026-07-11T07:00:00+00:00"}]
+
+
+def test_memory_items_listing():
+    items = _svc().memory_items(limit=10)
+    assert len(items) == 3
+    assert {i["text"] for i in items} == {"a", "b", "c"}
+    assert all("created_at" in i for i in items)
+    # 无记忆库降级为空
+    from app.stats import StatsService
+    svc = StatsService(trajectory_conn=_traj_conn(), app_conn=_app_conn(), memory_conn=None,
+                       now=lambda: FIXED_NOW)
+    assert svc.memory_items() == []
 
 
 def test_activity_series_length_and_shape():
