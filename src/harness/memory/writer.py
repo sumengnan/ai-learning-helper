@@ -155,3 +155,33 @@ class MemoryWriter:
             log.warning("memory reconcile LLM failed: %s", e)
             return [MemoryOp("ADD", f) for f in facts]
         return _parse_ops(raw, facts)
+
+    async def _apply(self, owner_id: str, kind: str,
+                     ops: list[MemoryOp]) -> list[str]:
+        new_ids: list[str] = []
+        for op in ops:
+            if op.op == "NOOP" or op.fact is None:
+                continue
+            version = 1
+            if op.op == "REPLACE" and op.supersede_ids:
+                old = self._backend.get(op.supersede_ids)
+                version = max([r.version for r in old], default=0) + 1
+                self._backend.set_superseded(op.supersede_ids)
+            vec = (await self._embedder.embed([op.fact.text]))[0]
+            rec = MemoryRecord(
+                owner_id=owner_id, kind=kind, mem_type=op.fact.mem_type,
+                text=op.fact.text, embedding=vec, entity_key=op.fact.entity_key,
+                importance=op.fact.importance, version=version, source="extract")
+            new_ids.extend(self._backend.upsert([rec]))
+        return new_ids
+
+    async def write(self, owner_id: str, kind: str, text: str) -> list[str]:
+        """智能写入：提炼→找候选→调和→应用，返回新写入记录 id。best-effort，异常安全。"""
+        if not text or not text.strip():
+            return []
+        facts = await self._extract(text)
+        if not facts:
+            return []
+        candidates = await self._gather_candidates(owner_id, kind, facts)
+        ops = await self._reconcile(facts, candidates)
+        return await self._apply(owner_id, kind, ops)

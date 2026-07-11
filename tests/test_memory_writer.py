@@ -110,3 +110,47 @@ async def test_reconcile_no_candidates_all_add(mock_embedder):
     facts = _facts("f0", "f1")
     ops = await w._reconcile(facts, [])
     assert all(o.op == "ADD" for o in ops) and len(ops) == 2
+
+
+async def test_write_add_new_fact(mock_embedder):
+    w, backend, emb = await _writer(mock_embedder,
+        ['[{"text":"用户在学 Rust","mem_type":"semantic","entity_key":"user.learning","importance":0.7}]'])
+    ids = await w.write("u1", "k", "我在学 Rust")
+    assert len(ids) == 1
+    got = backend.get(ids)
+    assert got[0].text == "用户在学 Rust" and got[0].mem_type == MemType.SEMANTIC
+    assert got[0].importance == 0.7 and got[0].source == "extract"
+
+
+async def test_write_empty_extract_noop(mock_embedder):
+    w, backend, emb = await _writer(mock_embedder, ["[]"])
+    assert await w.write("u1", "k", "哈哈哈") == []
+
+
+async def test_write_replace_supersedes_old(mock_embedder):
+    w, backend, emb = await _writer(mock_embedder, [
+        '[{"text":"用户偏好浅色主题","mem_type":"semantic","entity_key":"user.pref.theme"}]',
+        '[{"op":"REPLACE","fact_index":0,"supersede_ids":["old1"]}]',
+    ])
+    v = (await emb.embed(["用户偏好深色主题"]))[0]
+    backend.upsert([MemoryRecord(owner_id="u1", kind="k", mem_type=MemType.SEMANTIC,
+                                 text="用户偏好深色主题", embedding=v, id="old1",
+                                 entity_key="user.pref.theme", version=1)])
+    ids = await w.write("u1", "k", "其实我喜欢浅色主题")
+    assert backend.get(["old1"])[0].superseded == 1
+    new = backend.get(ids)
+    assert new[0].text == "用户偏好浅色主题" and new[0].version == 2
+
+
+async def test_write_noop_dedup(mock_embedder):
+    w, backend, emb = await _writer(mock_embedder, [
+        '[{"text":"用户偏好深色主题","mem_type":"semantic","entity_key":"user.pref.theme"}]',
+        '[{"op":"NOOP","fact_index":0}]',
+    ])
+    v = (await emb.embed(["用户偏好深色主题"]))[0]
+    backend.upsert([MemoryRecord(owner_id="u1", kind="k", mem_type=MemType.SEMANTIC,
+                                 text="用户偏好深色主题", embedding=v, id="old1",
+                                 entity_key="user.pref.theme")])
+    ids = await w.write("u1", "k", "深色主题真好")
+    assert ids == []
+    assert backend.get(["old1"])[0].superseded == 0
