@@ -25,7 +25,7 @@ class EpisodicMemory:
         self._memory = memory
         self._collection = collection
 
-    async def record(self, task: str, outcome: str, success: bool) -> list[int]:
+    async def record(self, task: str, outcome: str, success: bool) -> list[str]:
         # 局限：超长 outcome/task 会被 Memory.add_texts 按 chunk_size 分块存储，
         # recall 可能只召回其中一个碎片。v1 假定 episode 简短；更完整的方案是先用
         # LLM 摘要成短经验再入库（规格列为 OUT of scope）。
