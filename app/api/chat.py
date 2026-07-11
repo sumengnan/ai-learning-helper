@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,7 +12,7 @@ from pydantic import BaseModel
 
 from harness.approval import reset_context, resolve, set_context
 from harness.events import (
-    Progress, RunError, RunFinished, TextDelta, ToolFinished, ToolStarted)
+    ModelUsage, Progress, RunError, RunFinished, TextDelta, ToolFinished, ToolStarted)
 from harness.loop.agent_loop import AgentLoop
 from harness.persistence.serialize import event_to_dict
 from harness.progress import reset_emitter, set_emitter
@@ -237,6 +238,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                 collect["grounding"].append(
                                     {"tool": st["tool"], "content": ev.result.content,
                                      "is_error": ev.result.is_error})
+                    elif isinstance(ev, ModelUsage):
+                        # 记录用量供落库（与前端一致取最新一次的 total/cost），刷新后仍可展示
+                        collect["usage"] = {"tokens": ev.usage.total_tokens, "cost": ev.cost_usd}
                     elif isinstance(ev, Progress):
                         collect["progress"].append({"scope": ev.scope, "text": ev.text,
                                                     "status": ev.status, "key": ev.key,
@@ -257,6 +261,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             结束时按 turn_run_id 把 streaming 占位消息 UPDATE 为最终态。"""
             steps: list[dict] = []       # 工具调用轨迹（落库供 UI 还原）
             progress: list[dict] = []    # 沙箱/子代理/校验进度（落库）
+            turn_start = time.time()     # 本轮墙钟起点，用于落库耗时（刷新后仍可展示）
             question = req.message
             delivered = None
             delivered_sources: list[dict] = []   # 交付那次尝试的权威来源
@@ -284,7 +289,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 if not gate_on:
                     # 直通路径：单次尝试、逐字流式（与开门前行为一致）
                     collect = {"final": None, "error": None, "steps": steps,
-                               "grounding": [], "progress": progress}
+                               "grounding": [], "progress": progress, "usage": None}
                     run_id_a = uuid4().hex
                     store.add_run(req.conversation_id, run_id_a)
                     source_sink.reset()
@@ -301,7 +306,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     for attempt in range(max_attempts):
                         msg = model_message if corrective is None else corrective
                         collect = {"final": None, "error": None, "steps": [],
-                                   "grounding": [], "progress": progress}
+                                   "grounding": [], "progress": progress, "usage": None}
                         run_id_a = uuid4().hex
                         store.add_run(req.conversation_id, run_id_a)
                         source_sink.reset()   # 每次尝试重置，交付时快照该次来源
@@ -353,9 +358,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     yield _emit_sources(delivered_sources)
                 status = "error" if errored else "done"
                 final_content = delivered or "".join(parts) or "（本轮未完成）"
+                _usage = collect.get("usage") or {}
                 store.finish_turn(req.conversation_id, turn_run_id, final_content,
                                   steps=steps or None, progress=progress or None,
-                                  status=status, sources=delivered_sources or None)
+                                  status=status, sources=delivered_sources or None,
+                                  tokens=_usage.get("tokens"), cost=_usage.get("cost"),
+                                  elapsed_ms=round((time.time() - turn_start) * 1000))
                 # L3：把对话文本写入向量库供后续语义召回（best-effort，不阻断）
                 if _conv_memory is not None and not errored and final_content:
                     try:
@@ -369,13 +377,15 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 store.finish_turn(
                     req.conversation_id, turn_run_id,
                     delivered or "".join(parts) or "（已停止）",
-                    steps=steps or None, progress=progress or None, status="stopped")
+                    steps=steps or None, progress=progress or None, status="stopped",
+                    elapsed_ms=round((time.time() - turn_start) * 1000))
                 raise
             except Exception as e:  # noqa: BLE001  意外异常也要把占位落成 error，别永远 streaming
                 store.finish_turn(
                     req.conversation_id, turn_run_id,
                     delivered or "".join(parts) or "（本轮未能完成，请重试）",
-                    steps=steps or None, progress=progress or None, status="error")
+                    steps=steps or None, progress=progress or None, status="error",
+                    elapsed_ms=round((time.time() - turn_start) * 1000))
                 yield RunError(error=str(e))
 
         turn_run_id = uuid4().hex

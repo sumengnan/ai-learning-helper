@@ -48,7 +48,8 @@ export const RollingNumber = memo(function RollingNumber(
       component="span"
       sx={{
         display: "inline-flex",
-        alignItems: "flex-end",
+        alignItems: "center",
+        lineHeight: 1,
         fontVariantNumeric: "tabular-nums",
         ...sx,
       }}
@@ -56,7 +57,8 @@ export const RollingNumber = memo(function RollingNumber(
       {text.split("").map((ch, i) =>
         ch >= "0" && ch <= "9"
           ? <Digit key={i} value={Number(ch)} />
-          : <Box component="span" key={i}>{ch}</Box>,
+          // 非数字（千分位逗号等）与数位同高、居中，避免因逗号行高更高把数字挤偏下
+          : <Box component="span" key={i} sx={{ lineHeight: 1, display: "inline-flex", alignItems: "center" }}>{ch}</Box>,
       )}
     </Box>
   );

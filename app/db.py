@@ -45,7 +45,8 @@ _SCHEMA = (
 _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
     "conversations": {"user_id": "TEXT"},
     "conversation_messages": {"steps": "TEXT", "progress": "TEXT", "attachments": "TEXT",
-                              "run_id": "TEXT", "status": "TEXT", "sources": "TEXT"},
+                              "run_id": "TEXT", "status": "TEXT", "sources": "TEXT",
+                              "tokens": "INTEGER", "cost": "REAL", "elapsed_ms": "INTEGER"},
     "documents": {"user_id": "TEXT", "excerpt": "TEXT"},
     "questions": {"user_id": "TEXT"},
     "wrong_answers": {"user_id": "TEXT"},
