@@ -36,3 +36,7 @@ class MemoryBackend(Protocol):
                        entity_key: str) -> list[MemoryRecord]:
         """按实体键查同一实体的记录（SP3 upsert-by-entity 用）。"""
         ...
+
+    def set_superseded(self, ids: list[str]) -> None:
+        """把指定记录标记 superseded=1（检索默认排除，行保留可恢复）。"""
+        ...
