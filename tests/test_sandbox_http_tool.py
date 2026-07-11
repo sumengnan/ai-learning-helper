@@ -46,7 +46,7 @@ async def test_dns_resolved_in_sandbox_then_validated_and_pinned():
     tool = SandboxedHttpRequestTool(sb, [], block_private=True)
     out = await tool.run(tool.Params(url="https://example.com/"))
     assert out == "HTTP 200\nhi"
-    assert sb.calls[0][0] == "python3"              # DNS 解析在沙箱内
+    assert sb.calls[0][0] == "getent"              # DNS 解析在沙箱内（getent）
     assert sb.calls[0][-1] == "example.com"
     assert sb.calls[1][0] == "curl"
     assert "--resolve" in sb.calls[1]
@@ -60,4 +60,4 @@ async def test_private_ip_resolved_in_sandbox_blocked_on_host():
     with pytest.raises(PolicyError):
         await tool.run(tool.Params(url="http://internal/"))
     assert len(sb.calls) == 1                        # 只做了解析，没发 curl
-    assert sb.calls[0][0] == "python3"
+    assert sb.calls[0][0] == "getent"
