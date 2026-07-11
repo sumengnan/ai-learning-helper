@@ -14,7 +14,8 @@ import { listItemVariants } from "../components/motion";
 
 const PAGE_SIZE = 8;
 
-type Doc = {
+// 一张卡片 = 一个切分后的片段（chunk），filename 是其来源文件名
+type Fragment = {
   id: string; filename: string; uploaded_at: string;
   category: string; excerpt: string; relevance?: number;
 };
@@ -24,11 +25,10 @@ function fmtDate(iso: string): string {
 }
 
 export function KnowledgeView() {
-  const [docs, setDocs] = useState<Doc[]>([]);
+  const [docs, setDocs] = useState<Fragment[]>([]);
   const [total, setTotal] = useState(0);
-  const [totalChunks, setTotalChunks] = useState(0);
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<Doc[] | null>(null); // 非 null = 搜索态
+  const [results, setResults] = useState<Fragment[] | null>(null); // 非 null = 搜索态
   const [page, setPage] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,7 +40,6 @@ export function KnowledgeView() {
     return api.documents.list(p, PAGE_SIZE).then((r) => {
       setDocs(r.items);
       setTotal(r.total);
-      setTotalChunks(r.total_chunks);
     });
   }, []);
 
@@ -53,7 +52,7 @@ export function KnowledgeView() {
       if (q) {
         setBusy(true);
         api.documents.search(q)
-          .then((r) => setResults(r as Doc[]))
+          .then((r) => setResults(r as Fragment[]))
           .catch((e: any) => { setError(String(e?.message || e)); setResults([]); })
           .finally(() => setBusy(false));
       } else {
@@ -100,7 +99,7 @@ export function KnowledgeView() {
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 2 }}>
         <Box>
           <Typography variant="h5" sx={{ fontWeight: 700 }}>知识库</Typography>
-          <Typography color="text.secondary" variant="body2">共 {totalChunks} 篇文档片段</Typography>
+          <Typography color="text.secondary" variant="body2">共 {total} 篇文档片段</Typography>
         </Box>
         <Button component="label" variant="contained" startIcon={<UploadFileIcon />} disabled={busy}>
           导入文档
@@ -140,41 +139,45 @@ export function KnowledgeView() {
                 initial="initial" animate="animate" exit="exit">
                 <Card variant="outlined">
                   <CardContent sx={{ "&:last-child": { pb: 2 } }}>
-                    <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
-                      <DescriptionIcon color="action" fontSize="small" sx={{ mt: 0.3 }} />
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Stack direction="row" spacing={1}
-                          sx={{ alignItems: "center", justifyContent: "space-between" }}>
-                          <Typography sx={{ fontWeight: 600, wordBreak: "break-all" }}>
+                    <Box sx={{ minWidth: 0 }}>
+                      {/* 顶行：来源文件名（带文件图标）+ 相关度 + 删除 */}
+                      <Stack direction="row" spacing={1}
+                        sx={{ alignItems: "center", justifyContent: "space-between" }}>
+                        <Stack direction="row" spacing={0.5}
+                          sx={{ alignItems: "center", minWidth: 0, color: "text.secondary" }}>
+                          <DescriptionIcon color="action" fontSize="small" />
+                          <Typography variant="body2" sx={{ fontWeight: 600, wordBreak: "break-all" }}>
                             {d.filename}
                           </Typography>
-                          <Stack direction="row" spacing={0.5} sx={{ alignItems: "center", flexShrink: 0 }}>
-                            {searching && d.relevance !== undefined && (
-                              <Chip size="small" color="primary" variant="outlined"
-                                label={`相关度 ${d.relevance}%`} />
-                            )}
-                            <IconButton size="small" color="error" aria-label="删除文档"
-                              onClick={() => remove(d.id)}>
-                              <DeleteIcon fontSize="small" />
-                            </IconButton>
-                          </Stack>
                         </Stack>
-                        {d.excerpt && (
-                          <Typography variant="body2" color="text.secondary" sx={{
-                            mt: 0.5,
-                            display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
-                            overflow: "hidden",
-                          }}>
-                            {d.excerpt}
-                          </Typography>
-                        )}
-                        <Stack direction="row" spacing={1}
-                          sx={{ mt: 1, alignItems: "center", color: "text.secondary" }}>
-                          <Chip size="small" label={d.category} />
-                          <Typography variant="caption">{fmtDate(d.uploaded_at)}</Typography>
+                        <Stack direction="row" spacing={0.5} sx={{ alignItems: "center", flexShrink: 0 }}>
+                          {searching && d.relevance !== undefined && (
+                            <Chip size="small" color="primary" variant="outlined"
+                              label={`相关度 ${d.relevance}%`} />
+                          )}
+                          <IconButton size="small" color="error" aria-label="删除片段"
+                            onClick={() => remove(d.id)}>
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
                         </Stack>
-                      </Box>
-                    </Stack>
+                      </Stack>
+                      {/* 片段正文 */}
+                      {d.excerpt && (
+                        <Typography variant="body2" sx={{
+                          mt: 0.75,
+                          display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical",
+                          overflow: "hidden",
+                        }}>
+                          {d.excerpt}
+                        </Typography>
+                      )}
+                      {/* 底部：分类 + 日期 */}
+                      <Stack direction="row" spacing={1}
+                        sx={{ mt: 1, alignItems: "center", color: "text.secondary" }}>
+                        <Chip size="small" label={d.category} />
+                        <Typography variant="caption">{fmtDate(d.uploaded_at)}</Typography>
+                      </Stack>
+                    </Box>
                   </CardContent>
                 </Card>
               </motion.div>

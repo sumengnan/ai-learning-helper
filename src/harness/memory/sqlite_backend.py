@@ -93,6 +93,24 @@ class SqliteVecBackend:
                 out.append(self._row_to_record(row))
         return out
 
+    def list_by_owner(self, owner_id: str, kind: str, *,
+                      limit: int | None = None, offset: int = 0) -> list[MemoryRecord]:
+        """按 owner+kind 分页列举未废弃记录（rowid 降序 = 最近写入在前）。"""
+        sql = (f"SELECT {','.join(_COLS)} FROM memory_records "
+               "WHERE owner_id = ? AND kind = ? AND superseded = 0 ORDER BY rowid DESC")
+        params: list = [owner_id, kind]
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params += [limit, offset]
+        rows = self._conn.execute(sql, params).fetchall()
+        return [self._row_to_record(r) for r in rows]
+
+    def count_by_owner(self, owner_id: str, kind: str) -> int:
+        return self._conn.execute(
+            "SELECT COUNT(*) FROM memory_records "
+            "WHERE owner_id = ? AND kind = ? AND superseded = 0",
+            (owner_id, kind)).fetchone()[0]
+
     def list_by_entity(self, owner_id: str, kind: str,
                        entity_key: str) -> list[MemoryRecord]:
         rows = self._conn.execute(

@@ -146,10 +146,11 @@ export const api = {
   remove: (id: string): Promise<void> =>
     authFetch(`/api/conversations/${id}`, { method: "DELETE" }).then(() => undefined),
   documents: {
+    // 知识库以切分后的片段（chunk）为单元：每片一项，标注来源文件名
     list: (page = 1, size = 8): Promise<{
-      items: { id: string; filename: string; size: number; num_chunks: number;
-               uploaded_at: string; excerpt: string; category: string }[];
-      total: number; total_chunks: number;
+      items: { id: string; filename: string; uploaded_at: string;
+               category: string; excerpt: string }[];
+      total: number;
     }> =>
       authFetch(`/api/documents?page=${page}&size=${size}`).then((r) => r.json()),
     search: (q: string): Promise<{

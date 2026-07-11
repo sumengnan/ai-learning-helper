@@ -31,19 +31,16 @@ def make_documents_router(service, doc_store, config) -> APIRouter:
             raise HTTPException(status_code=400, detail="文档为空或无法提取文本")
 
     @router.get("/api/documents")
-    async def list_documents(page: int = 1, size: int = 8,
+    async def list_fragments(page: int = 1, size: int = 8,
                              user_id: str = Depends(current_user)):
-        page = max(1, page)
+        # 知识库以切分后的片段（chunk）为展示单元，每片一项
+        if service is None:
+            return {"items": [], "total": 0}
         size = max(1, min(100, size))
-        offset = (page - 1) * size
-        return {
-            "items": doc_store.list(user_id, limit=size, offset=offset),
-            "total": doc_store.count(user_id),
-            "total_chunks": doc_store.total_chunks(user_id),
-        }
+        return service.list_fragments(user_id, max(1, page), size)
 
     @router.get("/api/documents/search")
-    async def search_documents(q: str = "", k: int = 30,
+    async def search_fragments(q: str = "", k: int = 30,
                                user_id: str = Depends(current_user)):
         if service is None:
             raise HTTPException(status_code=503, detail="知识库未启用（未配置 embedding）")
@@ -51,13 +48,12 @@ def make_documents_router(service, doc_store, config) -> APIRouter:
             return []
         return await service.search(user_id, q.strip(), k)
 
-    @router.delete("/api/documents/{doc_id}")
-    async def delete_document(doc_id: str, user_id: str = Depends(current_user)):
+    @router.delete("/api/documents/{chunk_id}")
+    async def delete_fragment(chunk_id: str, user_id: str = Depends(current_user)):
         if service is None:
             raise HTTPException(status_code=503, detail="知识库未启用")
-        if not doc_store.exists(user_id, doc_id):
-            raise HTTPException(status_code=404, detail="文档不存在")
-        service.delete(user_id, doc_id)
+        if not service.delete_fragment(user_id, chunk_id):
+            raise HTTPException(status_code=404, detail="片段不存在")
         return {"ok": True}
 
     return router

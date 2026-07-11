@@ -47,5 +47,6 @@ class Memory:
         hits = self._backend.vector_search(
             vectors[0], filters=MemoryFilter(owner_id=owner_id, kind=kind), k=k)
         return [MemoryHit(text=h.record.text, collection=collection,
-                          metadata=h.record.metadata, distance=h.distance)
+                          metadata=h.record.metadata, distance=h.distance,
+                          id=h.record.id, created_at=h.record.created_at)
                 for h in hits]

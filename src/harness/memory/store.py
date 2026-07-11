@@ -14,6 +14,8 @@ class MemoryHit:
     collection: str
     metadata: dict
     distance: float
+    id: str = ""            # 命中记录的 id（facade 回填；旧 MemoryStore 路径留空）
+    created_at: str = ""    # 命中记录的创建时间（同上）
 
 
 def _now() -> str:

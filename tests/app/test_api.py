@@ -75,20 +75,24 @@ def _client_with_kb(make_mock, mock_embedder):
     return TestClient(app)
 
 
-def test_upload_list_delete(make_mock, mock_embedder):
+def test_upload_list_delete_fragments(make_mock, mock_embedder):
+    # 知识库以片段（chunk）为展示单元：上传后列出片段、删除单个片段
     client = _client_with_kb(make_mock, mock_embedder)
     h = _auth_headers(client)
     r = client.post("/api/documents", files={"file": ("bio.txt", "光合作用内容".encode(), "text/plain")}, headers=h)
     assert r.status_code == 200
-    doc_id = r.json()["id"]
     listed = client.get("/api/documents", headers=h).json()
-    assert listed["total"] == 1 and listed["total_chunks"] >= 1
-    doc = next(d for d in listed["items"] if d["id"] == doc_id)
-    assert doc["category"] == "文本"          # bio.txt → 文本
-    assert "光合作用" in doc["excerpt"]
-    assert client.delete(f"/api/documents/{doc_id}", headers=h).status_code == 200
+    assert listed["total"] >= 1 and "total_chunks" not in listed
+    frag = listed["items"][0]
+    assert frag["filename"] == "bio.txt" and frag["category"] == "文本"   # 来源文件名 + 分类
+    assert "光合作用" in frag["excerpt"]                                    # 卡片正文是片段内容
+    # 逐个删除片段直至清空，验证同步
+    for f in listed["items"]:
+        assert client.delete(f"/api/documents/{f['id']}", headers=h).status_code == 200
     empty = client.get("/api/documents", headers=h).json()
     assert empty["items"] == [] and empty["total"] == 0
+    # 删不存在的片段 → 404
+    assert client.delete("/api/documents/nope", headers=h).status_code == 404
 
 
 def test_search_documents(make_mock, mock_embedder):

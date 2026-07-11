@@ -3,7 +3,12 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+from .documents import _category
 from .parsing import parse_file
+
+
+def _clip(text: str, n: int = 300) -> str:
+    return " ".join(text.split())[:n]
 
 
 class EmptyDocument(Exception):
@@ -32,30 +37,42 @@ class KnowledgeService:
         self._doc_store.create(user_id, doc_id, filename, len(data), chunk_ids, excerpt)
         return {"id": doc_id, "filename": filename, "num_chunks": len(chunk_ids)}
 
+    def list_fragments(self, user_id: str, page: int = 1, size: int = 8) -> dict:
+        """分页列举该用户知识库的所有片段（chunk），每片一项。"""
+        kind = self._collection
+        offset = (max(1, page) - 1) * size
+        records = self._memory_store.list_by_owner(user_id, kind, limit=size, offset=offset)
+        items = [self._fragment(r.id, r.text, r.metadata, r.created_at) for r in records]
+        return {"items": items, "total": self._memory_store.count_by_owner(user_id, kind)}
+
     async def search(self, user_id: str, query: str, k: int = 30) -> list[dict]:
+        """片段级语义检索：每个命中 chunk 一项，带相关度。"""
         hits = await self._memory.search(query, self._collection_for(user_id), k)
-        # 按 doc_id 聚合，取每文档最小 distance（越小越相关）的命中为代表
-        best: dict[str, object] = {}
-        for h in hits:
-            doc_id = h.metadata.get("doc_id")
-            if doc_id is None:
-                continue
-            cur = best.get(doc_id)
-            if cur is None or h.distance < cur.distance:
-                best[doc_id] = h
         results = []
-        for doc_id, h in best.items():
-            doc = self._doc_store.get(user_id, doc_id)
-            if doc is None:                        # 文档已删、chunk 残留则跳过
-                continue
+        for h in hits:
             relevance = max(0, min(100, round(100 / (1 + h.distance))))
-            results.append({
-                "id": doc_id, "filename": doc["filename"], "uploaded_at": doc["uploaded_at"],
-                "category": doc["category"], "excerpt": " ".join(h.text.split())[:200],
-                "relevance": relevance,
-            })
+            item = self._fragment(h.id, h.text, h.metadata, h.created_at)
+            item["relevance"] = relevance
+            results.append(item)
         results.sort(key=lambda r: r["relevance"], reverse=True)
         return results
+
+    @staticmethod
+    def _fragment(chunk_id: str, text: str, metadata: dict, created_at: str) -> dict:
+        filename = (metadata or {}).get("source", "")
+        return {"id": chunk_id, "filename": filename, "excerpt": _clip(text),
+                "category": _category(filename), "uploaded_at": created_at}
+
+    def delete_fragment(self, user_id: str, chunk_id: str) -> bool:
+        """删除单个片段：从向量库移除并回写父文档 chunk_ids/num_chunks。找不到返回 False。"""
+        recs = self._memory_store.get([chunk_id])
+        if not recs or recs[0].owner_id != user_id:
+            return False
+        doc_id = (recs[0].metadata or {}).get("doc_id")
+        self._memory_store.delete([chunk_id])
+        if doc_id:
+            self._doc_store.remove_chunk(user_id, doc_id, chunk_id)
+        return True
 
     def delete(self, user_id: str, doc_id: str) -> None:
         self._memory_store.delete(self._doc_store.chunk_ids(user_id, doc_id))
