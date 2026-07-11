@@ -53,3 +53,38 @@ async def test_hybrid_beats_vector_only(mock_embedder):
     mh = await evaluate(_retriever(backend, emb, hybrid), flt, _CASES, k=3)
     assert mh["hit@k"] >= mv["hit@k"]
     assert mh["mrr"] >= mv["mrr"]
+
+
+from harness.memory.eval import store_size
+from harness.memory.maintainer import ConsolidationConfig, MemoryMaintainer
+
+
+class _Scripted:
+    def __init__(self, responses):
+        self._r = list(responses)
+    async def __call__(self, s, u):
+        return self._r.pop(0)
+
+
+async def test_consolidation_preserves_recall_reduces_size(mock_embedder):
+    from harness.memory.record import MemType, MemoryFilter, MemoryRecord
+    from harness.memory.reranker import NoOpReranker
+    from harness.memory.retriever import RetrievalConfig, Retriever
+    from harness.memory.sqlite_backend import SqliteVecBackend
+    backend = SqliteVecBackend(":memory:", dimension=64)
+    emb = mock_embedder(dimension=64)
+    distilled = "用户偏好深色主题"
+    v = (await emb.embed(["深色 主题 偏好"]))[0]
+    for rid in ("a", "b", "c"):
+        backend.upsert([MemoryRecord(owner_id="u1", kind="k", mem_type=MemType.EPISODIC,
+                                     text=f"深色 主题 偏好 {rid}", embedding=v, id=rid)])
+    size_before = store_size(backend, "u1", "k")
+    assert size_before == 3
+    m = MemoryMaintainer(backend, emb, _Scripted([distilled]),
+                         ConsolidationConfig(min_cluster=2), now_fn=lambda: 1000)
+    await m.consolidate("u1", "k")
+    size_after = store_size(backend, "u1", "k")
+    assert size_after < size_before
+    retr = Retriever(backend, emb, NoOpReranker(), RetrievalConfig())
+    hits = await retr.retrieve(distilled, MemoryFilter(owner_id="u1", kind="k"), k=5)
+    assert any(h.record.text == distilled for h in hits)

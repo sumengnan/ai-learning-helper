@@ -25,6 +25,7 @@ class Harness:
     memory: object | None = None
     memory_store: object | None = None
     memory_writer: object | None = None
+    memory_maintainer: object | None = None
     download_store: object | None = None
     skill_registry: object | None = None
     sandbox: object | None = None            # 绑进工具的会话级沙箱代理（SandboxProxy）
@@ -42,6 +43,7 @@ def build_harness(config) -> Harness:
     memory = None
     memory_store = None
     memory_writer = None
+    memory_maintainer = None
 
     def _reg(tool):
         reg.register(tool)
@@ -100,13 +102,26 @@ def build_harness(config) -> Harness:
                      retriever=_retriever)
         memory = mem
         memory_store = mem_store
+        from harness.memory.maintainer import ConsolidationConfig, MemoryMaintainer
+        from app.completion import build_completer
+        memory_maintainer = MemoryMaintainer(
+            mem_store, embedder, build_completer(client, config.model),
+            ConsolidationConfig(
+                sim_threshold=config.consolidation_sim_threshold,
+                min_cluster=config.consolidation_min_cluster,
+                max_source=config.consolidation_max_source))
         if config.memory_write_extract:
             from harness.memory.writer import MemoryWriter
-            from app.completion import build_completer
+            _ttl_by_type = {
+                "episodic": config.ttl_episodic_days * 86400,
+                "semantic": config.ttl_semantic_days * 86400,
+                "procedural": config.ttl_procedural_days * 86400,
+            }
             memory_writer = MemoryWriter(
                 mem_store, embedder, _retriever,
                 build_completer(client, config.model),
-                candidate_k=config.memory_write_candidate_k)
+                candidate_k=config.memory_write_candidate_k,
+                ttl_by_type=_ttl_by_type)
         _reg(SearchMemoryTool(mem, default_k=config.search_top_k))
         _reg(RememberTool(mem))
         _reg(RecallEpisodesTool(EpisodicMemory(mem), default_k=config.episode_recall_k))
@@ -193,6 +208,7 @@ def build_harness(config) -> Harness:
         trajectory_store=traj, sink=TrajectorySink(traj),
         system_prompt=config.app_system_prompt + PLAN_SYSTEM_GUIDANCE,
         memory=memory, memory_store=memory_store, memory_writer=memory_writer,
+        memory_maintainer=memory_maintainer,
         download_store=dstore,
         skill_registry=skill_registry, sandbox=sandbox, sandbox_manager=sandbox_manager,
         mcp_manager=mcp_manager)

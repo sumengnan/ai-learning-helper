@@ -111,12 +111,16 @@ class MemoryWriter:
     """LLM 驱动的智能写入：提炼 → 找候选 → 调和 → 应用。"""
 
     def __init__(self, backend, embedder, retriever, complete, *,
-                 candidate_k: int = 5) -> None:
+                 candidate_k: int = 5, ttl_by_type: dict | None = None,
+                 now_fn=None) -> None:
         self._backend = backend
         self._embedder = embedder
         self._retriever = retriever
         self._complete = complete
         self._candidate_k = candidate_k
+        self._ttl_by_type = ttl_by_type
+        import time
+        self._now_fn = now_fn or (lambda: int(time.time()))
 
     async def _extract(self, text: str) -> list[ExtractedFact]:
         try:
@@ -167,11 +171,17 @@ class MemoryWriter:
                     old = self._backend.get(op.supersede_ids)
                     version = max([r.version for r in old], default=0) + 1
                     self._backend.set_superseded(op.supersede_ids)
+                expires_at = 0
+                if self._ttl_by_type:
+                    ttl = self._ttl_by_type.get(op.fact.mem_type.value, 0)
+                    if ttl > 0:
+                        expires_at = self._now_fn() + ttl
                 vec = (await self._embedder.embed([op.fact.text]))[0]
                 rec = MemoryRecord(
                     owner_id=owner_id, kind=kind, mem_type=op.fact.mem_type,
                     text=op.fact.text, embedding=vec, entity_key=op.fact.entity_key,
-                    importance=op.fact.importance, version=version, source="extract")
+                    importance=op.fact.importance, version=version, source="extract",
+                    expires_at=expires_at)
                 new_ids.extend(self._backend.upsert([rec]))
             except Exception as e:                       # 单个 op 失败不影响其余（best-effort）
                 log.warning("memory apply op failed (%s): %s", op.op, e)

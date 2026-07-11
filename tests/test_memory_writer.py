@@ -203,3 +203,35 @@ async def test_write_survives_gather_candidates_failure(mock_embedder):
     w = MemoryWriter(backend, emb, _BoomRetriever(), comp)
     ids = await w.write("u1", "k", "输入")           # gather 抛错 → 降级，不崩
     assert len(ids) == 1 and backend.get(ids)[0].text == "事实X"
+
+
+async def test_writer_sets_ttl_by_type(mock_embedder):
+    backend = SqliteVecBackend(":memory:", dimension=64)
+    emb = mock_embedder(dimension=64)
+    from harness.memory.reranker import NoOpReranker
+    from harness.memory.retriever import RetrievalConfig, Retriever
+    retr = Retriever(backend, emb, NoOpReranker(), RetrievalConfig())
+    comp = ScriptedCompleter(['[{"text":"用户今天做了练习","mem_type":"episodic"}]'])
+    w = MemoryWriter(backend, emb, retr, comp,
+                     ttl_by_type={"episodic": 86400}, now_fn=lambda: 1000)
+    ids = await w.write("u1", "k", "今天练习了")
+    rec = backend.get(ids)[0]
+    assert rec.expires_at == 1000 + 86400
+
+    comp2 = ScriptedCompleter(['[{"text":"用户是后端工程师","mem_type":"semantic"}]'])
+    w2 = MemoryWriter(backend, emb, retr, comp2,
+                      ttl_by_type={"episodic": 86400}, now_fn=lambda: 1000)
+    ids2 = await w2.write("u1", "k2", "我是后端")
+    assert backend.get(ids2)[0].expires_at == 0
+
+
+async def test_writer_no_ttl_by_default(mock_embedder):
+    backend = SqliteVecBackend(":memory:", dimension=64)
+    emb = mock_embedder(dimension=64)
+    from harness.memory.reranker import NoOpReranker
+    from harness.memory.retriever import RetrievalConfig, Retriever
+    retr = Retriever(backend, emb, NoOpReranker(), RetrievalConfig())
+    comp = ScriptedCompleter(['[{"text":"用户今天做了练习","mem_type":"episodic"}]'])
+    w = MemoryWriter(backend, emb, retr, comp)
+    ids = await w.write("u1", "k", "今天练习了")
+    assert backend.get(ids)[0].expires_at == 0
