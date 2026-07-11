@@ -12,6 +12,7 @@ import { KnowledgeView } from "./pages/KnowledgeView";
 import QuestionBankView from "./pages/QuestionBankView";
 import WrongAnswersView from "./pages/WrongAnswersView";
 import DownloadsView from "./pages/DownloadsView";
+import SystemMonitorView from "./pages/SystemMonitorView";
 import { pageVariants } from "./components/motion";
 
 function ShellRoutes() {
@@ -34,6 +35,7 @@ function ShellRoutes() {
             <Route path="/questions" element={<QuestionBankView />} />
             <Route path="/wrong" element={<WrongAnswersView />} />
             <Route path="/downloads" element={<DownloadsView />} />
+            <Route path="/monitor" element={<SystemMonitorView />} />
           </Routes>
         </motion.div>
       </AnimatePresence>

@@ -14,6 +14,7 @@ import MenuBookIcon from "@mui/icons-material/MenuBook";
 import QuizIcon from "@mui/icons-material/Quiz";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlined";
 import DownloadIcon from "@mui/icons-material/Download";
+import MonitorHeartIcon from "@mui/icons-material/MonitorHeart";
 import Brightness4Icon from "@mui/icons-material/Brightness4";
 import Brightness7Icon from "@mui/icons-material/Brightness7";
 import LogoutIcon from "@mui/icons-material/Logout";
@@ -35,6 +36,7 @@ const NAV: { to: string; label: string; icon: ReactNode }[] = [
   { to: "/questions", label: "题库", icon: <QuizIcon /> },
   { to: "/wrong", label: "错题集", icon: <ErrorOutlineIcon /> },
   { to: "/downloads", label: "下载", icon: <DownloadIcon /> },
+  { to: "/monitor", label: "系统监控", icon: <MonitorHeartIcon /> },
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {

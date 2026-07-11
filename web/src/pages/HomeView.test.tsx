@@ -21,7 +21,7 @@ const OV: StatsOverview = {
     totals: {
       runs: 94, runs_finished: 87, runs_error: 7, success_rate: 0.93, model_calls: 235,
       total_tokens: 1140386, total_prompt: 900000, total_completion: 240386,
-      avg_latency_ms: 7265, p95_latency_ms: 14200, retries: 0, cost_usd: null,
+      avg_latency_ms: 7265, p95_latency_ms: 14200, retries: 0, cost_usd: null, cost_currency: "¥",
       conversations: 7, messages: 44,
     },
     daily: Array.from({ length: 14 }, (_, i) => ({ date: `2026-07-${i + 1}`, runs: i, tokens: i * 100 })),
@@ -49,20 +49,9 @@ describe("HomeView", () => {
     expect(screen.getByText("52")).toBeTruthy();          // AI 记的偏好
     expect(screen.getByText("联网查资料")).toBeTruthy();   // 能力（产品话术）
     expect(screen.getByText("114.0 万")).toBeTruthy();     // token 格式化
-    // 工程黑话默认不出现在学习主场
+    // 工程黑话不出现在学习主场（已迁移到「系统监控」菜单）
     expect(screen.queryByText("P95 延迟")).toBeNull();
-  });
-
-  it("切到工程台：出现运维指标（成功率 / P95 / 工具成功率）", async () => {
-    (statsApi.overview as any).mockResolvedValue(OV);
-    renderHome();
-    await waitFor(() => expect(screen.getByText("二叉树遍历")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "工程台" }));
-    await waitFor(() => expect(screen.getByText("P95 延迟")).toBeTruthy());
-    expect(screen.getByText("成功率")).toBeTruthy();
-    expect(screen.getByText("14.2s")).toBeTruthy();        // p95 格式化
-    expect(screen.getByText("http_request")).toBeTruthy(); // 原始工具名（工程口径）
-    expect(screen.getByText("$ —")).toBeTruthy();          // 成本占位
+    expect(screen.queryByRole("button", { name: "工程台" })).toBeNull();  // 切换页签已移除
   });
 
   it("无对话时显示开始对话引导", async () => {
