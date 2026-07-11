@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+
+from .record import MemoryFilter, MemoryRecord
 
 
 def rrf_fuse(ranked_lists: list[list[str]], rrf_k: int = 60) -> dict[str, float]:
@@ -45,12 +49,6 @@ def mmr_select(candidate_ids: list[str], relevance: dict[str, float],
         selected.append(best)
         remaining.remove(best)
     return selected
-
-
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-
-from .record import MemoryFilter, MemoryRecord
 
 
 @dataclass

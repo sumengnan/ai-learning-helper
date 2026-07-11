@@ -25,7 +25,7 @@ class MemoryBackend(Protocol):
 
     def keyword_search(self, query_text: str, *,
                        filters: MemoryFilter, k: int) -> list[MemoryHit]:
-        """SP1 占位返回空；FTS5 真实现留 SP2（签名先定死）。"""
+        """FTS5 关键词检索（bm25 排序，filters 下推）；空/短查询返回空。"""
         ...
 
     def get_embeddings(self, ids: list[str]) -> dict[str, list[float]]:

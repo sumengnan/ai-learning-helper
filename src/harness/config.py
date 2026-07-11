@@ -37,6 +37,15 @@ class HarnessConfig(BaseSettings):
     chunk_overlap: int = 200
     search_top_k: int = 5
     memory_collection: str = "knowledge"
+    retrieval_candidate_pool: int = 20
+    retrieval_w_relevance: float = 1.0
+    retrieval_w_recency: float = 0.2
+    retrieval_w_importance: float = 0.1
+    retrieval_recency_half_life_days: float = 30.0
+    retrieval_use_keyword: bool = True
+    retrieval_use_mmr: bool = True
+    retrieval_mmr_lambda: float = 0.7
+    retrieval_rrf_k: int = 60
     # 容器沙箱
     sandbox_backend: str = "local"          # local | docker
     sandbox_docker_host: str = ""           # tcp://host:2376（Docker daemon 的 TLS 端口）
