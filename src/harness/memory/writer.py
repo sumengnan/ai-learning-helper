@@ -5,7 +5,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 
-from .record import MemType, MemoryRecord
+from .record import MemType, MemoryFilter, MemoryRecord
 
 log = logging.getLogger(__name__)
 
@@ -128,7 +128,6 @@ class MemoryWriter:
 
     async def _gather_candidates(self, owner_id: str, kind: str,
                                  facts: list[ExtractedFact]) -> list[MemoryRecord]:
-        from .record import MemoryFilter
         cand: dict[str, MemoryRecord] = {}
         for f in facts:
             if f.entity_key:
@@ -162,17 +161,21 @@ class MemoryWriter:
         for op in ops:
             if op.op == "NOOP" or op.fact is None:
                 continue
-            version = 1
-            if op.op == "REPLACE" and op.supersede_ids:
-                old = self._backend.get(op.supersede_ids)
-                version = max([r.version for r in old], default=0) + 1
-                self._backend.set_superseded(op.supersede_ids)
-            vec = (await self._embedder.embed([op.fact.text]))[0]
-            rec = MemoryRecord(
-                owner_id=owner_id, kind=kind, mem_type=op.fact.mem_type,
-                text=op.fact.text, embedding=vec, entity_key=op.fact.entity_key,
-                importance=op.fact.importance, version=version, source="extract")
-            new_ids.extend(self._backend.upsert([rec]))
+            try:
+                version = 1
+                if op.op == "REPLACE" and op.supersede_ids:
+                    old = self._backend.get(op.supersede_ids)
+                    version = max([r.version for r in old], default=0) + 1
+                    self._backend.set_superseded(op.supersede_ids)
+                vec = (await self._embedder.embed([op.fact.text]))[0]
+                rec = MemoryRecord(
+                    owner_id=owner_id, kind=kind, mem_type=op.fact.mem_type,
+                    text=op.fact.text, embedding=vec, entity_key=op.fact.entity_key,
+                    importance=op.fact.importance, version=version, source="extract")
+                new_ids.extend(self._backend.upsert([rec]))
+            except Exception as e:                       # 单个 op 失败不影响其余（best-effort）
+                log.warning("memory apply op failed (%s): %s", op.op, e)
+                continue
         return new_ids
 
     async def write(self, owner_id: str, kind: str, text: str) -> list[str]:
@@ -182,6 +185,10 @@ class MemoryWriter:
         facts = await self._extract(text)
         if not facts:
             return []
-        candidates = await self._gather_candidates(owner_id, kind, facts)
+        try:
+            candidates = await self._gather_candidates(owner_id, kind, facts)
+        except Exception as e:                           # 找候选失败：降级为无候选（全 ADD）
+            log.warning("memory gather candidates failed: %s", e)
+            candidates = []
         ops = await self._reconcile(facts, candidates)
         return await self._apply(owner_id, kind, ops)

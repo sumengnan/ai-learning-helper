@@ -154,3 +154,52 @@ async def test_write_noop_dedup(mock_embedder):
     ids = await w.write("u1", "k", "深色主题真好")
     assert ids == []
     assert backend.get(["old1"])[0].superseded == 0
+
+
+class _FlakyEmbedder:
+    """第 fail_on 次（1-based）embed 抛异常，其余正常委托给真实 embedder。"""
+    def __init__(self, real, fail_on):
+        self._real = real
+        self._n = 0
+        self._fail_on = fail_on
+        self.dimension = real.dimension
+    async def embed(self, texts):
+        self._n += 1
+        if self._n == self._fail_on:
+            raise RuntimeError("embed 抖动")
+        return await self._real.embed(texts)
+
+
+async def test_apply_skips_failed_op_keeps_others(mock_embedder):
+    from harness.memory.reranker import NoOpReranker
+    from harness.memory.retriever import RetrievalConfig, Retriever
+    from harness.memory.sqlite_backend import SqliteVecBackend
+    backend = SqliteVecBackend(":memory:", dimension=64)
+    emb = _FlakyEmbedder(mock_embedder(dimension=64), fail_on=2)   # 第 2 条事实 embed 抛错
+    retr = Retriever(backend, mock_embedder(dimension=64), NoOpReranker(), RetrievalConfig())
+    # 提炼出两条事实，无候选 → 两条都 ADD；第 2 条 embed 失败应被跳过
+    comp = ScriptedCompleter(['[{"text":"事实一","mem_type":"semantic"},'
+                              '{"text":"事实二","mem_type":"semantic"}]'])
+    w = MemoryWriter(backend, emb, retr, comp)
+    ids = await w.write("u1", "k", "输入")           # 不应抛异常
+    assert len(ids) == 1                             # 第一条成功写入，第二条被跳过
+    assert backend.get(ids)[0].text == "事实一"
+
+
+async def test_write_survives_gather_candidates_failure(mock_embedder):
+    from harness.memory.record import MemoryFilter
+    from harness.memory.reranker import NoOpReranker
+    from harness.memory.retriever import RetrievalConfig, Retriever
+    from harness.memory.sqlite_backend import SqliteVecBackend
+    backend = SqliteVecBackend(":memory:", dimension=64)
+    emb = mock_embedder(dimension=64)
+    retr = Retriever(backend, emb, NoOpReranker(), RetrievalConfig())
+
+    class _BoomRetriever:
+        async def retrieve(self, *a, **k):
+            raise RuntimeError("retriever 抖动")
+
+    comp = ScriptedCompleter(['[{"text":"事实X","mem_type":"semantic"}]'])
+    w = MemoryWriter(backend, emb, _BoomRetriever(), comp)
+    ids = await w.write("u1", "k", "输入")           # gather 抛错 → 降级，不崩
+    assert len(ids) == 1 and backend.get(ids)[0].text == "事实X"
