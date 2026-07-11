@@ -81,9 +81,26 @@ def test_upload_list_delete(make_mock, mock_embedder):
     r = client.post("/api/documents", files={"file": ("bio.txt", "光合作用内容".encode(), "text/plain")}, headers=h)
     assert r.status_code == 200
     doc_id = r.json()["id"]
-    assert any(d["id"] == doc_id for d in client.get("/api/documents", headers=h).json())
+    listed = client.get("/api/documents", headers=h).json()
+    assert listed["total"] == 1 and listed["total_chunks"] >= 1
+    doc = next(d for d in listed["items"] if d["id"] == doc_id)
+    assert doc["category"] == "文本"          # bio.txt → 文本
+    assert "光合作用" in doc["excerpt"]
     assert client.delete(f"/api/documents/{doc_id}", headers=h).status_code == 200
-    assert client.get("/api/documents", headers=h).json() == []
+    empty = client.get("/api/documents", headers=h).json()
+    assert empty["items"] == [] and empty["total"] == 0
+
+
+def test_search_documents(make_mock, mock_embedder):
+    client = _client_with_kb(make_mock, mock_embedder)
+    h = _auth_headers(client)
+    client.post("/api/documents", files={"file": ("bio.txt", "光合作用内容".encode(), "text/plain")}, headers=h)
+    hits = client.get("/api/documents/search", params={"q": "光合作用"}, headers=h).json()
+    assert len(hits) >= 1
+    top = hits[0]
+    assert 0 <= top["relevance"] <= 100 and top["category"] == "文本"
+    # 空查询返回空
+    assert client.get("/api/documents/search", params={"q": "  "}, headers=h).json() == []
 
 
 def test_upload_unsupported_400(make_mock, mock_embedder):
