@@ -206,6 +206,12 @@ export const api = {
     list: () => authFetch("/api/downloads").then((r) => r.json()),
     remove: (id: string) =>
       authFetch(`/api/downloads/${id}`, { method: "DELETE" }).then(() => undefined),
+    // 预览/缩略图需带 Bearer 头，<img src> 无法携带，故取回鉴权 blob 供组件建 object URL
+    blob: (id: string): Promise<Blob> =>
+      authFetch(`/api/downloads/${id}`).then(async (r) => {
+        if (!r.ok) throw new Error(await detail(r, `加载失败：${r.status}`));
+        return r.blob();
+      }),
   },
   attachments: {
     upload: (convId: string, file: File): Promise<Attachment> => {
