@@ -9,6 +9,7 @@ import {
 import type { Theme } from "@mui/material/styles";
 import { AnimatePresence, motion } from "framer-motion";
 import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutlined";
+import SpaceDashboardIcon from "@mui/icons-material/SpaceDashboard";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
 import QuizIcon from "@mui/icons-material/Quiz";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlined";
@@ -28,7 +29,8 @@ const MINI = 68;
 export const chromeBg = (t: Theme) => (t.palette.mode === "light" ? "#eceef2" : "#181a1f");
 
 const NAV: { to: string; label: string; icon: ReactNode }[] = [
-  { to: "/", label: "AI聊天", icon: <ChatBubbleOutlineIcon /> },
+  { to: "/", label: "首页", icon: <SpaceDashboardIcon /> },
+  { to: "/chat", label: "AI聊天", icon: <ChatBubbleOutlineIcon /> },
   { to: "/knowledge", label: "知识库", icon: <MenuBookIcon /> },
   { to: "/questions", label: "题库", icon: <QuizIcon /> },
   { to: "/wrong", label: "错题集", icon: <ErrorOutlineIcon /> },
