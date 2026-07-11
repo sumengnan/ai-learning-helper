@@ -21,4 +21,19 @@ describe("AgentProgress", () => {
     expect(screen.getAllByText("calculator").length).toBeGreaterThan(0);
     expect(screen.queryByText("MCP")).toBeNull();
   });
+
+  it("生成中：未完成（无结果）的工具调用显示进度圈", () => {
+    const { container } = render(<AgentProgress live steps={[
+      { tool: "browse", args: { url: "http://x" } },   // 无 result → 进行中
+    ]} />);
+    expect(container.querySelector('[role="progressbar"]')).toBeTruthy();
+  });
+
+  it("用户停止后：未完成的工具调用标『已取消』且不再转圈（issue 2）", () => {
+    const { container } = render(<AgentProgress live={false} stopped steps={[
+      { tool: "browse", args: { url: "http://x" } },
+    ]} />);
+    expect(screen.getAllByText(/已取消/).length).toBeGreaterThan(0);
+    expect(container.querySelector('[role="progressbar"]')).toBeNull();
+  });
 });
