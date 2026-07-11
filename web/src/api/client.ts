@@ -146,8 +146,17 @@ export const api = {
   remove: (id: string): Promise<void> =>
     authFetch(`/api/conversations/${id}`, { method: "DELETE" }).then(() => undefined),
   documents: {
-    list: (): Promise<{ id: string; filename: string; num_chunks: number; uploaded_at: string }[]> =>
-      authFetch("/api/documents").then((r) => r.json()),
+    list: (page = 1, size = 8): Promise<{
+      items: { id: string; filename: string; size: number; num_chunks: number;
+               uploaded_at: string; excerpt: string; category: string }[];
+      total: number; total_chunks: number;
+    }> =>
+      authFetch(`/api/documents?page=${page}&size=${size}`).then((r) => r.json()),
+    search: (q: string): Promise<{
+      id: string; filename: string; uploaded_at: string;
+      category: string; excerpt: string; relevance: number;
+    }[]> =>
+      authFetch(`/api/documents/search?q=${encodeURIComponent(q)}`).then((r) => r.json()),
     upload: (file: File) => {
       const fd = new FormData(); fd.append("file", file);
       return authFetch("/api/documents", { method: "POST", body: fd }).then(async (r) => {

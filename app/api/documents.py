@@ -31,8 +31,25 @@ def make_documents_router(service, doc_store, config) -> APIRouter:
             raise HTTPException(status_code=400, detail="文档为空或无法提取文本")
 
     @router.get("/api/documents")
-    async def list_documents(user_id: str = Depends(current_user)):
-        return doc_store.list(user_id)
+    async def list_documents(page: int = 1, size: int = 8,
+                             user_id: str = Depends(current_user)):
+        page = max(1, page)
+        size = max(1, min(100, size))
+        offset = (page - 1) * size
+        return {
+            "items": doc_store.list(user_id, limit=size, offset=offset),
+            "total": doc_store.count(user_id),
+            "total_chunks": doc_store.total_chunks(user_id),
+        }
+
+    @router.get("/api/documents/search")
+    async def search_documents(q: str = "", k: int = 30,
+                               user_id: str = Depends(current_user)):
+        if service is None:
+            raise HTTPException(status_code=503, detail="知识库未启用（未配置 embedding）")
+        if not q.strip():
+            return []
+        return await service.search(user_id, q.strip(), k)
 
     @router.delete("/api/documents/{doc_id}")
     async def delete_document(doc_id: str, user_id: str = Depends(current_user)):

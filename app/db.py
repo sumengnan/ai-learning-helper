@@ -16,7 +16,7 @@ _SCHEMA = (
          PRIMARY KEY(conv_id, seq))""",
     """CREATE TABLE IF NOT EXISTS documents(
          id TEXT PRIMARY KEY, user_id TEXT, filename TEXT, size INTEGER, num_chunks INTEGER,
-         chunk_ids TEXT, uploaded_at TEXT)""",
+         chunk_ids TEXT, uploaded_at TEXT, excerpt TEXT)""",
     """CREATE TABLE IF NOT EXISTS questions(
          id TEXT PRIMARY KEY, user_id TEXT, type TEXT, stem TEXT, options TEXT,
          answer TEXT, explanation TEXT, source TEXT, created_at TEXT)""",
@@ -46,7 +46,7 @@ _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
     "conversations": {"user_id": "TEXT"},
     "conversation_messages": {"steps": "TEXT", "progress": "TEXT", "attachments": "TEXT",
                               "run_id": "TEXT", "status": "TEXT"},
-    "documents": {"user_id": "TEXT"},
+    "documents": {"user_id": "TEXT", "excerpt": "TEXT"},
     "questions": {"user_id": "TEXT"},
     "wrong_answers": {"user_id": "TEXT"},
     "downloads": {"user_id": "TEXT"},
