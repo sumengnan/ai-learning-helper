@@ -89,6 +89,18 @@ class SqliteVecBackend:
         self._conn.execute("DELETE FROM memory_vec WHERE rowid = ?", (rowid,))
         self._conn.execute("DELETE FROM memory_fts WHERE rowid = ?", (rowid,))
 
+    def set_superseded(self, ids: list[str]) -> None:
+        for i in ids:
+            row = self._conn.execute(
+                "SELECT rowid FROM memory_records WHERE id = ?", (i,)).fetchone()
+            if row is None:
+                continue
+            self._conn.execute(
+                "UPDATE memory_records SET superseded = 1 WHERE rowid = ?", (row[0],))
+            self._conn.execute(
+                "UPDATE memory_vec SET superseded = 1 WHERE rowid = ?", (row[0],))
+        self._conn.commit()
+
     # ---- 读 ----
     def get(self, ids: list[str]) -> list[MemoryRecord]:
         out: list[MemoryRecord] = []

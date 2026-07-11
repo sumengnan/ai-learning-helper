@@ -41,6 +41,9 @@ class AppConfig(HarnessConfig):
     attachment_max_mb: int = 100
     attachment_max_count: int = 10
     attachment_vision_max_mb: int = 5
+    memory_write_extract: bool = False
+    memory_write_sample_rate: float = 1.0
+    memory_write_candidate_k: int = 5
     # 分层上下文管理：full=全量拼接（默认，与历史行为字节级一致，安全回退）；
     # window=仅 L1 token 预算滑动窗口；layered=L1+L2 滚动摘要+L3 语义检索。
     context_strategy: str = "full"                 # full | window | layered
