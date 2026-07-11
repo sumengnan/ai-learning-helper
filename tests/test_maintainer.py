@@ -85,3 +85,13 @@ async def test_consolidate_supersede_failure_rolls_back(mock_embedder):
     incl = b.vector_search([1.0, 0.0, 0.0],
                            filters=MemoryFilter(owner_id="u1", mem_type="semantic"), k=5)
     assert not any(h.record.source == "consolidate" for h in incl)   # 新记录已回滚
+
+
+async def test_maintain_purges_and_consolidates(mock_embedder):
+    b = SqliteVecBackend(":memory:", dimension=3, now_fn=lambda: 1000)
+    exp = _epi("old", [0.0, 0.0, 1.0]); exp.expires_at = 100
+    b.upsert([exp, _epi("a", [1.0, 0.0, 0.0]), _epi("b", [1.0, 0.0, 0.0])])
+    m = _maintainer(b, mock_embedder, ["固化事实"], min_cluster=2)
+    out = await m.maintain("u1", "k")
+    assert out["purged"] == 1 and out["created"] == 1
+    assert b.get(["old"]) == []

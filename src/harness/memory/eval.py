@@ -28,3 +28,8 @@ async def evaluate(retriever, filters: MemoryFilter,
                 break
     n = len(cases) or 1
     return {"hit@k": hit_count / n, "mrr": rr_sum / n}
+
+
+def store_size(backend, owner_id: str, kind: str) -> int:
+    """命名空间内未废弃记录数（评测「固化降噪」用）。"""
+    return backend.count_by_owner(owner_id, kind)
