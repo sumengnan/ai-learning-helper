@@ -12,7 +12,7 @@ _SCHEMA = (
          id TEXT PRIMARY KEY, user_id TEXT, title TEXT, created_at TEXT)""",
     """CREATE TABLE IF NOT EXISTS conversation_messages(
          conv_id TEXT, seq INTEGER, role TEXT, content TEXT, tool_calls TEXT,
-         tool_call_id TEXT, steps TEXT, progress TEXT, created_at TEXT,
+         tool_call_id TEXT, steps TEXT, progress TEXT, sources TEXT, created_at TEXT,
          PRIMARY KEY(conv_id, seq))""",
     """CREATE TABLE IF NOT EXISTS documents(
          id TEXT PRIMARY KEY, user_id TEXT, filename TEXT, size INTEGER, num_chunks INTEGER,
@@ -45,7 +45,7 @@ _SCHEMA = (
 _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
     "conversations": {"user_id": "TEXT"},
     "conversation_messages": {"steps": "TEXT", "progress": "TEXT", "attachments": "TEXT",
-                              "run_id": "TEXT", "status": "TEXT"},
+                              "run_id": "TEXT", "status": "TEXT", "sources": "TEXT"},
     "documents": {"user_id": "TEXT", "excerpt": "TEXT"},
     "questions": {"user_id": "TEXT"},
     "wrong_answers": {"user_id": "TEXT"},

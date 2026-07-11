@@ -26,6 +26,7 @@ from ..conversation_memory import ConversationMemoryService
 from ..sandbox_manager import reset_sandbox_conv, set_sandbox_conv
 from ..summaries import SummaryStore
 from ..summarizer import RollingSummarizer
+from ..sources import SOURCE_GUIDE, SourceSink, wrap_tool
 from ..tools.attachment_tools import ListAttachmentsTool, ReadAttachmentTool
 from ..tools.exam_tools import SampleQuestionsTool, SaveWrongAnswerTool
 from ..tools.save_download import SaveDownloadTool
@@ -100,26 +101,30 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                   summarizer=_summarizer, conv_memory=_conv_memory)
 
     def _build_registry(user_id: str, save_wrong: bool, conv_id: str,
-                        has_attachments: bool) -> ToolRegistry:
+                        has_attachments: bool) -> tuple[ToolRegistry, SourceSink]:
         reg = ToolRegistry()
+        sink = SourceSink()
+        # 来源工具包一层记源（wrap_tool 只包「产生来源」的工具，其余原样）
+        def _reg(t):
+            reg.register(wrap_tool(t, sink))
         for t in harness.registry.tools():
-            reg.register(t)
+            _reg(t)
         # 用用户级 save_download 覆盖全局那个（同名），使下载文件按用户隔离
         dstore = getattr(harness, "download_store", None)
         if dstore is not None:
-            reg.register(SaveDownloadTool(
+            _reg(SaveDownloadTool(
                 dstore, config.download_max_mb * 1024 * 1024, user_id))
         if question_store is not None:
-            reg.register(SampleQuestionsTool(question_store, user_id))
+            _reg(SampleQuestionsTool(question_store, user_id))
             if save_wrong and wrong_store is not None:
-                reg.register(SaveWrongAnswerTool(question_store, wrong_store, user_id))
+                _reg(SaveWrongAnswerTool(question_store, wrong_store, user_id))
         # 附件工具：本会话有过附件才暴露（按需取内容，图片走视觉）
         if attachment_store is not None and has_attachments:
-            reg.register(ListAttachmentsTool(attachment_store, user_id, conv_id))
-            reg.register(ReadAttachmentTool(
+            _reg(ListAttachmentsTool(attachment_store, user_id, conv_id))
+            _reg(ReadAttachmentTool(
                 attachment_store, user_id, conv_id,
                 config.attachment_vision_max_mb * 1024 * 1024))
-        return reg
+        return reg, sink
 
     def _sse(ev) -> str:
         return f"data: {json.dumps(event_to_dict(ev), ensure_ascii=False)}\n\n"
@@ -142,8 +147,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             attachment_store is not None
             and attachment_store.count_conv(user_id, req.conversation_id) > 0)
         history = store.messages(req.conversation_id)
-        registry = _build_registry(user_id, req.save_wrong, req.conversation_id,
-                                   has_attachments)
+        registry, source_sink = _build_registry(user_id, req.save_wrong,
+                                                 req.conversation_id, has_attachments)
         gate_on = verifier is not None and config.enable_answer_gate
         # 喂给模型的消息：带附件时追加只含文件名的名单提示（不含内容），入库仍用原文
         model_message = req.message
@@ -156,7 +161,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
 
         # 分层上下文：窗口/摘要/检索的重活在此按会话级预算一次，_new_loop 内只做同步拼装。
         base_ctx = await _assembler.build_manager(
-            harness.system_prompt + EXAM_GUIDE + ATTACHMENT_GUIDE, history,
+            harness.system_prompt + EXAM_GUIDE + ATTACHMENT_GUIDE + SOURCE_GUIDE, history,
             req.message, req.conversation_id)
 
         def _new_loop(run_id_a: str) -> AgentLoop:
@@ -253,6 +258,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             progress: list[dict] = []    # 沙箱/子代理/校验进度（落库）
             question = req.message
             delivered = None
+            delivered_sources: list[dict] = []   # 交付那次尝试的权威来源
             errored = False
             parts: list[str] = []        # 累积客户端面 TextDelta，供 stop/重启保留已生成部分
 
@@ -269,6 +275,10 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                  "status": ev.status, "key": ev.key})
                 return ev
 
+            def _emit_sources(items):
+                # 借 Progress 通道把来源即时推给在途客户端（scope=sources，前端特判、不入 progress 列）
+                return Progress("sources", json.dumps(items, ensure_ascii=False))
+
             try:
                 if not gate_on:
                     # 直通路径：单次尝试、逐字流式（与开门前行为一致）
@@ -276,11 +286,13 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                "grounding": [], "progress": progress}
                     run_id_a = uuid4().hex
                     store.add_run(req.conversation_id, run_id_a)
+                    source_sink.reset()
                     async for s in _drain(_new_loop(run_id_a), run_id_a, model_message, True, collect):
                         yield _acc(s)
                     delivered = collect["final"] or (
                         "（本轮未能完成，请重试）" if collect["error"] else "（本轮未完成）")
                     errored = collect["final"] is None
+                    delivered_sources = source_sink.snapshot()
                 else:
                     # 交付门：缓冲 → 校验 → 不过则回灌重答，最多 answer_gate_max_retries 次
                     corrective = None
@@ -291,6 +303,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                    "grounding": [], "progress": progress}
                         run_id_a = uuid4().hex
                         store.add_run(req.conversation_id, run_id_a)
+                        source_sink.reset()   # 每次尝试重置，交付时快照该次来源
                         async for s in _drain(_new_loop(run_id_a), run_id_a, msg, False, collect):
                             yield s
                         steps.extend(collect["steps"])
@@ -313,10 +326,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         if verdict.ok:
                             yield _emit_verify("校验通过", status="ok", key=ekey)
                             delivered = draft
+                            delivered_sources = source_sink.snapshot()
                             break
                         yield _emit_verify(f"未通过（{verdict.summary}）", status="error", key=ekey)
                         if attempt == max_attempts - 1:      # 用尽次数 → 降级交付
                             delivered = draft or "（本轮未完成）"
+                            delivered_sources = source_sink.snapshot()
                             errored = not draft
                             if verdict.summary:
                                 delivered = (f"⚠️ 此回答未通过自动校验（{verdict.summary}），"
@@ -332,11 +347,14 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         yield _acc(TextDelta(text=chunk))
                     yield RunFinished(message=Message(role=Role.ASSISTANT, content=delivered))
 
-                # 正常完成：UPDATE 占位消息为最终态
+                # 正常完成：先把来源推给在途客户端，再 UPDATE 占位消息为最终态
+                if delivered_sources:
+                    yield _emit_sources(delivered_sources)
                 status = "error" if errored else "done"
                 final_content = delivered or "".join(parts) or "（本轮未完成）"
                 store.finish_turn(req.conversation_id, turn_run_id, final_content,
-                                  steps=steps or None, progress=progress or None, status=status)
+                                  steps=steps or None, progress=progress or None,
+                                  status=status, sources=delivered_sources or None)
                 # L3：把对话文本写入向量库供后续语义召回（best-effort，不阻断）
                 if _conv_memory is not None and not errored and final_content:
                     try:

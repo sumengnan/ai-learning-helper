@@ -1,0 +1,188 @@
+# tests/test_sources.py
+import json
+
+import pytest
+from pydantic import BaseModel
+
+from app.sources import (
+    SourceSink, build_source, is_source_tool, wrap_tool)
+from harness.tools.base import Tool
+from harness.types import ToolOutput
+
+
+# ---------- build_source：各类型工具 ----------
+
+def test_search_memory_extracts_filenames_deduped():
+    result = "[1]（来源：bio.pdf） 光合作用……\n[2]（来源：bio.pdf） 又一段\n[3]（来源：chem.md） 化学"
+    d = build_source("search_memory", {"query": "光合"}, result)
+    assert d["type"] == "knowledge"
+    assert d["label"] == "bio.pdf、chem.md"   # 去重且保序
+
+
+def test_search_memory_empty_is_none():
+    assert build_source("search_memory", {}, "（未在知识库中检索到相关内容）") is None
+
+
+def test_search_memory_hits_without_source_metadata():
+    d = build_source("search_memory", {}, "[1] 一段没有来源标注的文本")
+    assert d["type"] == "knowledge" and d["label"] == "知识库检索"
+
+
+def test_browse_extracts_title_and_url():
+    result = "标题：光合作用 - 维基百科\n最终URL：https://zh.wikipedia.org/wiki/光合作用\n\n正文……"
+    d = build_source("browse", {"url": "https://zh.wikipedia.org/wiki/光合作用"}, result)
+    assert d["type"] == "web"
+    assert d["label"] == "光合作用 - 维基百科"
+    assert d["url"] == "https://zh.wikipedia.org/wiki/光合作用"
+
+
+def test_http_request_labels_domain():
+    d = build_source("http_request", {"url": "https://www.example.com/a/b?x=1"}, "HTTP 200\n<html>")
+    assert d["type"] == "web" and d["label"] == "example.com"
+    assert d["url"] == "https://www.example.com/a/b?x=1"
+
+
+def test_sample_questions_counts_from_json():
+    result = json.dumps([{"stem": "q1"}, {"stem": "q2"}, {"stem": "q3"}], ensure_ascii=False)
+    d = build_source("sample_questions", {"count": 5}, result)
+    assert d["type"] == "question" and "3" in d["label"]
+
+
+def test_sample_questions_empty_is_none():
+    assert build_source("sample_questions", {}, "题库为空。请提醒用户……") is None
+
+
+def test_read_attachment_extracts_filename():
+    d = build_source("read_attachment", {"attachment_id": "a1"}, "「讲义.pdf」内容：\n第一章……")
+    assert d["type"] == "attachment" and d["label"] == "讲义.pdf"
+
+
+def test_read_attachment_missing_is_none():
+    assert build_source("read_attachment", {}, "未找到该附件（attachment_id 有误）") is None
+
+
+def test_recall_episodes():
+    assert build_source("recall_episodes", {}, "[1] 上次这样做成功了")["type"] == "memory"
+    assert build_source("recall_episodes", {}, "（无相关历史经验）") is None
+
+
+def test_code_execution():
+    d = build_source("run_python", {"code": "print(1)"}, "1\n")
+    assert d["type"] == "code" and d["label"] == "Python 代码执行"
+
+
+def test_mcp_tool_parsed():
+    d = build_source("mcp__weather__get_forecast", {"city": "上海"}, "晴 28℃")
+    assert d["type"] == "mcp" and d["label"] == "weather · get_forecast"
+
+
+def test_non_source_tool_is_none():
+    assert build_source("calculator", {"expr": "1+1"}, "2") is None
+    assert build_source("update_plan", {}, "已更新") is None
+    assert build_source("save_download", {}, "已保存") is None
+
+
+def test_is_source_tool():
+    assert is_source_tool("search_memory")
+    assert is_source_tool("mcp__x__y")
+    assert not is_source_tool("calculator")
+
+
+# ---------- SourceSink：编号 / 去重 / 快照 ----------
+
+def test_sink_numbers_and_dedupes():
+    sink = SourceSink()
+    assert sink.record({"type": "web", "label": "A", "url": "http://a"}) == 1
+    assert sink.record({"type": "knowledge", "label": "bio.pdf"}) == 2
+    # 同 URL → 复用编号 1，不新增
+    assert sink.record({"type": "web", "label": "A2", "url": "http://a"}) == 1
+    snap = sink.snapshot()
+    assert [s["index"] for s in snap] == [1, 2]
+
+
+def test_sink_reset_clears():
+    sink = SourceSink()
+    sink.record({"type": "web", "label": "A", "url": "http://a"})
+    sink.reset()
+    assert sink.snapshot() == []
+    assert sink.record({"type": "knowledge", "label": "x"}) == 1
+
+
+# ---------- wrap_tool：接地标注 + 记源 + 报错不记源 ----------
+
+class _FakeSearch(Tool):
+    name = "search_memory"
+    description = "fake"
+
+    class Params(BaseModel):
+        query: str
+
+    def __init__(self, result):
+        self._result = result
+
+    async def run(self, params):
+        if isinstance(self._result, Exception):
+            raise self._result
+        return self._result
+
+
+async def test_wrap_appends_marker_and_records():
+    sink = SourceSink()
+    wrapped = wrap_tool(_FakeSearch("[1]（来源：bio.pdf） 内容"), sink)
+    out = await wrapped.run(wrapped.Params(query="光合"))
+    assert "参考来源 [1]" in out
+    assert "bio.pdf" in out
+    snap = sink.snapshot()
+    assert len(snap) == 1 and snap[0]["type"] == "knowledge"
+
+
+async def test_wrap_tooloutput_preserves_followup():
+    sink = SourceSink()
+
+    class _FakeAtt(Tool):
+        name = "read_attachment"
+        description = "fake"
+
+        class Params(BaseModel):
+            attachment_id: str
+
+        async def run(self, params):
+            return ToolOutput(text="「x.pdf」内容：正文", follow_up=["FU"])
+
+    wrapped = wrap_tool(_FakeAtt(), sink)
+    out = await wrapped.run(wrapped.Params(attachment_id="a1"))
+    assert isinstance(out, ToolOutput)
+    assert "参考来源 [1]" in out.text and out.follow_up == ["FU"]
+
+
+async def test_wrap_error_does_not_record():
+    sink = SourceSink()
+    wrapped = wrap_tool(_FakeSearch(RuntimeError("boom")), sink)
+    with pytest.raises(RuntimeError):
+        await wrapped.run(wrapped.Params(query="x"))
+    assert sink.snapshot() == []
+
+
+async def test_wrap_empty_result_no_marker_no_record():
+    sink = SourceSink()
+    wrapped = wrap_tool(_FakeSearch("（未在知识库中检索到相关内容）"), sink)
+    out = await wrapped.run(wrapped.Params(query="x"))
+    assert "参考来源" not in out
+    assert sink.snapshot() == []
+
+
+def test_wrap_non_source_tool_passthrough():
+    sink = SourceSink()
+
+    class _Calc(Tool):
+        name = "calculator"
+        description = "c"
+
+        class Params(BaseModel):
+            expr: str
+
+        async def run(self, params):
+            return "2"
+
+    calc = _Calc()
+    assert wrap_tool(calc, sink) is calc   # 非来源工具原样返回

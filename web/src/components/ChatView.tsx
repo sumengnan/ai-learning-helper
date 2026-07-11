@@ -12,6 +12,8 @@ import { motion } from "framer-motion";
 import type { ChatMessage } from "../types";
 import { streamChat, attachChat, stopRun, sendDecision, api } from "../api/client";
 import { AgentProgress } from "./AgentProgress";
+import { SourceList } from "./SourceList";
+import { linkifyCitations, citeId } from "./citations";
 import { EmptyHint } from "./EmptyHint";
 import { ProgressBlock } from "./ProgressBlock";
 import { PlanBlock } from "./PlanBlock";
@@ -100,6 +102,17 @@ export function ChatView({ conversationId, initial, autoSend }:
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [flashId, setFlashId] = useState<string | null>(null);
+  const flashTimer = useRef<number | undefined>(undefined);
+
+  // 点击正文 [n] 角标：滚动到对应来源并短暂高亮
+  const scrollToCite = (msgKey: string, n: number) => {
+    const id = citeId(msgKey, n);
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setFlashId(id);
+    window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => setFlashId(null), 1400);
+  };
 
   const patchPending = (tmpId: string, patch: Partial<AttachmentItem> | null) =>
     setPending((ps) => patch === null
@@ -190,6 +203,10 @@ export function ChatView({ conversationId, initial, autoSend }:
       if (s) { s.result = e.data.result.content; s.isError = e.data.result.is_error; }
     });
     else if (e.type === "ModelUsage") upd((a) => { a.usage = { tokens: e.data.usage.total, cost: e.data.cost_usd }; });
+    // 来源借 Progress 通道传（scope=sources，text 为 JSON）：特判解析成 sources，不入 progress 列
+    else if (e.type === "Progress" && e.data.scope === "sources") upd((a) => {
+      try { a.sources = JSON.parse(e.data.text); } catch { /* 忽略坏 JSON */ }
+    });
     else if (e.type === "Progress") upd((a) => { (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text, status: e.data.status, key: e.data.key }); });
     else if (e.type === "RunStarted") runIdRef.current = e.data.run_id;
     else if (e.type === "ApprovalRequired") setApproval({ approvalId: e.data.approval_id, command: e.data.command, reason: e.data.reason });
@@ -242,7 +259,7 @@ export function ChatView({ conversationId, initial, autoSend }:
     if (busyRef.current) return;
     turnRunIdRef.current = runId;
     setBusy(true); busyRef.current = true;
-    upd((a) => { a.content = ""; a.steps = []; a.progress = undefined; });
+    upd((a) => { a.content = ""; a.steps = []; a.progress = undefined; a.sources = undefined; });
     let outcome: "done" | "error" | "stopped" = "done";
     let reloaded = false;
     const controller = new AbortController();
@@ -262,6 +279,7 @@ export function ChatView({ conversationId, initial, autoSend }:
             a.status = (fin.status as ChatMessage["status"]) ?? "done";
             a.steps = fin.steps?.map((s) => ({ tool: s.tool, args: s.args, result: s.result, isError: s.is_error })) ?? a.steps;
             a.progress = fin.progress ?? a.progress;
+            a.sources = fin.sources ?? a.sources;
           });
         } catch { /* 重载失败保持原样 */ }
       } else if (err?.name === "AbortError") outcome = "stopped";
@@ -359,7 +377,11 @@ export function ChatView({ conversationId, initial, autoSend }:
               )}
               {m.content ? (
                 m.role === "assistant" ? (
-                  <Markdown>{m.content}</Markdown>
+                  <Markdown onCitationClick={(n) => scrollToCite(String(i), n)}>
+                    {m.sources && m.sources.length
+                      ? linkifyCitations(m.content, m.sources.length, String(i))
+                      : m.content}
+                  </Markdown>
                 ) : (
                   <Typography component="div" sx={{ whiteSpace: "pre-wrap" }}>
                     {m.content}
@@ -371,6 +393,9 @@ export function ChatView({ conversationId, initial, autoSend }:
                 <Typography component="div" sx={{ whiteSpace: "pre-wrap" }}>
                   {m.role === "assistant" ? "…" : ""}
                 </Typography>
+              )}
+              {m.role === "assistant" && m.sources && m.sources.length > 0 && (
+                <SourceList sources={m.sources} msgKey={String(i)} flashId={flashId} />
               )}
               {m.role === "assistant" && (() => {
                 const live = busy && i === messages.length - 1 && m.status === "streaming";
