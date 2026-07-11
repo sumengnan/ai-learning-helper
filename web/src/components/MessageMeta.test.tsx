@@ -19,6 +19,12 @@ describe("MessageMeta", () => {
     expect(screen.getByText("生成中")).toBeTruthy();
   });
 
+  it("生成中：即使关闭 Token 开关，也显示状态与增长中的耗时", () => {
+    render(<MessageMeta status="streaming" live startedAt={Date.now() - 3000} showMeta={false} />);
+    expect(screen.getByText("生成中")).toBeTruthy();
+    expect(screen.getByText(/\d+\s*秒/)).toBeTruthy();   // 生成中耗时不受开关限制
+  });
+
   it("关闭「展示 Token」时隐藏耗时与 tokens，仅留状态", () => {
     render(<MessageMeta status="done" live={false} elapsedMs={5000}
       usage={{ tokens: 10, cost: null }} showMeta={false} />);
