@@ -48,6 +48,15 @@ def make_documents_router(service, doc_store, config) -> APIRouter:
             return []
         return await service.search(user_id, q.strip(), k)
 
+    @router.get("/api/documents/{chunk_id}")
+    async def get_fragment(chunk_id: str, user_id: str = Depends(current_user)):
+        if service is None:
+            raise HTTPException(status_code=503, detail="知识库未启用")
+        frag = service.get_fragment(user_id, chunk_id)
+        if frag is None:
+            raise HTTPException(status_code=404, detail="片段不存在")
+        return frag
+
     @router.delete("/api/documents/{chunk_id}")
     async def delete_fragment(chunk_id: str, user_id: str = Depends(current_user)):
         if service is None:

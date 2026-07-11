@@ -158,6 +158,14 @@ export const api = {
       category: string; excerpt: string; relevance: number;
     }[]> =>
       authFetch(`/api/documents/search?q=${encodeURIComponent(q)}`).then((r) => r.json()),
+    get: (id: string): Promise<{
+      id: string; filename: string; text: string;
+      category: string; uploaded_at: string; doc_id: string;
+    }> =>
+      authFetch(`/api/documents/${id}`).then(async (r) => {
+        if (!r.ok) throw new Error(await detail(r, `加载失败：${r.status}`));
+        return r.json();
+      }),
     upload: (file: File) => {
       const fd = new FormData(); fd.append("file", file);
       return authFetch("/api/documents", { method: "POST", body: fd }).then(async (r) => {

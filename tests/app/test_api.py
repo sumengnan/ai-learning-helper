@@ -95,6 +95,18 @@ def test_upload_list_delete_fragments(make_mock, mock_embedder):
     assert client.delete("/api/documents/nope", headers=h).status_code == 404
 
 
+def test_get_fragment_detail(make_mock, mock_embedder):
+    client = _client_with_kb(make_mock, mock_embedder)
+    h = _auth_headers(client)
+    client.post("/api/documents", files={"file": ("bio.txt", "光合作用完整内容".encode(), "text/plain")}, headers=h)
+    frag_id = client.get("/api/documents", headers=h).json()["items"][0]["id"]
+    detail = client.get(f"/api/documents/{frag_id}", headers=h).json()
+    assert detail["id"] == frag_id and detail["filename"] == "bio.txt"
+    assert detail["category"] == "文本" and "光合作用完整内容" in detail["text"]
+    # 不存在的片段 → 404
+    assert client.get("/api/documents/nope", headers=h).status_code == 404
+
+
 def test_search_documents(make_mock, mock_embedder):
     client = _client_with_kb(make_mock, mock_embedder)
     h = _auth_headers(client)

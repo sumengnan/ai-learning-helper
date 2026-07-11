@@ -1,6 +1,7 @@
 // web/src/pages/KnowledgeView.test.tsx
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
+import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { KnowledgeView } from "./KnowledgeView";
 import { api } from "../api/client";
 
@@ -14,6 +15,17 @@ const mkFrag = (i: number) => ({
   category: "文本", excerpt: `片段正文 ${i}`,
 });
 
+function renderView() {
+  return render(
+    <MemoryRouter initialEntries={["/knowledge"]}>
+      <Routes>
+        <Route path="/knowledge" element={<KnowledgeView />} />
+        <Route path="/knowledge/:id" element={<div>片段详情页</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -25,7 +37,7 @@ afterEach(() => {
 describe("KnowledgeView", () => {
   it("渲染片段卡片：来源文件名 + 正文 + 副标题用片段总数", async () => {
     (api.documents.list as any).mockResolvedValue({ items: [mkFrag(1)], total: 42 });
-    render(<KnowledgeView />);
+    renderView();
     await waitFor(() => expect(screen.getByText(/doc1\.txt/)).toBeTruthy());
     expect(screen.getByText(/共 42 篇文档片段/)).toBeTruthy();  // total = 片段数
     expect(screen.getByText(/片段正文 1/)).toBeTruthy();
@@ -34,11 +46,19 @@ describe("KnowledgeView", () => {
     expect(screen.queryByText(/相关度/)).toBeNull();
   });
 
+  it("点击卡片跳转到片段详情页", async () => {
+    (api.documents.list as any).mockResolvedValue({ items: [mkFrag(1)], total: 1 });
+    renderView();
+    await waitFor(() => expect(screen.getByText(/片段正文 1/)).toBeTruthy());
+    fireEvent.click(screen.getByText(/片段正文 1/));  // 点卡片内容 → 冒泡到 Card onClick
+    await waitFor(() => expect(screen.getByText("片段详情页")).toBeTruthy());
+  });
+
   it("分页：片段总数超过一页时显示分页控件", async () => {
     (api.documents.list as any).mockResolvedValue({
       items: Array.from({ length: 8 }, (_, i) => mkFrag(i + 1)), total: 20,
     });
-    render(<KnowledgeView />);
+    renderView();
     await waitFor(() => expect(screen.getByText(/doc1\.txt/)).toBeTruthy());
     // 20/8 = 3 页，出现第 3 页按钮
     expect(screen.getByRole("button", { name: /Go to page 3/i })).toBeTruthy();
@@ -50,7 +70,7 @@ describe("KnowledgeView", () => {
       { id: "9", filename: "hit.txt", uploaded_at: "2026-07-11T00:00:00Z",
         category: "文本", excerpt: "命中片段", relevance: 87 },
     ]);
-    render(<KnowledgeView />);
+    renderView();
     const box = await screen.findByPlaceholderText("搜索文档…");
     fireEvent.change(box, { target: { value: "光合作用" } });
     await waitFor(() => expect(screen.getByText(/相关度 87%/)).toBeTruthy());

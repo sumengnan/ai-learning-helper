@@ -9,8 +9,10 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import SearchIcon from "@mui/icons-material/Search";
 import DescriptionIcon from "@mui/icons-material/Description";
 import { AnimatePresence, motion } from "framer-motion";
+import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { listItemVariants } from "../components/motion";
+import { categoryColor, fmtDate } from "./knowledgeUtils";
 
 const PAGE_SIZE = 8;
 
@@ -19,10 +21,6 @@ type Fragment = {
   id: string; filename: string; uploaded_at: string;
   category: string; excerpt: string; relevance?: number;
 };
-
-function fmtDate(iso: string): string {
-  return iso ? iso.slice(0, 10) : "";
-}
 
 export function KnowledgeView() {
   const [docs, setDocs] = useState<Fragment[]>([]);
@@ -33,6 +31,7 @@ export function KnowledgeView() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const navigate = useNavigate();
 
   const searching = results !== null;
 
@@ -137,16 +136,23 @@ export function KnowledgeView() {
             {shown.map((d) => (
               <motion.div key={d.id} layout variants={listItemVariants}
                 initial="initial" animate="animate" exit="exit">
-                <Card variant="outlined">
+                <Card variant="outlined"
+                  onClick={() => navigate(`/knowledge/${d.id}`)}
+                  sx={{
+                    cursor: "pointer", transition: "border-color .15s, box-shadow .15s",
+                    "&:hover": { borderColor: "primary.main", boxShadow: 2 },
+                  }}>
                   <CardContent sx={{ "&:last-child": { pb: 2 } }}>
                     <Box sx={{ minWidth: 0 }}>
-                      {/* 顶行：来源文件名（带文件图标）+ 相关度 + 删除 */}
+                      {/* 顶行：来源文件名（主色，突出）+ 相关度 + 删除 */}
                       <Stack direction="row" spacing={1}
                         sx={{ alignItems: "center", justifyContent: "space-between" }}>
                         <Stack direction="row" spacing={0.5}
-                          sx={{ alignItems: "center", minWidth: 0, color: "text.secondary" }}>
-                          <DescriptionIcon color="action" fontSize="small" />
-                          <Typography variant="body2" sx={{ fontWeight: 600, wordBreak: "break-all" }}>
+                          sx={{ alignItems: "center", minWidth: 0 }}>
+                          <DescriptionIcon color="primary" fontSize="small" />
+                          <Typography variant="body2" sx={{
+                            fontWeight: 600, color: "primary.main", wordBreak: "break-all",
+                          }}>
                             {d.filename}
                           </Typography>
                         </Stack>
@@ -156,14 +162,14 @@ export function KnowledgeView() {
                               label={`相关度 ${d.relevance}%`} />
                           )}
                           <IconButton size="small" color="error" aria-label="删除片段"
-                            onClick={() => remove(d.id)}>
+                            onClick={(e) => { e.stopPropagation(); remove(d.id); }}>
                             <DeleteIcon fontSize="small" />
                           </IconButton>
                         </Stack>
                       </Stack>
-                      {/* 片段正文 */}
+                      {/* 片段正文：作为主内容用常规文字色 */}
                       {d.excerpt && (
-                        <Typography variant="body2" sx={{
+                        <Typography variant="body2" color="text.primary" sx={{
                           mt: 0.75,
                           display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical",
                           overflow: "hidden",
@@ -171,11 +177,14 @@ export function KnowledgeView() {
                           {d.excerpt}
                         </Typography>
                       )}
-                      {/* 底部：分类 + 日期 */}
+                      {/* 底部：分类（按类彩色）+ 日期（弱化灰） */}
                       <Stack direction="row" spacing={1}
-                        sx={{ mt: 1, alignItems: "center", color: "text.secondary" }}>
-                        <Chip size="small" label={d.category} />
-                        <Typography variant="caption">{fmtDate(d.uploaded_at)}</Typography>
+                        sx={{ mt: 1, alignItems: "center" }}>
+                        <Chip size="small" color={categoryColor(d.category)} variant="outlined"
+                          label={d.category} />
+                        <Typography variant="caption" color="text.secondary">
+                          {fmtDate(d.uploaded_at)}
+                        </Typography>
                       </Stack>
                     </Box>
                   </CardContent>
