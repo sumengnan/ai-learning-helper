@@ -25,6 +25,7 @@ import { bubbleVariants } from "./motion";
 const MotionBox = motion(Box);
 
 const SHOW_TOOLS_KEY = "chat_show_tools";
+const SHOW_SOURCES_KEY = "chat_show_sources";
 const SAVE_WRONG_KEY = "chat_save_wrong";
 const MAX_ATTACHMENTS = 10;
 const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;  // 100MB
@@ -82,6 +83,7 @@ export function ChatView({ conversationId, initial, autoSend }:
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [showTools, setShowTools] = useState(() => readBool(SHOW_TOOLS_KEY, true));
+  const [showSources, setShowSources] = useState(() => readBool(SHOW_SOURCES_KEY, true));
   const [saveWrong, setSaveWrong] = useState(() => readBool(SAVE_WRONG_KEY, false));
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
@@ -166,6 +168,9 @@ export function ChatView({ conversationId, initial, autoSend }:
   const toggleShowTools = (v: boolean) => {
     setShowTools(v); localStorage.setItem(SHOW_TOOLS_KEY, v ? "1" : "0");
   };
+  const toggleShowSources = (v: boolean) => {
+    setShowSources(v); localStorage.setItem(SHOW_SOURCES_KEY, v ? "1" : "0");
+  };
   const toggleSaveWrong = (v: boolean) => {
     setSaveWrong(v); localStorage.setItem(SAVE_WRONG_KEY, v ? "1" : "0");
   };
@@ -227,6 +232,7 @@ export function ChatView({ conversationId, initial, autoSend }:
     const userMsg: ChatMessage = { role: "user", content: msg,
       attachments: attachments.length ? attachments : undefined };
     const assistant: ChatMessage = { role: "assistant", content: "", steps: [], status: "streaming" };
+    stickRef.current = true;   // 发送即恢复跟随：即使之前上滑看历史，也自动回到底部
     setMessages((m) => [...m, userMsg, assistant]);
     let outcome: "done" | "error" | "stopped" = "done";
     setInput(""); setPending([]); setBusy(true); busyRef.current = true;
@@ -339,30 +345,36 @@ export function ChatView({ conversationId, initial, autoSend }:
               {m.role === "assistant" && m.progress && (() => {
                 const planItems = m.progress.filter((p) => p.scope === "plan");
                 const plan = planItems[planItems.length - 1];
-                return plan ? <PlanBlock text={plan.text} /> : null;
+                const live = busy && i === messages.length - 1 && m.status === "streaming";
+                return plan ? (
+                  <PlanBlock text={plan.text} live={live} stopped={m.status === "stopped"} />
+                ) : null;
               })()}
               {showTools && m.role === "assistant" && m.progress && m.progress.length > 0 && (() => {
                 const sandbox = m.progress.filter((p) => p.scope === "sandbox");
                 const sub = m.progress.filter((p) => p.scope.startsWith("subagent:"));
                 const skill = m.progress.filter((p) => p.scope === "skill");
                 const verify = m.progress.filter((p) => p.scope === "verify");
-                const live = busy && i === messages.length - 1;
+                const live = busy && i === messages.length - 1 && m.status === "streaming";
+                const stopped = m.status === "stopped";
+                // 进行中的块：生成中转圈；用户停止→stopped（已取消）；否则收尾为 ok
+                const endInflight = (inflight: boolean) =>
+                  live && inflight ? "running" : stopped && inflight ? "stopped" : "ok";
                 const sbLast = sandbox[sandbox.length - 1];
                 const sbLastText = sbLast?.text ?? "";
                 // 命令行以显式 status 表达运行/成败；容器初始化等旧式行仍以 … 结尾判进行中
-                const sbStatus: "running" | "ok" | "error" =
+                const sbStatus: "running" | "ok" | "error" | "stopped" =
                   sandbox.some((p) => p.status === "error" || p.text.includes("失败")) ? "error"
-                    : live && (sbLast?.status === "running" || sbLastText.endsWith("…")) ? "running"
-                      : "ok";
-                const subStatus: "running" | "ok" | "error" =
-                  live && !sub.some((p) => /完成|未产出|失败/.test(p.text)) ? "running"
-                    : sub.some((p) => /未产出|失败/.test(p.text)) ? "error" : "ok";
+                    : endInflight(sbLast?.status === "running" || sbLastText.endsWith("…"));
+                const subStatus: "running" | "ok" | "error" | "stopped" =
+                  sub.some((p) => /未产出|失败/.test(p.text)) ? "error"
+                    : endInflight(!sub.some((p) => /完成|未产出|失败/.test(p.text)));
                 // 校验门：最后一步 running 且在跑 → running；出现过通过 → ok；否则若有未通过 → error
                 const vLast = verify[verify.length - 1];
-                const vStatus: "running" | "ok" | "error" =
-                  live && vLast?.status === "running" ? "running"
-                    : verify.some((p) => p.status === "ok") ? "ok"
-                      : verify.some((p) => p.status === "error") ? "error" : "ok";
+                const vStatus: "running" | "ok" | "error" | "stopped" =
+                  verify.some((p) => p.status === "ok") ? "ok"
+                    : verify.some((p) => p.status === "error") ? "error"
+                      : endInflight(vLast?.status === "running");
                 return (
                   <>
                     <ProgressBlock title="技能" kind="skill" items={skill} status="ok" />
@@ -373,12 +385,14 @@ export function ChatView({ conversationId, initial, autoSend }:
                 );
               })()}
               {showTools && m.role === "assistant" && m.steps && m.steps.length > 0 && (
-                <AgentProgress steps={m.steps} />
+                <AgentProgress steps={m.steps}
+                  live={busy && i === messages.length - 1 && m.status === "streaming"}
+                  stopped={m.status === "stopped"} />
               )}
               {m.content ? (
                 m.role === "assistant" ? (
                   <Markdown onCitationClick={(n) => scrollToCite(String(i), n)}>
-                    {m.sources && m.sources.length
+                    {showSources && m.sources && m.sources.length
                       ? linkifyCitations(m.content, m.sources.length, String(i))
                       : m.content}
                   </Markdown>
@@ -394,7 +408,7 @@ export function ChatView({ conversationId, initial, autoSend }:
                   {m.role === "assistant" ? "…" : ""}
                 </Typography>
               )}
-              {m.role === "assistant" && m.sources && m.sources.length > 0 && (
+              {showSources && m.role === "assistant" && m.sources && m.sources.length > 0 && (
                 <SourceList sources={m.sources} msgKey={String(i)} flashId={flashId} />
               )}
               {m.role === "assistant" && (() => {
@@ -425,6 +439,11 @@ export function ChatView({ conversationId, initial, autoSend }:
           control={<Switch size="small" checked={showTools}
             onChange={(e) => toggleShowTools(e.target.checked)} />}
           label={<Typography variant="caption">展示工具调用和 Token</Typography>}
+        />
+        <FormControlLabel
+          control={<Switch size="small" checked={showSources}
+            onChange={(e) => toggleShowSources(e.target.checked)} />}
+          label={<Typography variant="caption">展示数据来源和引用</Typography>}
         />
         <FormControlLabel
           control={<Switch size="small" checked={saveWrong}
