@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from ..context.manager import ContextManager
 from ..events import Progress, RunError, RunFinished, ToolFinished, ToolStarted
 from ..loop.agent_loop import AgentLoop
-from ..progress import emit
+from ..progress import emit, reset_current_agent, set_current_agent
 from ..tools.base import Tool, ToolRegistry
 from .spec import AgentRoster, AgentSpec
 
@@ -70,21 +70,26 @@ class DispatchTool(Tool):
         emit(Progress(scope, f"开始任务：{params.task}"))
         # 记录每个工具调用 id 对应的工具名，以便在 ToolFinished 时回填名称与状态
         tool_names: dict[str, str] = {}
-        async for ev in sub_loop.run(params.task):
-            if isinstance(ev, ToolStarted):
-                tool_names[ev.tool_call.id] = ev.tool_call.name
-                # status=running + key=工具调用 id：前端把「开始/完成」折叠成同一行并更新状态
-                emit(Progress(scope, f"调用工具 {ev.tool_call.name}",
-                              status="running", key=ev.tool_call.id))
-            elif isinstance(ev, ToolFinished):
-                r = ev.result
-                name = tool_names.get(r.tool_call_id, "工具")
-                emit(Progress(scope, f"调用工具 {name}",
-                              status="error" if r.is_error else "ok", key=r.tool_call_id))
-            elif isinstance(ev, RunFinished):
-                final = ev.message.content
-            elif isinstance(ev, RunError):
-                error = ev.error
+        # 标记归属：子 agent 执行期间深层沙箱进度由 emit() 自动打上本 agent 名
+        agent_token = set_current_agent(params.agent)
+        try:
+            async for ev in sub_loop.run(params.task):
+                if isinstance(ev, ToolStarted):
+                    tool_names[ev.tool_call.id] = ev.tool_call.name
+                    # status=running + key=工具调用 id：前端把「开始/完成」折叠成同一行并更新状态
+                    emit(Progress(scope, f"调用工具 {ev.tool_call.name}",
+                                  status="running", key=ev.tool_call.id))
+                elif isinstance(ev, ToolFinished):
+                    r = ev.result
+                    name = tool_names.get(r.tool_call_id, "工具")
+                    emit(Progress(scope, f"调用工具 {name}",
+                                  status="error" if r.is_error else "ok", key=r.tool_call_id))
+                elif isinstance(ev, RunFinished):
+                    final = ev.message.content
+                elif isinstance(ev, RunError):
+                    error = ev.error
+        finally:
+            reset_current_agent(agent_token)
         if final is None:
             emit(Progress(scope, f"未产出结果：{error or '未知'}", status="error"))
             raise RuntimeError(f"子 agent[{params.agent}] 未产出结果：{error or '未知'}")

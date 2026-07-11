@@ -1,4 +1,4 @@
-import { Box, Typography, CircularProgress } from "@mui/material";
+import { Box, Typography, CircularProgress, Chip } from "@mui/material";
 import StorageIcon from "@mui/icons-material/Storage";
 import AccountTreeIcon from "@mui/icons-material/AccountTree";
 import ExtensionIcon from "@mui/icons-material/Extension";
@@ -13,7 +13,17 @@ type ProgressItem = {
   scope: string; text: string;
   status?: "running" | "ok" | "error" | null;
   key?: string | null;
+  agent?: string | null;   // 沙箱步骤归属的子 agent（后端在子 agent 执行期间打标）
 };
+
+// 标题右侧「最后一步」预览的硬字数上限
+const SUMMARY_MAX = 24;
+
+// 该步归属的子 agent 名：子代理块从 scope 取；沙箱块从后端打标的 agent 字段取
+function agentOf(p: ProgressItem, kind: string): string {
+  if (kind === "subagent") return p.scope.startsWith("subagent:") ? p.scope.slice("subagent:".length) : "";
+  return p.agent || "";
+}
 
 // 每步状态图标：优先用后端下发的显式 status（子 agent 每步）；否则回退到文本启发式（沙箱）
 function stepIcon(p: ProgressItem, isLast: boolean, running: boolean) {
@@ -73,26 +83,29 @@ export function ProgressBlock({ title, kind, items, status }: {
       : kind === "verify"
         ? <FactCheckIcon sx={{ fontSize: 15 }} color="action" />
         : <AccountTreeIcon sx={{ fontSize: 15 }} color="action" />;
-  // 标题右侧显示最后一步进度
+  // 标题右侧显示最后一步进度（含归属子 agent）
   const last = rows[rows.length - 1];
-  const summaryText = kind === "subagent" && last.scope.startsWith("subagent:")
-    ? `${last.scope.slice("subagent:".length)}: ${last.text}` : last.text;
+  const lastAgent = agentOf(last, kind);
+  const summaryText = lastAgent ? `${lastAgent}: ${last.text}` : last.text;
   const summary = (
     <>
       {stepIcon(last, true, status === "running")}
-      <EllipsisText text={summaryText} sx={{ ml: 0.5 }} />
+      <EllipsisText text={summaryText} sx={{ ml: 0.5 }} maxChars={SUMMARY_MAX} />
     </>
   );
   return (
     <CollapsibleBlock icon={icon} title={title} status={status} summary={summary}>
       {rows.map((p, i) => {
-        const agent = kind === "subagent" ? p.scope.slice("subagent:".length) : "";
+        const agent = agentOf(p, kind);
         return (
           <Box key={p.key ?? i} sx={{ display: "flex", alignItems: "center", gap: 0.75, py: 0.15 }}>
             {stepIcon(p, i === rows.length - 1, status === "running")}
-            <Typography variant="caption" color="text.secondary">
-              {agent ? <b>{agent}: </b> : null}{p.text}
-            </Typography>
+            {/* 子 agent 归属用彩色小标签区分（尤其沙箱执行中混入的子代理步骤） */}
+            {agent ? (
+              <Chip label={agent} size="small" color="secondary" variant="outlined"
+                sx={{ height: 16, flexShrink: 0, "& .MuiChip-label": { px: 0.5, fontSize: 10, fontWeight: 700 } }} />
+            ) : null}
+            <Typography variant="caption" color="text.secondary">{p.text}</Typography>
           </Box>
         );
       })}

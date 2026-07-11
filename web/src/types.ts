@@ -19,13 +19,15 @@ export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   steps?: { tool: string; args: any; result?: string; isError?: boolean }[];
-  progress?: { scope: string; text: string; status?: "running" | "ok" | "error" | null; key?: string | null }[];
+  progress?: { scope: string; text: string; status?: "running" | "ok" | "error" | null; key?: string | null; agent?: string | null }[];
   sources?: SourceItem[];
   usage?: { tokens: number; cost: number | null };
   attachments?: Attachment[];
   // 助手回复状态：streaming=生成中；done=完成；error=失败；stopped=用户停止；interrupted=服务重启中断
   status?: "streaming" | "done" | "error" | "stopped" | "interrupted";
   runId?: string;   // 本轮 run 句柄（刷新后接回 / 停止用）
+  startedAt?: number;   // 本轮开始的客户端时间戳（毫秒），用于实时耗时计数
+  elapsedMs?: number;   // 本轮总耗时（毫秒），完成时冻结
 };
 export type Conversation = { id: string; title: string; created_at: string };
 export type User = { id: string; username: string };

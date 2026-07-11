@@ -4,9 +4,14 @@ import type { SxProps, Theme } from "@mui/material/styles";
 
 // 单行文本：撑满可用宽度到最右侧才截断（…）。仅在确实被截断时，hover 显示完整内容；
 // 未截断则不挂 Tooltip。依赖父容器为 flex 且允许收缩（minWidth:0）。
-export function EllipsisText({ text, sx }: { text: string; sx?: SxProps<Theme> }) {
+// maxChars：额外的硬字数上限——即使宽度足够，超出也截断为「前 N 字…」，避免最后一步预览过长。
+export function EllipsisText({ text, sx, maxChars }: {
+  text: string; sx?: SxProps<Theme>; maxChars?: number;
+}) {
   const ref = useRef<HTMLSpanElement>(null);
   const [truncated, setTruncated] = useState(false);
+  const clamped = maxChars != null && text.length > maxChars;
+  const display = clamped ? text.slice(0, maxChars) + "…" : text;
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -27,9 +32,9 @@ export function EllipsisText({ text, sx }: { text: string; sx?: SxProps<Theme> }
       noWrap
       sx={{ minWidth: 0, flex: 1, ...sx }}
     >
-      {text}
+      {display}
     </Typography>
   );
 
-  return truncated ? <Tooltip title={text} placement="top">{node}</Tooltip> : node;
+  return truncated || clamped ? <Tooltip title={text} placement="top">{node}</Tooltip> : node;
 }

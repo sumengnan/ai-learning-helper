@@ -1,7 +1,7 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
-import { ChatView } from "./ChatView";
+import { ChatView, fmtDuration } from "./ChatView";
 import { streamChat, attachChat, stopRun, sendDecision } from "../api/client";
 
 // mock streamChat：依次回调 TextDelta "你" / TextDelta "好" / RunFinished
@@ -118,7 +118,30 @@ describe("ChatView", () => {
     render(<ChatView conversationId="c1" initial={[]} />);
     fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "hi" } });
     fireEvent.click(screen.getByText("发送"));
-    await waitFor(() => expect(screen.getByText("第一步查资料")).toBeTruthy());
+    // 现同时出现在标题预览与步骤清单两处（PlanBlock 新增「当前步骤」预览）
+    await waitFor(() => expect(screen.getAllByText("第一步查资料").length).toBeGreaterThanOrEqual(1));
+  });
+
+  it("fmtDuration 格式化为「几分几秒」", () => {
+    expect(fmtDuration(0)).toBe("0 秒");
+    expect(fmtDuration(42_000)).toBe("42 秒");
+    expect(fmtDuration(65_000)).toBe("1 分 5 秒");
+    expect(fmtDuration(3_600_000)).toBe("60 分 0 秒");
+  });
+
+  it("完成后显示耗时与 tokens", async () => {
+    vi.mocked(streamChat).mockImplementationOnce(
+      async (_cid: string, _msg: string, onEvent: (e: any) => void) => {
+        onEvent({ type: "RunStarted", data: { run_id: "r1" } });
+        onEvent({ type: "TextDelta", data: { text: "好" } });
+        onEvent({ type: "ModelUsage", data: { usage: { total: 123 }, cost_usd: null } });
+        onEvent({ type: "RunFinished", data: {} });
+      });
+    render(<ChatView conversationId="c1" initial={[]} />);
+    fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "hi" } });
+    fireEvent.click(screen.getByText("发送"));
+    await waitFor(() => expect(screen.getByText(/耗时/)).toBeTruthy());
+    expect(screen.getByText("tokens")).toBeTruthy();
   });
 
   it("生成中显示「停止」按钮，点击后中断并恢复「发送」", async () => {

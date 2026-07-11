@@ -68,7 +68,8 @@ def event_to_dict(ev) -> dict:
     elif isinstance(ev, RunError):
         data = {"error": ev.error}
     elif isinstance(ev, Progress):
-        data = {"scope": ev.scope, "text": ev.text, "status": ev.status, "key": ev.key}
+        data = {"scope": ev.scope, "text": ev.text, "status": ev.status, "key": ev.key,
+                "agent": ev.agent}
     elif isinstance(ev, ApprovalRequired):
         data = {"run_id": ev.run_id, "approval_id": ev.approval_id,
                 "tool": ev.tool, "command": ev.command, "reason": ev.reason}
