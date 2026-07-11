@@ -188,6 +188,9 @@ class SqliteVecBackend:
             conds.append("r.mem_type = ?"); params.append(filters.mem_type)
         if not filters.include_superseded:
             conds.append("r.superseded = ?"); params.append(0)
+        if not filters.include_expired:
+            conds.append("(r.expires_at = 0 OR r.expires_at > ?)")
+            params.append(self._now_fn())
         cols = ",".join("r." + c for c in _COLS)
         sql = (f"SELECT {cols}, bm25(memory_fts) AS score "
                "FROM memory_fts JOIN memory_records r ON r.rowid = memory_fts.rowid "

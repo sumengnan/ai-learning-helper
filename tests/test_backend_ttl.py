@@ -38,3 +38,15 @@ def test_purge_expired_removes_rows():
     assert n == 1
     assert b.get(["expired"]) == []
     assert len(b.get(["never"])) == 1 and len(b.get(["future"])) == 1
+
+
+def test_keyword_search_excludes_expired():
+    b = _b()   # 文件顶部已有：SqliteVecBackend(":memory:", dimension=3, now_fn=lambda: 1000)
+    r = MemoryRecord(owner_id="u1", kind="k", mem_type=MemType.SEMANTIC,
+                     text="排序算法讲解", embedding=[1.0, 0.0, 0.0], id="e")
+    r.expires_at = 100          # 已过期（<= now=1000）
+    b.upsert([r])
+    assert b.keyword_search("排序算法", filters=MemoryFilter(owner_id="u1"), k=5) == []
+    incl = b.keyword_search("排序算法",
+                            filters=MemoryFilter(owner_id="u1", include_expired=True), k=5)
+    assert len(incl) == 1       # include_expired=True 时可见

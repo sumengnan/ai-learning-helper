@@ -87,6 +87,20 @@ async def test_reranker_is_applied(mock_embedder):
     assert rev == list(reversed(base))
 
 
+async def test_hybrid_retrieve_excludes_expired(mock_embedder):
+    # 默认 use_keyword=True（hybrid 检索），过期记录不应通过关键词路径泄漏
+    emb = mock_embedder(dimension=64)
+    b = SqliteVecBackend(":memory:", dimension=64, now_fn=lambda: 1000)
+    v = (await emb.embed(["排序算法讲解"]))[0]
+    rec = _rec("排序算法讲解", v, "expired")
+    rec.expires_at = 100  # 已过期（<= now=1000）
+    b.upsert([rec])
+    cfg = RetrievalConfig()  # 默认 use_keyword=True
+    r = Retriever(b, emb, NoOpReranker(), cfg, now_fn=lambda: _NOW)
+    hits = await r.retrieve("排序算法讲解", MemoryFilter(owner_id="u1"), k=5)
+    assert hits == []
+
+
 async def test_k_larger_than_pool_not_truncated(mock_embedder):
     emb = mock_embedder(dimension=64)
     b = SqliteVecBackend(":memory:", dimension=64)
