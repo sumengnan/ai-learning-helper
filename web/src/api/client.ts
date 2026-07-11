@@ -1,4 +1,4 @@
-import type { AgentEvent, Attachment, Conversation, User } from "../types";
+import type { AgentEvent, Attachment, Conversation, SourceItem, User } from "../types";
 
 const TOKEN_KEY = "auth_token";
 let onUnauthorized: (() => void) | null = null;
@@ -138,6 +138,7 @@ export const api = {
     role: string; content: string;
     steps?: { tool: string; args: unknown; result?: string; is_error?: boolean }[] | null;
     progress?: { scope: string; text: string; status?: "running" | "ok" | "error" | null; key?: string | null }[] | null;
+    sources?: SourceItem[] | null;
     attachments?: Attachment[] | null;
     run_id?: string | null;
     status?: string | null;

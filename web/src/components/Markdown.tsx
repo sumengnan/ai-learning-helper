@@ -2,8 +2,17 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Box } from "@mui/material";
 
-// AI 回复正文按 Markdown 渲染（标题/列表/代码块/表格/链接等）
-export function Markdown({ children }: { children: string }) {
+// href="#cite-<key>-<n>" 的链接是来源角标：渲染成可点上标，回调交由上层滚动/高亮到来源。
+function citeNumber(href?: string): number | null {
+  const m = href ? /#cite-.+-(\d+)$/.exec(href) : null;
+  return m ? Number(m[1]) : null;
+}
+
+// AI 回复正文按 Markdown 渲染（标题/列表/代码块/表格/链接等）。
+// onCitationClick 传入时，正文里的 [n] 来源角标可点击。
+export function Markdown({ children, onCitationClick }: {
+  children: string; onCitationClick?: (n: number) => void;
+}) {
   return (
     <Box sx={{
       wordBreak: "break-word",
@@ -33,8 +42,30 @@ export function Markdown({ children }: { children: string }) {
       "& th, & td": { border: 1, borderColor: "divider", px: 1, py: 0.5 },
       "& img": { maxWidth: "100%" },
       "& hr": { border: 0, borderTop: 1, borderColor: "divider", my: 1 },
+      "& sup.cite": {
+        color: "primary.main", fontWeight: 700, cursor: "pointer", ml: "1px",
+        "&:hover": { textDecoration: "underline" },
+      },
     }}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{children}</ReactMarkdown>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a({ node: _node, href, children, ...props }: any) {
+            const n = citeNumber(href);
+            if (n !== null && onCitationClick) {
+              return (
+                <Box component="sup" className="cite" role="button" tabIndex={0}
+                  onClick={(e: any) => { e.preventDefault(); onCitationClick(n); }}>
+                  [{n}]
+                </Box>
+              );
+            }
+            return (
+              <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>
+            );
+          },
+        }}
+      >{children}</ReactMarkdown>
     </Box>
   );
 }
