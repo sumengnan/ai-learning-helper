@@ -79,6 +79,21 @@ class DocumentStore:
             (doc_id, user_id)).fetchone()
         return json.loads(row[0]) if row else []
 
+    def remove_chunk(self, user_id: str, doc_id: str, chunk_id: str) -> None:
+        """从文档的 chunk_ids 中移除单个片段并同步 num_chunks；片段清空则删除文档行。"""
+        ids = self.chunk_ids(user_id, doc_id)
+        if chunk_id not in ids:
+            return
+        ids = [c for c in ids if c != chunk_id]
+        if ids:
+            self._conn.execute(
+                "UPDATE documents SET chunk_ids = ?, num_chunks = ? WHERE id = ? AND user_id = ?",
+                (json.dumps(ids), len(ids), doc_id, user_id))
+        else:
+            self._conn.execute("DELETE FROM documents WHERE id = ? AND user_id = ?",
+                               (doc_id, user_id))
+        self._conn.commit()
+
     def delete(self, user_id: str, doc_id: str) -> None:
         self._conn.execute("DELETE FROM documents WHERE id = ? AND user_id = ?",
                            (doc_id, user_id))
