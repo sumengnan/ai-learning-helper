@@ -115,33 +115,48 @@ class DockerSandbox:
     # cp 进工作区；读=容器内 cp 到 /tmp 再 get。cp 用 argv（非 shell），受控路径无注入。
     async def _put_via_stage(self, dest_dir: str, tar_bytes: bytes) -> None:
         stage = f"/tmp/.mcpx_{uuid.uuid4().hex}"
-        r = await self.exec(["mkdir", "-p", stage], 15)
+        r = await self._exec_raw(["mkdir", "-p", stage], 15)
         if r.exit_code != 0:
             raise SandboxError(f"创建暂存目录失败：{(r.stderr or r.stdout).strip()}")
         await asyncio.to_thread(self._container.put_archive, stage, tar_bytes)
-        r = await self.exec(["cp", "-a", f"{stage}/.", f"{dest_dir}/"], 60)
-        await self.exec(["rm", "-rf", stage], 15)
+        r = await self._exec_raw(["cp", "-a", f"{stage}/.", f"{dest_dir}/"], 60)
+        await self._exec_raw(["rm", "-rf", stage], 15)
         if r.exit_code != 0:
             raise SandboxError(f"写入工作区失败：{(r.stderr or r.stdout).strip()}")
 
     async def _get_via_stage(self, real: str) -> bytes:
         stage = f"/tmp/.mcpx_{uuid.uuid4().hex}"
-        r = await self.exec(["mkdir", "-p", stage], 15)
+        r = await self._exec_raw(["mkdir", "-p", stage], 15)
         if r.exit_code != 0:
             raise SandboxError(f"创建暂存目录失败：{(r.stderr or r.stdout).strip()}")
         # real 已被 resolve_in_workspace 约束在工作区内；用 argv 传参避免 shell 注入
-        r = await self.exec(["cp", "-a", real, f"{stage}/"], 60)
+        r = await self._exec_raw(["cp", "-a", real, f"{stage}/"], 60)
         if r.exit_code != 0:
-            await self.exec(["rm", "-rf", stage], 15)
+            await self._exec_raw(["rm", "-rf", stage], 15)
             raise SandboxError(f"读取失败：{(r.stderr or r.stdout).strip()}")
         bits, _ = await asyncio.to_thread(
             self._container.get_archive, f"{stage}/{os.path.basename(real)}")
         data = b"".join(bits)
-        await self.exec(["rm", "-rf", stage], 15)
+        await self._exec_raw(["rm", "-rf", stage], 15)
         return data
 
-    async def exec(self, command: list[str], timeout: float) -> ExecResult:
+    async def _exec_raw(self, command: list[str], timeout: float) -> ExecResult:
+        """在容器内跑命令并返回结果，但**不发 Progress 事件**。
+
+        供内部 housekeeping（/tmp 中转的 mkdir/cp/rm）复用，避免把这些实现细节刷到
+        前端沙箱活动日志——那些是修复 tmpfs 无法 docker cp 的搬运动作，用户不关心。
+        """
         await self.start()
+        wrapped = ["timeout", str(max(1, math.ceil(timeout))), *command]
+        res = await asyncio.to_thread(
+            self._container.exec_run, wrapped, workdir=self.workspace, demux=True)
+        out, err = res.output if isinstance(res.output, tuple) else (res.output, b"")
+        return ExecResult((out or b"").decode(errors="replace"),
+                          (err or b"").decode(errors="replace"),
+                          res.exit_code, timed_out=(res.exit_code == 124))
+
+    async def exec(self, command: list[str], timeout: float) -> ExecResult:
+        await self.start()   # 幂等；确保容器启动进度先于本次“执行”进度
         # 容器复用时 start() 不再产出进度；每次执行仍上报，让沙箱活动可见
         desc = " ".join(command).replace("\n", " ")
         if len(desc) > 60:
@@ -149,24 +164,18 @@ class DockerSandbox:
         # running→ok/error 用同一 key 折叠成一行：命令前只显示状态标识，成功不再另起结果文字
         exec_key = uuid.uuid4().hex
         emit(Progress("sandbox", f"执行 {desc}", status="running", key=exec_key))
-        wrapped = ["timeout", str(max(1, math.ceil(timeout))), *command]
-        res = await asyncio.to_thread(
-            self._container.exec_run, wrapped, workdir=self.workspace, demux=True)
-        out, err = res.output if isinstance(res.output, tuple) else (res.output, b"")
-        stdout = (out or b"").decode(errors="replace")
-        stderr = (err or b"").decode(errors="replace")
+        res = await self._exec_raw(command, timeout)
         if res.exit_code == 0:
             emit(Progress("sandbox", f"执行 {desc}", status="ok", key=exec_key))
         else:
             emit(Progress("sandbox", f"执行 {desc}", status="error", key=exec_key))
             # 失败仍输出失败原因：退出码 + 错误输出摘要
-            snippet = (stderr or stdout).strip().replace("\n", " ")
+            snippet = (res.stderr or res.stdout).strip().replace("\n", " ")
             reason = f"失败原因：exit_code={res.exit_code}"
             if snippet:
                 reason += f"，{snippet[:120]}"
             emit(Progress("sandbox", reason, status="error"))
-        return ExecResult(stdout, stderr, res.exit_code,
-                          timed_out=(res.exit_code == 124))
+        return res
 
     def _member_tar(self, member: str, data: bytes) -> bytes:
         """把单个文件打成 tar 字节，成员名为相对工作区根的路径（可含子目录）。"""
@@ -214,17 +223,17 @@ class DockerSandbox:
         await self.start()
         base = os.path.basename(self.workspace)
         stage = f"/tmp/.mcpws_{uuid.uuid4().hex}"
-        r = await self.exec(["mkdir", "-p", stage], 15)
+        r = await self._exec_raw(["mkdir", "-p", stage], 15)
         if r.exit_code != 0:
             raise SandboxError(f"创建暂存目录失败：{(r.stderr or r.stdout).strip()}")
         # cp -a /workspace /tmp/stage/ → /tmp/stage/workspace
-        r = await self.exec(["cp", "-a", self.workspace, f"{stage}/"], 120)
+        r = await self._exec_raw(["cp", "-a", self.workspace, f"{stage}/"], 120)
         if r.exit_code != 0:
-            await self.exec(["rm", "-rf", stage], 15)
+            await self._exec_raw(["rm", "-rf", stage], 15)
             raise SandboxError(f"归档工作区失败：{(r.stderr or r.stdout).strip()}")
         bits, _ = await asyncio.to_thread(self._container.get_archive, f"{stage}/{base}")
         data = b"".join(bits)
-        await self.exec(["rm", "-rf", stage], 15)
+        await self._exec_raw(["rm", "-rf", stage], 15)
         return data
 
     async def extract_workspace(self, data: bytes) -> None:
@@ -235,12 +244,12 @@ class DockerSandbox:
         await self.start()
         base = os.path.basename(self.workspace)
         stage = f"/tmp/.mcpws_{uuid.uuid4().hex}"
-        r = await self.exec(["mkdir", "-p", stage], 15)
+        r = await self._exec_raw(["mkdir", "-p", stage], 15)
         if r.exit_code != 0:
             raise SandboxError(f"创建暂存目录失败：{(r.stderr or r.stdout).strip()}")
         await asyncio.to_thread(self._container.put_archive, stage, data)  # → stage/workspace/…
         # 把 stage/workspace 的内容 cp 进真正的工作区
-        r = await self.exec(["cp", "-a", f"{stage}/{base}/.", f"{self.workspace}/"], 120)
-        await self.exec(["rm", "-rf", stage], 15)
+        r = await self._exec_raw(["cp", "-a", f"{stage}/{base}/.", f"{self.workspace}/"], 120)
+        await self._exec_raw(["rm", "-rf", stage], 15)
         if r.exit_code != 0:
             raise SandboxError(f"还原工作区失败：{(r.stderr or r.stdout).strip()}")

@@ -93,6 +93,19 @@ async def test_start_tmpfs_is_writable_by_sandbox_user(monkeypatch):
     assert "uid=1000" in tmpfs and "gid=1000" in tmpfs and "mode=07" in tmpfs
 
 
+async def test_staging_transfer_emits_no_progress_noise(monkeypatch):
+    # /tmp 中转的 mkdir/cp/rm 走 _exec_raw，不得 emit Progress——否则前端沙箱日志被刷屏
+    import harness.sandbox.docker as dockermod
+    events = []
+    monkeypatch.setattr(dockermod, "emit", lambda ev: events.append(ev))
+    sb, container = _mock_docker_sandbox()
+    await sb.write_file("Main.java", "class Main{}")   # 内部走 mkdir→put→cp→rm
+    assert events == [], f"中转不应产生 Progress 事件，却有：{events}"
+    # 对照：公有 exec 仍上报（真实执行要可见）
+    await sb.exec(["echo", "hi"], 5)
+    assert events, "公有 exec 应照常 emit Progress"
+
+
 async def test_list_files_enforces_path_constraint():
     # #2：list_files 必须先 resolve_in_workspace，逃逸路径抛 SandboxError
     sb, container = _mock_docker_sandbox()
