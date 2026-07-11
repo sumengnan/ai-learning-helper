@@ -41,3 +41,13 @@ class AppConfig(HarnessConfig):
     attachment_max_mb: int = 100
     attachment_max_count: int = 10
     attachment_vision_max_mb: int = 5
+    # 分层上下文管理：full=全量拼接（默认，与历史行为字节级一致，安全回退）；
+    # window=仅 L1 token 预算滑动窗口；layered=L1+L2 滚动摘要+L3 语义检索。
+    context_strategy: str = "full"                 # full | window | layered
+    context_window_tokens: int = 128000            # 模型上下文窗口（按实际模型调整）
+    context_response_reserve_tokens: int = 4096    # 给回复预留的 token
+    context_working_ratio: float = 0.5             # 最近原文（L1）占可用预算的比例
+    context_summary_max_tokens: int = 2000         # L2 摘要块 token 上限
+    context_retrieval_top_k: int = 5               # L3 召回条数
+    context_enable_summary: bool = True            # layered 下是否启用 L2 摘要
+    context_enable_retrieval: bool = True          # layered 下是否启用 L3 检索

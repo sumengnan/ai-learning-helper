@@ -34,6 +34,11 @@ _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS conversation_runs(
          conv_id TEXT, run_id TEXT, created_at TEXT,
          PRIMARY KEY(conv_id, run_id))""",
+    # L2 滚动摘要：更早历史压缩成一段摘要。up_to_seq 为水位（已覆盖的历史消息前缀长度），
+    # 增量摘要只处理水位之后的 delta，永不重摘全历史。
+    """CREATE TABLE IF NOT EXISTS conversation_summaries(
+         conv_id TEXT PRIMARY KEY, up_to_seq INTEGER NOT NULL,
+         summary TEXT NOT NULL, tokens INTEGER NOT NULL, created_at TEXT NOT NULL)""",
 )
 
 # 历史库若建于某列引入之前，需在此补齐（CREATE TABLE IF NOT EXISTS 不改既有表结构）

@@ -20,8 +20,12 @@ from harness.tools.base import ToolRegistry
 from harness.types import Message, Role
 
 from ..auth import current_user
-from ..context import ConversationContextManager
+from ..completion import build_completer
+from ..context_assembly import ContextAssembler
+from ..conversation_memory import ConversationMemoryService
 from ..sandbox_manager import reset_sandbox_conv, set_sandbox_conv
+from ..summaries import SummaryStore
+from ..summarizer import RollingSummarizer
 from ..tools.attachment_tools import ListAttachmentsTool, ReadAttachmentTool
 from ..tools.exam_tools import SampleQuestionsTool, SaveWrongAnswerTool
 from ..tools.save_download import SaveDownloadTool
@@ -70,6 +74,22 @@ class _Decision(BaseModel):
 def make_chat_router(harness, store, config, question_store=None, wrong_store=None,
                      verifier=None, attachment_store=None) -> APIRouter:
     router = APIRouter()
+
+    # 分层上下文：full（默认）时不构造摘要/检索依赖，行为与历史一致。
+    _strategy = getattr(config, "context_strategy", "full")
+    _summarizer = _conv_memory = None
+    if _strategy == "layered":
+        if getattr(config, "context_enable_summary", True):
+            _summarizer = RollingSummarizer(
+                SummaryStore(conn=store._conn),           # 复用 app.db 连接
+                build_completer(harness.client, config.model),
+                model=config.model,
+                max_summary_tokens=config.context_summary_max_tokens)
+        if getattr(config, "context_enable_retrieval", True) and \
+                getattr(harness, "memory", None) is not None:
+            _conv_memory = ConversationMemoryService(harness.memory)
+    _assembler = ContextAssembler(config, config.model,
+                                  summarizer=_summarizer, conv_memory=_conv_memory)
 
     def _build_registry(user_id: str, save_wrong: bool, conv_id: str,
                         has_attachments: bool) -> ToolRegistry:
@@ -126,9 +146,13 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 f"{names}（内容未加载，需要时用 list_attachments/read_attachment 获取，"
                 f"或在沙箱 /workspace/uploads/ 下访问）")
 
+        # 分层上下文：窗口/摘要/检索的重活在此按会话级预算一次，_new_loop 内只做同步拼装。
+        base_ctx = await _assembler.build_manager(
+            harness.system_prompt + EXAM_GUIDE + ATTACHMENT_GUIDE, history,
+            req.message, req.conversation_id)
+
         def _new_loop(run_id_a: str) -> AgentLoop:
-            ctx = ConversationContextManager(
-                harness.system_prompt + EXAM_GUIDE + ATTACHMENT_GUIDE, history)
+            ctx = base_ctx
             if getattr(harness, "skill_registry", None) is not None:
                 from harness.skills.context import SkillContextManager
                 ctx = SkillContextManager(ctx, harness.skill_registry)
@@ -295,6 +319,15 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     Message(role=Role.ASSISTANT, content=delivered or "（本轮未完成）")],
                     steps=steps or None, progress=progress or None,
                     attachments=attachment_metas or None)
+                # L3：本轮结束后把对话文本写入向量库供后续语义召回（best-effort，不阻断）。
+                # seq=len(history) 即该轮 user 消息在历史中的前缀位置，用于窗口外过滤。
+                if _conv_memory is not None and delivered:
+                    try:
+                        await _conv_memory.record_turn(
+                            req.conversation_id, len(history),
+                            f"用户：{req.message}\n助手：{delivered}")
+                    except Exception:
+                        pass
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
