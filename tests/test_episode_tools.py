@@ -1,14 +1,14 @@
 # tests/test_episode_tools.py
 from harness.memory.episodic import EpisodicMemory
 from harness.memory.memory import Memory
-from harness.memory.store import MemoryStore
+from harness.memory.sqlite_backend import SqliteVecBackend
 from harness.tools.base import ToolRegistry, ToolExecutor
 from harness.tools.builtins.episode_tools import RecallEpisodesTool, RecordEpisodeTool
 from harness.types import ToolCall
 
 
 def _ep(mock_embedder):
-    store = MemoryStore(":memory:", dimension=64)
+    store = SqliteVecBackend(":memory:", dimension=64)
     mem = Memory(store, mock_embedder(dimension=64), chunk_size=1000, overlap=0)
     return EpisodicMemory(mem)
 

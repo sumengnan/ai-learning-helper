@@ -22,7 +22,7 @@ class ConversationMemoryService:
     def _collection_for(self, conv_id: str) -> str:
         return f"{self._prefix}:{conv_id}"
 
-    async def record_turn(self, conv_id: str, seq: int, text: str) -> list[int]:
+    async def record_turn(self, conv_id: str, seq: int, text: str) -> list[str]:
         """把一轮对话文本写入向量库。seq 为该轮在历史中的消息前缀位置（供窗口外过滤）。
 
         调用方应在轮结束落库后异步触发（每条要一次远程 embedding，勿阻塞聊天路径）。

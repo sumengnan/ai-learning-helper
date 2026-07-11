@@ -3,13 +3,13 @@ from harness.context.manager import ContextManager
 from harness.tools.base import ToolRegistry
 from harness.tools.builtins.memory_search import SearchMemoryTool
 from harness.memory.memory import Memory
-from harness.memory.store import MemoryStore
+from harness.memory.sqlite_backend import SqliteVecBackend
 from harness.llm.base import StreamChunk, ToolCallDelta
 from harness.events import ToolFinished, RunFinished
 
 
 async def test_agent_uses_search_memory(make_mock, text_turn, mock_embedder):
-    mem = Memory(MemoryStore(":memory:", dimension=64),
+    mem = Memory(SqliteVecBackend(":memory:", dimension=64),
                  mock_embedder(dimension=64), chunk_size=1000, overlap=0)
     await mem.add_texts(["光合作用把二氧化碳和水转化为葡萄糖和氧气"], "knowledge",
                         {"source": "生物笔记"})

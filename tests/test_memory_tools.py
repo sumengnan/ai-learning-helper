@@ -1,5 +1,5 @@
 from harness.memory.memory import Memory
-from harness.memory.store import MemoryStore
+from harness.memory.sqlite_backend import SqliteVecBackend
 from harness.tools.base import ToolRegistry, ToolExecutor
 from harness.tools.builtins.memory_search import SearchMemoryTool
 from harness.tools.builtins.memory_write import RememberTool
@@ -7,7 +7,7 @@ from harness.types import ToolCall
 
 
 def _mem(mock_embedder):
-    return Memory(MemoryStore(":memory:", dimension=64),
+    return Memory(SqliteVecBackend(":memory:", dimension=64),
                   mock_embedder(dimension=64), chunk_size=1000, overlap=0)
 
 

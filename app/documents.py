@@ -22,7 +22,7 @@ class DocumentStore:
             migrate(self._conn)
 
     def create(self, user_id: str, doc_id: str, filename: str, size: int,
-               chunk_ids: list[int]) -> None:
+               chunk_ids: list[str]) -> None:
         self._conn.execute(
             "INSERT INTO documents(id, user_id, filename, size, num_chunks, chunk_ids, uploaded_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -41,7 +41,7 @@ class DocumentStore:
             "SELECT 1 FROM documents WHERE id = ? AND user_id = ?",
             (doc_id, user_id)).fetchone() is not None
 
-    def chunk_ids(self, user_id: str, doc_id: str) -> list[int]:
+    def chunk_ids(self, user_id: str, doc_id: str) -> list[str]:
         row = self._conn.execute(
             "SELECT chunk_ids FROM documents WHERE id = ? AND user_id = ?",
             (doc_id, user_id)).fetchone()
