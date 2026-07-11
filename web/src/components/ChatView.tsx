@@ -13,6 +13,7 @@ import type { ChatMessage } from "../types";
 import { streamChat, attachChat, stopRun, sendDecision, api } from "../api/client";
 import { AgentProgress } from "./AgentProgress";
 import { SourceList } from "./SourceList";
+import { MessageMeta } from "./MessageMeta";
 import { linkifyCitations, citeId } from "./citations";
 import { EmptyHint } from "./EmptyHint";
 import { ProgressBlock } from "./ProgressBlock";
@@ -50,51 +51,8 @@ function TypingDots() {
   );
 }
 
-// 耗时格式化为「几分几秒」；不足 1 分只显示秒
-export function fmtDuration(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  if (total < 60) return `${total} 秒`;
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return `${m} 分 ${s} 秒`;
-}
-
-// 生成中的实时耗时：每秒自增，从 startedAt 计到当下
-function RunTimer({ startedAt }: { startedAt: number }) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  return <span>耗时 {fmtDuration(now - startedAt)}</span>;
-}
-
-// 内容已开始但仍在生成时的底部活跃指示：即使数据暂停（如工具执行中）也表明「仍在处理」，
-// 避免看起来卡住。
-function StreamingHint() {
-  return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, mt: 0.5 }}>
-      <CircularProgress size={12} thickness={5} />
-      <Typography variant="caption" color="text.secondary">生成中…</Typography>
-    </Box>
-  );
-}
-
-// 助手回复的终态状态行：完成 / 失败 / 已停止 / 已中断
-function ReplyStatus({ kind }: { kind: "done" | "error" | "stopped" | "interrupted" }) {
-  const map = {
-    done: { icon: <CheckCircleIcon sx={{ fontSize: 14 }} color="success" />, text: "已完成", color: "success.main" },
-    error: { icon: <ErrorOutlineIcon sx={{ fontSize: 14 }} color="error" />, text: "回复失败", color: "error.main" },
-    stopped: { icon: <StopCircleIcon sx={{ fontSize: 14 }} color="disabled" />, text: "已停止", color: "text.disabled" },
-    interrupted: { icon: <ErrorOutlineIcon sx={{ fontSize: 14 }} color="warning" />, text: "已中断（服务重启）", color: "warning.main" },
-  }[kind];
-  return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mt: 0.5 }}>
-      {map.icon}
-      <Typography variant="caption" sx={{ color: map.color }}>{map.text}</Typography>
-    </Box>
-  );
-}
+// 耗时格式化保持从此处导出（历史引用/测试用），实现移入 duration.ts
+export { fmtDuration } from "./duration";
 
 export function ChatView({ conversationId, initial, autoSend }:
   { conversationId: string; initial: ChatMessage[]; autoSend?: string | null }) {
@@ -435,38 +393,29 @@ export function ChatView({ conversationId, initial, autoSend }:
                   {m.role === "assistant" ? "…" : ""}
                 </Typography>
               )}
-              {showSources && m.role === "assistant" && m.sources && m.sources.length > 0 && (
-                <SourceList sources={m.sources} msgKey={String(i)} flashId={flashId} />
-              )}
+              {/* 元信息页脚：状态 / 耗时 / tokens / 参考来源，用虚线与正文分隔，各成一块提高辨识度 */}
               {m.role === "assistant" && (() => {
                 const live = busy && i === messages.length - 1 && m.status === "streaming";
-                // 生成中且已有内容 → 底部 loading（覆盖工具执行等数据暂停时的「卡住」错觉）；
-                // 内容为空时上面已显示 TypingDots，不重复。
-                if (live) return m.content ? <StreamingHint /> : null;
-                if (m.status === "done") return <ReplyStatus kind="done" />;
-                if (m.status === "error") return <ReplyStatus kind="error" />;
-                if (m.status === "stopped") return <ReplyStatus kind="stopped" />;
-                if (m.status === "interrupted") return <ReplyStatus kind="interrupted" />;
-                return null;
-              })()}
-              {showTools && m.role === "assistant" && (() => {
-                const streaming = m.status === "streaming" && m.startedAt != null;
-                const showElapsed = streaming || m.elapsedMs != null;
-                if (!showElapsed && !m.usage) return null;
+                const hasSources = !!(showSources && m.sources && m.sources.length > 0);
+                const hasStatus = live || m.status === "done" || m.status === "error"
+                  || m.status === "stopped" || m.status === "interrupted";
+                const hasMeta = showTools
+                  && ((live && m.startedAt != null) || m.elapsedMs != null || !!m.usage);
+                const showMetaRow = hasStatus || hasMeta;
+                // 生成中且尚无内容：上方 TypingDots 已表达，不重复画页脚
+                if (live && !m.content && !hasSources) return null;
+                if (!showMetaRow && !hasSources) return null;
                 return (
-                  <Typography variant="caption" color="text.secondary" component="div"
-                    sx={{ display: "flex", alignItems: "center", gap: 0.5, mt: 0.5, flexWrap: "wrap" }}>
-                    {/* 耗时：生成中实时计数，完成后冻结 */}
-                    {streaming ? <RunTimer startedAt={m.startedAt!} />
-                      : m.elapsedMs != null ? <span>耗时 {fmtDuration(m.elapsedMs)}</span> : null}
-                    {m.usage && (
-                      <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
-                        {showElapsed ? <span>·</span> : null}
-                        <span>tokens</span> <RollingNumber value={m.usage.tokens} />
-                        {m.usage.cost != null ? <span>· ${m.usage.cost.toFixed(4)}</span> : null}
-                      </Box>
+                  <Box sx={{ mt: 1.25, pt: 1, borderTop: "1px dashed", borderColor: "divider",
+                    display: "flex", flexDirection: "column", gap: 0.75 }}>
+                    {showMetaRow && (
+                      <MessageMeta status={m.status} live={live} startedAt={m.startedAt}
+                        elapsedMs={m.elapsedMs} usage={m.usage} showMeta={showTools} />
                     )}
-                  </Typography>
+                    {hasSources && (
+                      <SourceList sources={m.sources!} msgKey={String(i)} flashId={flashId} />
+                    )}
+                  </Box>
                 );
               })()}
             </Paper>

@@ -141,7 +141,8 @@ describe("ChatView", () => {
     render(<ChatView conversationId="c1" initial={[]} />);
     fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "hi" } });
     fireEvent.click(screen.getByText("发送"));
-    await waitFor(() => expect(screen.getByText(/耗时/)).toBeTruthy());
+    // 耗时药丸只显示时长（时钟图标表达「耗时」语义）；tokens 药丸带 tokens 字样
+    await waitFor(() => expect(screen.getByText(/\d+\s*秒/)).toBeTruthy());
     expect(screen.getByText("tokens")).toBeTruthy();
   });
 
