@@ -58,6 +58,18 @@ class KnowledgeService:
         results.sort(key=lambda r: r["relevance"], reverse=True)
         return results
 
+    def get_fragment(self, user_id: str, chunk_id: str) -> dict | None:
+        """单个片段详情：完整正文 + 来源/分类/日期。找不到或非本人返回 None。"""
+        recs = self._memory_store.get([chunk_id])
+        if not recs or recs[0].owner_id != user_id:
+            return None
+        r = recs[0]
+        md = r.metadata or {}
+        filename = md.get("source", "")
+        return {"id": r.id, "filename": filename, "text": r.text,
+                "category": _category(filename), "uploaded_at": r.created_at,
+                "doc_id": md.get("doc_id", "")}
+
     @staticmethod
     def _fragment(chunk_id: str, text: str, metadata: dict, created_at: str) -> dict:
         filename = (metadata or {}).get("source", "")
