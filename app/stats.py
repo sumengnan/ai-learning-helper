@@ -266,11 +266,25 @@ class StatsService:
             return []
         try:
             rows = self._app.execute(
-                "SELECT filename, created_at FROM downloads WHERE user_id=? "
+                "SELECT id, filename, content_type, size, created_at FROM downloads WHERE user_id=? "
                 "ORDER BY seq DESC LIMIT 3", (user_id,)).fetchall()
         except sqlite3.Error:
             return []
-        return [{"filename": r[0], "created_at": r[1]} for r in rows]
+        return [{"id": r[0], "filename": r[1], "content_type": r[2], "size": r[3],
+                 "created_at": r[4]} for r in rows]
+
+    def memory_items(self, limit: int = 50) -> list[dict]:
+        """列出最近的记忆条目（供首页「AI 记住的偏好」查看）。记忆库缺失时返回空。"""
+        if self._mem is None:
+            return []
+        limit = max(1, min(limit, 200))
+        try:
+            rows = self._mem.execute(
+                "SELECT text, collection, created_at FROM memory_items "
+                "ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        except sqlite3.Error:
+            return []
+        return [{"text": r[0], "collection": r[1], "created_at": r[2]} for r in rows]
 
     def _last_conversation(self, user_id: str | None) -> dict | None:
         if self._app is None:

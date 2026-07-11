@@ -4,14 +4,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import HomeView from "./HomeView";
 import { statsApi, type StatsOverview } from "../api/stats";
 
-vi.mock("../api/stats", () => ({ statsApi: { overview: vi.fn() } }));
+vi.mock("../api/stats", () => ({ statsApi: { overview: vi.fn(), memory: vi.fn() } }));
 
 const OV: StatsOverview = {
   range_days: 14,
   learn: {
     assets: { documents: 4, memory: 52, questions: 0, wrong_answers: 0 },
     conversations: 7, messages: 44,
-    recent_downloads: [{ filename: "复习提纲.md", created_at: "2026-07-11T07:00:00+00:00" }],
+    recent_downloads: [{ id: "dl1", filename: "复习提纲.md", content_type: "text/markdown", size: 128, created_at: "2026-07-11T07:00:00+00:00" }],
     last_conversation: { id: "c1", title: "二叉树遍历", updated_at: "2026-07-11T10:00:00+00:00", message_count: 12 },
     abilities: [{ icon: "🌐", label: "联网查资料", count: 82 }, { icon: "💻", label: "运行代码", count: 53 }],
     effort: { runs: 94, total_tokens: 1140386, avg_steps: 3, max_steps: 12, success_rate: 0.93 },
@@ -77,5 +77,36 @@ describe("HomeView", () => {
     (statsApi.overview as any).mockRejectedValue(new Error("boom"));
     renderHome();
     await waitFor(() => expect(screen.getByText(/概览加载失败/)).toBeTruthy());
+  });
+
+  it("默认按近 3 天拉取，切换时间范围会重新拉取", async () => {
+    (statsApi.overview as any).mockResolvedValue(OV);
+    renderHome();
+    await waitFor(() => expect(screen.getByText("二叉树遍历")).toBeTruthy());
+    expect(statsApi.overview).toHaveBeenCalledWith(3);       // 默认近 3 天
+    fireEvent.mouseDown(screen.getByLabelText("时间范围"));    // 打开 Select
+    fireEvent.click(await screen.findByRole("option", { name: "近 30 天" }));
+    await waitFor(() => expect(statsApi.overview).toHaveBeenCalledWith(30));
+  });
+
+  it("点击「AI 记的偏好」打开抽屉并加载记忆", async () => {
+    (statsApi.overview as any).mockResolvedValue(OV);
+    (statsApi.memory as any).mockResolvedValue([
+      { text: "用户偏好用中文", collection: "semantic", created_at: "2026-07-11T01:00:00+00:00" },
+    ]);
+    renderHome();
+    await waitFor(() => expect(screen.getByText("二叉树遍历")).toBeTruthy());
+    fireEvent.click(screen.getByText("🧠 AI 记的偏好"));
+    await waitFor(() => expect(screen.getByText("AI 记住的偏好")).toBeTruthy());  // 抽屉标题
+    expect(await screen.findByText("用户偏好用中文")).toBeTruthy();
+    expect(statsApi.memory).toHaveBeenCalled();
+  });
+
+  it("最近产物提供预览与下载入口", async () => {
+    (statsApi.overview as any).mockResolvedValue(OV);
+    renderHome();
+    await waitFor(() => expect(screen.getByText("复习提纲.md")).toBeTruthy());
+    expect(screen.getByLabelText("预览 复习提纲.md")).toBeTruthy();  // md 可预览
+    expect(screen.getByLabelText("下载 复习提纲.md")).toBeTruthy();
   });
 });

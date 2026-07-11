@@ -14,4 +14,9 @@ def make_stats_router(stats_service) -> APIRouter:
                        user_id: str = Depends(current_user)):
         return stats_service.overview(user_id, days=days)
 
+    @router.get("/api/stats/memory")
+    async def memory(limit: int = Query(50, ge=1, le=200),
+                     user_id: str = Depends(current_user)):
+        return stats_service.memory_items(limit)
+
     return router
