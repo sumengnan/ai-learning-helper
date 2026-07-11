@@ -6,9 +6,9 @@ from urllib.parse import urljoin, urlparse
 from pydantic import BaseModel
 
 from ..base import Tool
-from ...net.policy import check_url
+from ...net.policy import PolicyError, check_url
 from ...net.sandbox_dns import resolve_in_sandbox
-from .http_tool import render_http_result
+from .http_tool import browser_fallback_or_none, looks_blocked, render_http_result
 
 
 def _parse_response(raw: str) -> tuple[int, str | None, str, str]:
@@ -36,7 +36,8 @@ class SandboxedHttpRequestTool(Tool):
     name = "http_request"
     description = ("发起 HTTP(S) 请求抓取网页或调用外部 API（在沙箱容器内用 curl 执行，"
                    "出网来自沙箱）。默认可访问公网，禁止内网地址。"
-                   "网页默认返回解析后的标题+正文；需要原始 HTML 时传 raw=true。")
+                   "网页默认返回解析后的标题+正文；需要原始 HTML 时传 raw=true。"
+                   "抓取失败或页面疑似被防抓/需 JS 渲染时，会自动改用无头浏览器重试（若已启用）。")
 
     class Params(BaseModel):
         url: str
@@ -47,18 +48,40 @@ class SandboxedHttpRequestTool(Tool):
 
     def __init__(self, sandbox, allowed_domains, block_private: bool = True,
                  timeout: float = 30.0, max_bytes: int = 5_000_000,
-                 max_redirects: int = 5) -> None:
+                 max_redirects: int = 5, browser_fallback=None) -> None:
         self._sandbox = sandbox
         self._allowed = allowed_domains
         self._block_private = block_private
         self._timeout = timeout
         self._max_bytes = max_bytes
         self._max_redirects = max_redirects
+        self._browser_fallback = browser_fallback
+
+    def set_browser_fallback(self, fn) -> None:
+        self._browser_fallback = fn
 
     async def _resolve_in_sandbox(self, host: str) -> list[str]:
         return await resolve_in_sandbox(self._sandbox, host, self._timeout)
 
     async def run(self, params: "SandboxedHttpRequestTool.Params") -> str:
+        try:
+            status, final_url, ctype, body, suffix = await self._fetch(params)
+        except PolicyError:
+            raise                       # 安全拦截：不兜底
+        except Exception as e:          # noqa: BLE001  出错 → 尝试浏览器兜底
+            fb = await browser_fallback_or_none(
+                self._browser_fallback, params.url, f"http_request 出错：{e}")
+            if fb is not None:
+                return fb
+            raise
+        if not params.raw and looks_blocked(status, body):
+            fb = await browser_fallback_or_none(
+                self._browser_fallback, final_url, f"HTTP {status} 疑似防抓或需 JS 渲染")
+            if fb is not None:
+                return fb
+        return render_http_result(status, final_url, ctype, body, suffix, params.raw)
+
+    async def _fetch(self, params: "SandboxedHttpRequestTool.Params") -> tuple[int, str, str, str, str]:
         url = params.url
         for _ in range(self._max_redirects + 1):
             parsed = urlparse(url)
@@ -95,5 +118,5 @@ class SandboxedHttpRequestTool(Tool):
                 continue
             suffix = "…(已截断)" if len(body) > self._max_bytes else ""
             body = body[: self._max_bytes]
-            return render_http_result(status, url, ctype, body, suffix, params.raw)
+            return status, url, ctype, body, suffix
         raise RuntimeError(f"超过最大重定向次数（{self._max_redirects}）")
