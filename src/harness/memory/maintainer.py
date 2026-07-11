@@ -1,0 +1,91 @@
+# src/harness/memory/maintainer.py
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass
+
+from .record import MemType, MemoryRecord
+from .retriever import cosine
+
+log = logging.getLogger(__name__)
+
+_DISTILL_SYS = (
+    "你是记忆固化器。下面是同一主题的若干条零散情景记忆，请把它们蒸馏合并成"
+    "**一条**简洁、稳定的语义事实（中文，一句话）。只输出这条事实文本，不要解释、不要列表。"
+)
+
+
+@dataclass
+class ConsolidationConfig:
+    sim_threshold: float = 0.85     # 贪心聚类的平均余弦相似度阈值
+    min_cluster: int = 2            # 成簇最小成员数
+    max_source: int = 200           # 单次 consolidate 处理的 episodic 上限
+
+
+class MemoryMaintainer:
+    """按需记忆维护：过期剔除 + consolidation（episodic 蒸馏为 semantic）。"""
+
+    def __init__(self, backend, embedder, complete,
+                 config: ConsolidationConfig, *, now_fn=None) -> None:
+        self._backend = backend
+        self._embedder = embedder
+        self._complete = complete
+        self._config = config
+        self._now_fn = now_fn or (lambda: int(time.time()))
+
+    def _cluster(self, records: list[MemoryRecord],
+                 embs: dict[str, list[float]]) -> list[list[MemoryRecord]]:
+        clusters: list[list[MemoryRecord]] = []
+        for r in records:
+            v = embs.get(r.id)
+            if v is None:
+                continue
+            placed = False
+            for cl in clusters:
+                sims = [cosine(v, embs[m.id]) for m in cl if m.id in embs]
+                if sims and sum(sims) / len(sims) >= self._config.sim_threshold:
+                    cl.append(r)
+                    placed = True
+                    break
+            if not placed:
+                clusters.append([r])
+        return clusters
+
+    async def consolidate(self, owner_id: str, kind: str) -> dict:
+        records = [r for r in self._backend.list_by_owner(owner_id, kind)
+                   if r.mem_type == MemType.EPISODIC][:self._config.max_source]
+        if not records:
+            return {"clusters": 0, "merged": 0, "created": 0}
+        embs = self._backend.get_embeddings([r.id for r in records])
+        clusters = self._cluster(records, embs)
+        nclusters = merged = created = 0
+        for cl in clusters:
+            if len(cl) < self._config.min_cluster:
+                continue
+            try:
+                text = (await self._complete(
+                    _DISTILL_SYS, "\n".join(m.text for m in cl))).strip()
+            except Exception as e:
+                log.warning("consolidate distill failed: %s", e)
+                continue
+            if not text:
+                continue
+            try:
+                vec = (await self._embedder.embed([text]))[0]
+                self._backend.upsert([MemoryRecord(
+                    owner_id=owner_id, kind=kind, mem_type=MemType.SEMANTIC,
+                    text=text, embedding=vec, source="consolidate")])
+                self._backend.set_superseded([m.id for m in cl])
+            except Exception as e:
+                log.warning("consolidate apply failed: %s", e)
+                continue
+            nclusters += 1
+            merged += len(cl)
+            created += 1
+        return {"clusters": nclusters, "merged": merged, "created": created}
+
+    async def maintain(self, owner_id: str, kind: str) -> dict:
+        purged = self._backend.purge_expired(self._now_fn())
+        result = await self.consolidate(owner_id, kind)
+        return {"purged": purged, **result}
