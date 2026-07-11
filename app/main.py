@@ -15,6 +15,7 @@ from .api.conversations import make_conversations_router
 from .api.documents import make_documents_router
 from .api.downloads import make_downloads_router
 from .api.questions import make_questions_router
+from .api.stats import make_stats_router
 from .api.wrong_answers import make_wrong_answers_router
 from .assembly import build_harness
 from .attachments import AttachmentStore
@@ -35,7 +36,7 @@ _DEFAULT_SECRET = "dev-insecure-secret-change-me"
 def create_app(config: AppConfig | None = None, harness=None, store=None, doc_store=None,
                question_store=None, exam_store=None, wrong_store=None,
                quiz_service=None, user_store=None, verifier=None,
-               attachment_store=None) -> FastAPI:
+               attachment_store=None, stats_service=None) -> FastAPI:
     # exam_store 参数保留仅为向后兼容（模拟考试已迁入聊天工具，不再有独立考试端点）
     config = config or AppConfig()
     harness = harness if harness is not None else build_harness(config)
@@ -114,6 +115,22 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
 
     app.include_router(make_questions_router(quiz_service, question_store, config))
     app.include_router(make_wrong_answers_router(wrong_store))
+
+    # 首页概览统计：聚合 harness 运行轨迹 + 应用业务数据。用独立只读连接（跨线程安全），
+    # 复用请求期已建的 app_conn（若存在），memory 库缺失时降级为空。
+    if stats_service is None:
+        import sqlite3
+
+        from .stats import StatsService
+        traj_conn = sqlite3.connect(config.persistence_db_path, check_same_thread=False)
+        stats_app_conn = app_conn if app_conn is not None else open_db(config.app_db_path)
+        try:
+            mem_conn = sqlite3.connect(config.memory_db_path, check_same_thread=False)
+        except sqlite3.Error:
+            mem_conn = None
+        stats_service = StatsService(trajectory_conn=traj_conn, app_conn=stats_app_conn,
+                                     memory_conn=mem_conn)
+    app.include_router(make_stats_router(stats_service))
 
     # 会话级沙箱：启动时清扫上次遗留的孤儿容器；关停时销毁全部会话容器。
     sandbox_manager = getattr(harness, "sandbox_manager", None)
