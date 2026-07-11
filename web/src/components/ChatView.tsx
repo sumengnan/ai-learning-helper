@@ -393,20 +393,22 @@ export function ChatView({ conversationId, initial, autoSend }:
                   {m.role === "assistant" ? "…" : ""}
                 </Typography>
               )}
-              {/* 元信息页脚：状态 / 耗时 / tokens / 参考来源，用虚线与正文分隔，各成一块提高辨识度 */}
+              {/* 元信息页脚：状态 / 耗时 / tokens / 参考来源，用虚线与正文分隔，各成一块提高辨识度。
+                  生成中即显示「生成中」状态与实时增长的耗时——无需等正文、也不受 Token 开关限制。 */}
               {m.role === "assistant" && (() => {
                 const live = busy && i === messages.length - 1 && m.status === "streaming";
                 const hasSources = !!(showSources && m.sources && m.sources.length > 0);
                 const hasStatus = live || m.status === "done" || m.status === "error"
                   || m.status === "stopped" || m.status === "interrupted";
-                const hasMeta = showTools
-                  && ((live && m.startedAt != null) || m.elapsedMs != null || !!m.usage);
-                const showMetaRow = hasStatus || hasMeta;
-                // 生成中且尚无内容：上方 TypingDots 已表达，不重复画页脚
-                if (live && !m.content && !hasSources) return null;
+                const hasElapsed = (live && m.startedAt != null) || (showTools && m.elapsedMs != null);
+                const hasTokens = showTools && !!m.usage;
+                const showMetaRow = hasStatus || hasElapsed || hasTokens;
                 if (!showMetaRow && !hasSources) return null;
+                // 正文已有内容时用虚线与正文分隔；生成初期正文尚空则不画分隔线，避免悬空的线
+                const separated = !!m.content;
                 return (
-                  <Box sx={{ mt: 1.25, pt: 1, borderTop: "1px dashed", borderColor: "divider",
+                  <Box sx={{ mt: separated ? 1.25 : 0.75, pt: separated ? 1 : 0,
+                    borderTop: separated ? "1px dashed" : 0, borderColor: "divider",
                     display: "flex", flexDirection: "column", gap: 0.75 }}>
                     {showMetaRow && (
                       <MessageMeta status={m.status} live={live} startedAt={m.startedAt}

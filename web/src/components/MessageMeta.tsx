@@ -65,7 +65,8 @@ export function MessageMeta({ status, live, startedAt, elapsedMs, usage, showMet
     }
   })();
 
-  const showElapsed = showMeta && ((live && startedAt != null) || elapsedMs != null);
+  // 生成中：耗时始终显示并实时增长（不受「展示 Token」开关限制）；完成后的固定耗时才受开关控制
+  const showElapsed = (live && startedAt != null) || (showMeta && elapsedMs != null);
   const showTokens = showMeta && !!usage;
   if (!statusPill && !showElapsed && !showTokens) return null;
 
