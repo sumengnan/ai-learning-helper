@@ -93,7 +93,8 @@ def build_harness(config) -> Harness:
         from harness.tools.builtins.browse_tool import BrowseTool
         _reg(BrowseTool(
             build_browser(config, sandbox), config.http_allowed_domains, config.http_block_private,
-            config.browser_nav_timeout, config.browser_wait_until, config.browser_output_max_chars))
+            config.browser_nav_timeout, config.browser_wait_until, config.browser_output_max_chars,
+            sandbox=sandbox))   # 有沙箱则 DNS 解析下沉到容器内（与 http_request 对称）
 
     if sandbox is not None:
         from harness.tools.builtins.fs_tools import WriteFileTool, ReadFileTool, ListFilesTool

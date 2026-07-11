@@ -38,8 +38,9 @@ async def test_sandbox_start_emits_progress(monkeypatch):
     events = [e for e in got if isinstance(e, Progress)]
     assert {e.scope for e in events} == {"sandbox"}
     texts = [e.text for e in events]
-    assert any("启动沙箱容器" in t for t in texts)
-    assert any("就绪" in t for t in texts)
+    assert any("启动" in t and "沙箱" in t for t in texts)   # 「启动 沙箱…」进度
+    # 成功由 status=ok 表达（不再单独发「已就绪」文本）
+    assert any(getattr(e, "status", None) == "ok" for e in events)
 
 
 async def test_sandbox_exec_emits_progress_even_when_reused():
