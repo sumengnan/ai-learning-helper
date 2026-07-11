@@ -45,3 +45,101 @@ def mmr_select(candidate_ids: list[str], relevance: dict[str, float],
         selected.append(best)
         remaining.remove(best)
     return selected
+
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+
+from .record import MemoryFilter, MemoryRecord
+
+
+@dataclass
+class ScoredHit:
+    record: MemoryRecord
+    score: float
+    components: dict = field(default_factory=dict)
+
+
+@dataclass
+class RetrievalConfig:
+    candidate_pool: int = 20
+    w_relevance: float = 1.0
+    w_recency: float = 0.2
+    w_importance: float = 0.1
+    recency_half_life_days: float = 30.0
+    use_keyword: bool = True
+    use_mmr: bool = True
+    mmr_lambda: float = 0.7
+    rrf_k: int = 60
+
+
+def _age_days(created_at_iso: str, now: datetime) -> float:
+    try:
+        created = datetime.fromisoformat(created_at_iso)
+    except ValueError:
+        return 0.0
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return (now - created).total_seconds() / 86400.0
+
+
+def _minmax(scores: dict[str, float]) -> dict[str, float]:
+    if not scores:
+        return {}
+    lo, hi = min(scores.values()), max(scores.values())
+    if hi <= lo:
+        return {k: 1.0 for k in scores}
+    return {k: (v - lo) / (hi - lo) for k, v in scores.items()}
+
+
+class Retriever:
+    """在 MemoryBackend 之上编排：向量+关键词召回 → RRF → 加权 → MMR → Reranker → top-k。"""
+
+    def __init__(self, backend, embedder, reranker, config: RetrievalConfig,
+                 *, now_fn=None) -> None:
+        self._backend = backend
+        self._embedder = embedder
+        self._reranker = reranker
+        self._config = config
+        self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
+
+    async def retrieve(self, query_text: str, filters: MemoryFilter, k: int,
+                       *, config: RetrievalConfig | None = None) -> list[ScoredHit]:
+        cfg = config or self._config
+        query_vec = (await self._embedder.embed([query_text]))[0]
+        vec_hits = self._backend.vector_search(
+            query_vec, filters=filters, k=cfg.candidate_pool)
+        kw_hits = (self._backend.keyword_search(
+            query_text, filters=filters, k=cfg.candidate_pool) if cfg.use_keyword else [])
+
+        records: dict[str, MemoryRecord] = {}
+        for h in vec_hits:
+            records[h.record.id] = h.record
+        for h in kw_hits:
+            records.setdefault(h.record.id, h.record)
+        if not records:
+            return []
+
+        rel = rrf_fuse([[h.record.id for h in vec_hits],
+                        [h.record.id for h in kw_hits]], cfg.rrf_k)
+        rel_norm = _minmax(rel)
+        now = self._now_fn()
+        scored: dict[str, tuple[float, dict]] = {}
+        for id_, rec in records.items():
+            rec_s = recency_score(_age_days(rec.created_at, now), cfg.recency_half_life_days)
+            rel_s = rel_norm.get(id_, 0.0)
+            final = (cfg.w_relevance * rel_s + cfg.w_recency * rec_s
+                     + cfg.w_importance * rec.importance)
+            scored[id_] = (final, {"relevance": rel_s, "recency": rec_s,
+                                   "importance": rec.importance})
+
+        order = sorted(records.keys(), key=lambda i: scored[i][0], reverse=True)
+        if cfg.use_mmr:
+            embs = self._backend.get_embeddings(order)
+            order = mmr_select(order, {i: scored[i][0] for i in order},
+                               embs, cfg.mmr_lambda, len(order))
+
+        hits = [ScoredHit(record=records[i], score=scored[i][0], components=scored[i][1])
+                for i in order]
+        hits = await self._reranker.rerank(query_text, hits)
+        return hits[:k]
