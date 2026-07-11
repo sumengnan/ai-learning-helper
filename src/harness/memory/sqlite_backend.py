@@ -41,6 +41,9 @@ class SqliteVecBackend:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS ix_mem_entity "
             "ON memory_records(owner_id, kind, entity_key)")
+        self._conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts "
+            "USING fts5(text, tokenize='trigram')")
         self._conn.commit()
 
     # ---- 写 ----
@@ -67,6 +70,8 @@ class SqliteVecBackend:
                 "expires_at, embedding) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (rowid, r.owner_id, r.kind, r.mem_type.value, r.superseded,
                  r.expires_at, serialize_float32(r.embedding)))
+            self._conn.execute(
+                "INSERT INTO memory_fts(rowid, text) VALUES (?, ?)", (rowid, r.text))
             ids.append(r.id)
         self._conn.commit()
         return ids
@@ -82,6 +87,7 @@ class SqliteVecBackend:
     def _delete_rowid(self, rowid: int) -> None:
         self._conn.execute("DELETE FROM memory_records WHERE rowid = ?", (rowid,))
         self._conn.execute("DELETE FROM memory_vec WHERE rowid = ?", (rowid,))
+        self._conn.execute("DELETE FROM memory_fts WHERE rowid = ?", (rowid,))
 
     # ---- 读 ----
     def get(self, ids: list[str]) -> list[MemoryRecord]:
@@ -126,7 +132,45 @@ class SqliteVecBackend:
 
     def keyword_search(self, query_text: str, *,
                        filters: MemoryFilter, k: int) -> list[MemoryHit]:
-        return []   # TODO(SP2): FTS5 关键词检索
+        if not query_text or not query_text.strip():
+            return []
+        match_query = '"' + query_text.replace('"', '""') + '"'   # 作为短语匹配，避开 FTS5 特殊字符语法
+        conds = ["memory_fts MATCH ?", "r.owner_id = ?"]
+        params: list = [match_query, filters.owner_id]
+        if filters.kind is not None:
+            conds.append("r.kind = ?"); params.append(filters.kind)
+        if filters.mem_type is not None:
+            conds.append("r.mem_type = ?"); params.append(filters.mem_type)
+        if not filters.include_superseded:
+            conds.append("r.superseded = ?"); params.append(0)
+        cols = ",".join("r." + c for c in _COLS)
+        sql = (f"SELECT {cols}, bm25(memory_fts) AS score "
+               "FROM memory_fts JOIN memory_records r ON r.rowid = memory_fts.rowid "
+               "WHERE " + " AND ".join(conds) + " ORDER BY score LIMIT ?")
+        params.append(k)
+        try:
+            rows = self._conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        hits: list[MemoryHit] = []
+        for row in rows:
+            rec = self._row_to_record(row[:len(_COLS)])
+            hits.append(MemoryHit(record=rec, distance=row[len(_COLS)]))
+        return hits
+
+    def get_embeddings(self, ids: list[str]) -> dict[str, list[float]]:
+        out: dict[str, list[float]] = {}
+        for i in ids:
+            row = self._conn.execute(
+                "SELECT rowid FROM memory_records WHERE id = ?", (i,)).fetchone()
+            if row is None:
+                continue
+            emb = self._conn.execute(
+                "SELECT vec_to_json(embedding) FROM memory_vec WHERE rowid = ?",
+                (row[0],)).fetchone()
+            if emb is not None:
+                out[i] = json.loads(emb[0])
+        return out
 
     def _row_to_record(self, row: tuple) -> MemoryRecord:
         d = dict(zip(_COLS, row))

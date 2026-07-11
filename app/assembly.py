@@ -81,7 +81,21 @@ def build_harness(config) -> Harness:
             config.embedding_base_url, config.embedding_api_key or config.api_key,
             config.embedding_model, config.embedding_dimension)
         mem_store = SqliteVecBackend(config.memory_db_path, config.embedding_dimension)
-        mem = Memory(mem_store, embedder, config.chunk_size, config.chunk_overlap)
+        from harness.memory.reranker import NoOpReranker
+        from harness.memory.retriever import RetrievalConfig, Retriever
+        _rcfg = RetrievalConfig(
+            candidate_pool=config.retrieval_candidate_pool,
+            w_relevance=config.retrieval_w_relevance,
+            w_recency=config.retrieval_w_recency,
+            w_importance=config.retrieval_w_importance,
+            recency_half_life_days=config.retrieval_recency_half_life_days,
+            use_keyword=config.retrieval_use_keyword,
+            use_mmr=config.retrieval_use_mmr,
+            mmr_lambda=config.retrieval_mmr_lambda,
+            rrf_k=config.retrieval_rrf_k)
+        _retriever = Retriever(mem_store, embedder, NoOpReranker(), _rcfg)
+        mem = Memory(mem_store, embedder, config.chunk_size, config.chunk_overlap,
+                     retriever=_retriever)
         memory = mem
         memory_store = mem_store
         _reg(SearchMemoryTool(mem, default_k=config.search_top_k))

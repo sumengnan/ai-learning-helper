@@ -1,10 +1,13 @@
+# src/harness/memory/memory.py
 from __future__ import annotations
 
-from ..memory.store import MemoryHit          # 保留旧返回形状，消费方零改动
+from ..memory.store import MemoryHit          # 旧返回形状，消费方零改动
 from .backend import MemoryBackend
 from .chunker import chunk
 from .embeddings import EmbeddingClient
-from .record import MemoryRecord, MemType
+from .record import MemoryFilter, MemoryRecord, MemType
+from .reranker import NoOpReranker
+from .retriever import RetrievalConfig, Retriever, ScoredHit
 
 
 def collection_to_scope(collection: str) -> tuple[str, str]:
@@ -16,14 +19,17 @@ def collection_to_scope(collection: str) -> tuple[str, str]:
 
 
 class Memory:
-    """串起 chunker + embedder + backend 的门面。保留 add_texts/search 兼容签名。"""
+    """chunker + embedder + backend + retriever 的门面。add_texts/search 兼容签名。"""
 
     def __init__(self, backend: MemoryBackend, embedder: EmbeddingClient,
-                 chunk_size: int = 1000, overlap: int = 200) -> None:
+                 chunk_size: int = 1000, overlap: int = 200,
+                 retriever: Retriever | None = None) -> None:
         self._backend = backend
         self._embedder = embedder
         self._chunk_size = chunk_size
         self._overlap = overlap
+        self._retriever = retriever or Retriever(
+            backend, embedder, NoOpReranker(), RetrievalConfig())
 
     async def add_texts(self, texts: list[str], collection: str,
                         metadata: dict | None = None) -> list[str]:
@@ -41,11 +47,16 @@ class Memory:
         return self._backend.upsert(records)
 
     async def search(self, query: str, collection: str, k: int) -> list[MemoryHit]:
-        from .record import MemoryFilter
         owner_id, kind = collection_to_scope(collection)
-        vectors = await self._embedder.embed([query])
-        hits = self._backend.vector_search(
-            vectors[0], filters=MemoryFilter(owner_id=owner_id, kind=kind), k=k)
+        hits = await self._retriever.retrieve(
+            query, MemoryFilter(owner_id=owner_id, kind=kind), k)
+        # distance = 1 - 加权融合分（score 可 >1 故 distance 可能为负）；仅保留“越小越相关”的序，非 cosine 距离
         return [MemoryHit(text=h.record.text, collection=collection,
-                          metadata=h.record.metadata, distance=h.distance)
+                          metadata=h.record.metadata, distance=1.0 - h.score)
                 for h in hits]
+
+    async def retrieve(self, query: str, collection: str, k: int,
+                       *, config: RetrievalConfig | None = None) -> list[ScoredHit]:
+        owner_id, kind = collection_to_scope(collection)
+        return await self._retriever.retrieve(
+            query, MemoryFilter(owner_id=owner_id, kind=kind), k, config=config)
