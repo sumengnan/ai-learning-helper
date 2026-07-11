@@ -139,7 +139,8 @@ def build_harness(config) -> Harness:
             _blabels = {_SANDBOX_LABEL: "true", "role": "ephemeral-browser"}
             browser_sub_factory = lambda: _docker_for(   # noqa: E731
                 config, config.browser_sandbox_image, labels=_blabels,
-                network=config.sandbox_network, display_name="浏览器子沙箱")
+                network=config.sandbox_network, display_name="浏览器子沙箱",
+                mem_limit=config.browser_sandbox_mem_limit)   # Chromium 需更大内存，避免 OOM
         browse_tool = BrowseTool(
             build_browser(config, sandbox, sub_factory=browser_sub_factory),
             config.http_allowed_domains, config.http_block_private,

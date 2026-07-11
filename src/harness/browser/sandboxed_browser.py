@@ -80,7 +80,11 @@ class SandboxedBrowser:
                 await self._provision_into(box)
                 return await self._fetch_in(box, url, timeout, wait_until)
             finally:
-                await box.close()              # 用完即销毁
+                try:
+                    await box.close()          # 用完即销毁
+                except Exception:
+                    # 容器可能已 OOM 消失，移除报 404/409 不应掩盖真正的抓取错误
+                    pass
         # 复用会话基础容器（需基础镜像自带 playwright）
         if not self._provisioned:
             await self._provision_into(self._sandbox)

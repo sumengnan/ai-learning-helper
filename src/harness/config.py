@@ -105,6 +105,9 @@ class HarnessConfig(BaseSettings):
     # 无需装 playwright）；留空则复用基础容器（需基础镜像自带 playwright，否则 browse 会报
     # ModuleNotFoundError: No module named 'playwright'）。
     browser_sandbox_image: str = ""
+    # 浏览器子沙箱的内存上限：Chromium 远比一般沙箱吃内存，若沿用基础沙箱的小额度
+    # （如 100m）会被 OOM 杀掉，容器中途消失、browse 失败。故单列一档，默认 1g。
+    browser_sandbox_mem_limit: str = "1g"
     # 在沙箱容器内跑无头 Chromium 时的启动参数（cap_drop=ALL/非 root/小 shm 下必备）
     sandbox_browser_launch_args: list = [
         "--no-sandbox", "--disable-setuid-sandbox",
