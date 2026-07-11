@@ -47,11 +47,15 @@ jobs:
         env:
           SSHPASS: ${{ secrets.SERVER_PASSWORD }}
         run: |
+          # 版本戳来自 CI（服务器上没有 .git，无法算 sha）：短 sha + UTC 构建时间，
+          # 透传给远端 docker compose 的 build-arg，前后端同一来源便于比对。
+          GIT_SHA="${GITHUB_SHA::7}"
+          BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           sshpass -e ssh -p ${{ secrets.SERVER_PORT }} \
             -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
             "set -e; cd ${{ env.DEPLOY_DIR }}; \
              test -f .env || { echo '缺少 .env，请先在服务器 ${{ env.DEPLOY_DIR }}/.env 放好密钥'; exit 1; }; \
-             docker compose up -d --build; \
+             APP_GIT_SHA='$GIT_SHA' APP_BUILD_TIME='$BUILD_TIME' docker compose up -d --build; \
              docker image prune -f; \
              docker compose ps"

@@ -16,6 +16,7 @@ from .api.documents import make_documents_router
 from .api.downloads import make_downloads_router
 from .api.questions import make_questions_router
 from .api.stats import make_stats_router
+from .api.version import make_version_router
 from .api.wrong_answers import make_wrong_answers_router
 from .assembly import build_harness
 from .attachments import AttachmentStore
@@ -100,6 +101,7 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
     async def _close_runs() -> None:
         await run_manager.close()
 
+    app.include_router(make_version_router())
     app.include_router(make_auth_router(auth))
     app.include_router(make_conversations_router(store, harness, attachment_store))
     app.include_router(make_chat_router(harness, store, config,

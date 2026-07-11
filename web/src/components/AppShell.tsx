@@ -22,6 +22,7 @@ import MenuIcon from "@mui/icons-material/Menu";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
 import { useColorMode } from "../ThemeModeProvider";
 import { useAuth } from "../auth/AuthProvider";
+import { VersionBadge } from "./VersionBadge";
 
 const WIDTH = 220;
 const MINI = 68;
@@ -132,6 +133,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </Tooltip>
           ))}
         </List>
+        <VersionBadge open={navOpen} />
       </Drawer>
 
       <Box sx={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column" }}>

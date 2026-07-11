@@ -64,6 +64,17 @@ compose 挂载了宿主 `/var/run/docker.sock`，应用可调用宿主 Docker �
 默认映射宿主 `8000` → 容器 `8000`。需要 80 端口把 `docker-compose.yml` 的端口改成
 `"80:8000"`，或在前面挂 Nginx 反代。
 
+## 部署自检：前后端版本
+
+镜像构建时会把这次 push 的短 git sha + UTC 构建时间同时烙进**前端 bundle**与**后端环境变量**：
+
+- 后端：`GET /api/version` → `{version, git_sha, built_at}`（公开端点，登录前也可访问）。
+- 前端：左侧菜单底部的版本徽标显示 `前端 <sha> · 后端 <sha>`，悬停看构建时间。
+  - ✓ 绿色 = 前后端 sha 一致（同一次部署都成功了）。
+  - ⚠ 橙色 = 不一致（通常是浏览器缓存了旧前端，或某一端没更新成功）。
+
+命令行快速核对：`curl -s http://<host>:8000/api/version`。本地非 CI 构建时两端都显示 `dev`。
+
 ## 手动触发 / 排障
 
 - Actions 页可用 **Run workflow** 手动部署（`workflow_dispatch`）。

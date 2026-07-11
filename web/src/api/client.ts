@@ -33,6 +33,19 @@ async function detail(r: Response, fallback: string): Promise<string> {
   return (await r.json().catch(() => ({})))?.detail || fallback;
 }
 
+export interface VersionInfo {
+  version: string;
+  git_sha: string;
+  built_at: string;
+}
+
+/** 后端版本信息（公开端点，无需鉴权），用于页脚部署自检。 */
+export async function fetchVersion(): Promise<VersionInfo> {
+  const r = await fetch("/api/version");
+  if (!r.ok) throw new Error("获取后端版本失败");
+  return r.json();
+}
+
 export const auth = {
   register: async (username: string, password: string): Promise<{ token: string; user: User }> => {
     const r = await fetch("/api/auth/register", {
