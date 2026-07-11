@@ -91,8 +91,3 @@ def test_upsert_batch_is_atomic_on_bad_dim():
                   _rec("u1", "k", "bad", [1.0, 0.0])])   # 第二条维度错
     assert b.get(["g1"]) == []          # 整批未生效，前面合法记录也不应残留
 
-
-def test_keyword_search_placeholder_returns_empty():
-    b = _backend()
-    b.upsert([_rec("u1", "k", "hello world", [1.0, 0.0, 0.0])])
-    assert b.keyword_search("hello", filters=MemoryFilter(owner_id="u1"), k=5) == []

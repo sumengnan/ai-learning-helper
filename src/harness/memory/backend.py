@@ -28,6 +28,10 @@ class MemoryBackend(Protocol):
         """SP1 占位返回空；FTS5 真实现留 SP2（签名先定死）。"""
         ...
 
+    def get_embeddings(self, ids: list[str]) -> dict[str, list[float]]:
+        """按记录 id 批量取回向量（MMR 用）。"""
+        ...
+
     def list_by_entity(self, owner_id: str, kind: str,
                        entity_key: str) -> list[MemoryRecord]:
         """按实体键查同一实体的记录（SP3 upsert-by-entity 用）。"""
