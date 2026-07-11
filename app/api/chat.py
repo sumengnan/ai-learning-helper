@@ -108,7 +108,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         dstore = getattr(harness, "download_store", None)
         if dstore is not None:
             reg.register(SaveDownloadTool(
-                dstore, config.download_max_mb * 1024 * 1024, user_id))
+                dstore, config.download_max_mb * 1024 * 1024, user_id, conv_id))
         if question_store is not None:
             reg.register(SampleQuestionsTool(question_store, user_id))
             if save_wrong and wrong_store is not None:

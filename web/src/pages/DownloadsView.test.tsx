@@ -1,5 +1,6 @@
 import { render, screen, waitFor, fireEvent, cleanup, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { MemoryRouter, Routes, Route, useSearchParams } from "react-router-dom";
 import DownloadsView from "./DownloadsView";
 import { api } from "../api/client";
 
@@ -7,8 +8,24 @@ vi.mock("../api/client", () => ({
   api: { downloads: { list: vi.fn(), remove: vi.fn(), blob: vi.fn() } },
 }));
 
-const md = { id: "1", filename: "笔记.md", size: 12, content_type: "text/markdown", created_at: "2026-07-08" };
-const png = { id: "2", filename: "图.png", size: 2048, content_type: "image/png", created_at: "2026-07-10" };
+const md = { id: "1", filename: "笔记.md", size: 12, content_type: "text/markdown", created_at: "2026-07-08", conv_id: null };
+const png = { id: "2", filename: "图.png", size: 2048, content_type: "image/png", created_at: "2026-07-10", conv_id: "c9" };
+
+function ConvMarker() {
+  const [sp] = useSearchParams();
+  return <div>conv:{sp.get("conv")}</div>;
+}
+
+function renderView() {
+  return render(
+    <MemoryRouter initialEntries={["/downloads"]}>
+      <Routes>
+        <Route path="/downloads" element={<DownloadsView />} />
+        <Route path="/" element={<ConvMarker />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
 
 beforeEach(() => {
   vi.resetAllMocks();  // 同时清空 mockResolvedValueOnce 队列，保证用例相互独立
@@ -20,7 +37,7 @@ afterEach(() => cleanup());
 describe("DownloadsView", () => {
   it("渲染卡片：副标题 + 类型 Chip + 人类可读大小 + 时间倒排", async () => {
     (api.downloads.list as any).mockResolvedValue([md, png]);
-    render(<DownloadsView />);
+    renderView();
     await waitFor(() => expect(screen.getByText("笔记.md")).toBeTruthy());
     expect(screen.getByText(/共 2 个文件/)).toBeTruthy();
     expect(screen.getByText("文本")).toBeTruthy();
@@ -32,10 +49,20 @@ describe("DownloadsView", () => {
     expect(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("有来源会话的文件显示跳转按钮，点击跳到 /?conv=", async () => {
+    (api.downloads.list as any).mockResolvedValue([md, png]);
+    renderView();
+    await waitFor(() => expect(screen.getByText("图.png")).toBeTruthy());
+    const jumps = screen.getAllByLabelText("跳转到聊天");
+    expect(jumps).toHaveLength(1);  // 仅 png 有 conv_id
+    fireEvent.click(jumps[0]);
+    await waitFor(() => expect(screen.getByText("conv:c9")).toBeTruthy());
+  });
+
   it("单个删除弹确认框，确认后调用 remove", async () => {
     (api.downloads.list as any).mockResolvedValueOnce([md]).mockResolvedValueOnce([]);
     (api.downloads.remove as any).mockResolvedValue(undefined);
-    render(<DownloadsView />);
+    renderView();
     await waitFor(() => expect(screen.getByText("笔记.md")).toBeTruthy());
     fireEvent.click(screen.getByLabelText("删除文件"));
     expect(await screen.findByText("删除确认")).toBeTruthy();
@@ -43,10 +70,10 @@ describe("DownloadsView", () => {
     await waitFor(() => expect(api.downloads.remove).toHaveBeenCalledWith("1"));
   });
 
-  it("批量删除：本页全选后删除选中", async () => {
+  it("批量删除：选中两项后删除", async () => {
     (api.downloads.list as any).mockResolvedValueOnce([md, png]).mockResolvedValueOnce([]);
     (api.downloads.remove as any).mockResolvedValue(undefined);
-    render(<DownloadsView />);
+    renderView();
     await waitFor(() => expect(screen.getByText("笔记.md")).toBeTruthy());
     fireEvent.click(screen.getByRole("checkbox", { name: "选择 笔记.md" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "选择 图.png" }));
@@ -58,7 +85,7 @@ describe("DownloadsView", () => {
   it("点击预览打开弹窗并加载图片", async () => {
     (api.downloads.list as any).mockResolvedValue([png]);
     (api.downloads.blob as any).mockResolvedValue(new Blob(["x"], { type: "image/png" }));
-    render(<DownloadsView />);
+    renderView();
     await waitFor(() => expect(screen.getByText("图.png")).toBeTruthy());
     fireEvent.click(screen.getByLabelText("预览文件"));
     const dialog = await screen.findByRole("dialog");

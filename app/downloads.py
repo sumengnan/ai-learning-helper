@@ -26,32 +26,33 @@ class DownloadStore:
         self._seq = self._db.execute(
             "SELECT COALESCE(MAX(seq), 0) FROM downloads").fetchone()[0]
 
-    def create(self, user_id: str | None, filename: str, data: bytes, content_type: str) -> dict:
+    def create(self, user_id: str | None, filename: str, data: bytes, content_type: str,
+               conv_id: str | None = None) -> dict:
         did = uuid4().hex
         with open(os.path.join(self._dir, did), "wb") as f:
             f.write(data)
         self._seq += 1
         self._db.execute(
-            "INSERT INTO downloads(id, user_id, filename, size, content_type, created_at, seq) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (did, user_id, filename, len(data), content_type, _now(), self._seq))
+            "INSERT INTO downloads(id, user_id, filename, size, content_type, created_at, seq, conv_id) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (did, user_id, filename, len(data), content_type, _now(), self._seq, conv_id))
         self._db.commit()
         return {"id": did, "filename": filename, "size": len(data),
-                "content_type": content_type}
+                "content_type": content_type, "conv_id": conv_id}
 
     def _row(self, r) -> dict:
         return {"id": r[0], "filename": r[1], "size": r[2],
-                "content_type": r[3], "created_at": r[4]}
+                "content_type": r[3], "created_at": r[4], "conv_id": r[5]}
 
     def list(self, user_id: str | None) -> list[dict]:
         rows = self._db.execute(
-            "SELECT id,filename,size,content_type,created_at "
+            "SELECT id,filename,size,content_type,created_at,conv_id "
             "FROM downloads WHERE user_id=? ORDER BY seq DESC", (user_id,)).fetchall()
         return [self._row(r) for r in rows]
 
     def get(self, user_id: str | None, did: str) -> dict | None:
         r = self._db.execute(
-            "SELECT id,filename,size,content_type,created_at "
+            "SELECT id,filename,size,content_type,created_at,conv_id "
             "FROM downloads WHERE id=? AND user_id=?", (did, user_id)).fetchone()
         if not r:
             return None

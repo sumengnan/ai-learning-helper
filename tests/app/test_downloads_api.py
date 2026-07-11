@@ -99,3 +99,15 @@ def test_download_isolation_between_users(tmp_path):
     assert client.delete(f"/api/downloads/{rec['id']}", headers=hb).status_code == 404
     # A 仍能取到
     assert client.get(f"/api/downloads/{rec['id']}", headers=ha).status_code == 200
+
+
+def test_create_list_carry_conv_id(tmp_path):
+    # 下载记录关联来源会话，供下载页跳转回聊天
+    s = DownloadStore(str(tmp_path / "dl2"), ":memory:")
+    rec = s.create("u1", "note.md", b"hi", "text/markdown", conv_id="c42")
+    assert rec["conv_id"] == "c42"
+    assert s.list("u1")[0]["conv_id"] == "c42"
+    assert s.get("u1", rec["id"])["conv_id"] == "c42"
+    # 默认无来源会话
+    s.create("u1", "x.txt", b"y", "text/plain")
+    assert s.list("u1")[0]["conv_id"] is None

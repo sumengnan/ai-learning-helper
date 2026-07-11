@@ -7,7 +7,9 @@ import DownloadIcon from "@mui/icons-material/Download";
 import DeleteIcon from "@mui/icons-material/Delete";
 import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
 import VisibilityIcon from "@mui/icons-material/Visibility";
+import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutlined";
 import { AnimatePresence, motion } from "framer-motion";
+import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { listItemVariants } from "../components/motion";
 import { formatBytes, fileMeta, previewKind } from "./downloadsUtils";
@@ -19,11 +21,13 @@ interface Download {
   size: number;
   content_type: string;
   created_at: string;
+  conv_id?: string | null;
 }
 
 const PAGE_SIZE = 8;
 
 export default function DownloadsView() {
+  const navigate = useNavigate();
   const [items, setItems] = useState<Download[]>([]);
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -145,6 +149,13 @@ export default function DownloadsView() {
                       <Typography variant="caption" color="text.secondary">{d.created_at.slice(0, 10)}</Typography>
                     </Stack>
                   </Box>
+                  {d.conv_id && (
+                    <Tooltip title="跳转到聊天">
+                      <IconButton onClick={() => navigate(`/?conv=${d.conv_id}`)} aria-label="跳转到聊天">
+                        <ChatBubbleOutlineIcon />
+                      </IconButton>
+                    </Tooltip>
+                  )}
                   {canPreview && (
                     <Tooltip title="预览">
                       <IconButton onClick={() => setPreview(d)} aria-label="预览文件">

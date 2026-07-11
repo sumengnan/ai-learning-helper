@@ -1,5 +1,6 @@
 // web/src/pages/ChatPage.tsx
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Box, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Button,
 } from "@mui/material";
@@ -16,15 +17,22 @@ export function ChatPage() {
   const [autoSend, setAutoSend] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
   const [newName, setNewName] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const refresh = () => api.list().then(setConvs);
 
-  // 进入页面时默认打开最近一个对话，而不是空白页
+  // 进入页面时：优先打开 ?conv= 指定的会话（从下载页跳转而来），否则打开最近一个
   useEffect(() => {
     void (async () => {
       const list = await api.list();
       setConvs(list);
-      if (list.length > 0) void select(list[0].id);
+      const wanted = searchParams.get("conv");
+      if (wanted && list.some((c) => c.id === wanted)) {
+        void select(wanted);
+        setSearchParams({}, { replace: true });   // 用后即清，避免刷新/后退重复定位
+      } else if (list.length > 0) {
+        void select(list[0].id);
+      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

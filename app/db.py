@@ -25,7 +25,7 @@ _SCHEMA = (
          snapshot TEXT, user_answer TEXT, created_at TEXT, seq INTEGER)""",
     """CREATE TABLE IF NOT EXISTS downloads(
          id TEXT PRIMARY KEY, user_id TEXT, filename TEXT, size INTEGER,
-         content_type TEXT, created_at TEXT, seq INTEGER)""",
+         content_type TEXT, created_at TEXT, seq INTEGER, conv_id TEXT)""",
     # 聊天附件：裸字节落盘、元数据入库；conv_id 归属会话，发送后经消息 attachments 列关联
     """CREATE TABLE IF NOT EXISTS attachments(
          id TEXT PRIMARY KEY, user_id TEXT, conv_id TEXT, filename TEXT,
@@ -49,7 +49,7 @@ _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
     "documents": {"user_id": "TEXT", "excerpt": "TEXT"},
     "questions": {"user_id": "TEXT"},
     "wrong_answers": {"user_id": "TEXT"},
-    "downloads": {"user_id": "TEXT"},
+    "downloads": {"user_id": "TEXT", "conv_id": "TEXT"},
 }
 
 _SCHEMA_VERSION = 1
