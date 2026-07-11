@@ -6,7 +6,7 @@ import { KnowledgeView } from "./KnowledgeView";
 import { api } from "../api/client";
 
 vi.mock("../api/client", () => ({
-  api: { documents: { list: vi.fn(), search: vi.fn(), upload: vi.fn(), remove: vi.fn() } },
+  api: { documents: { list: vi.fn(), search: vi.fn(), upload: vi.fn(), remove: vi.fn(), get: vi.fn() } },
 }));
 
 // 一个片段（chunk）：filename 是来源文件名，excerpt 是片段正文
@@ -20,7 +20,6 @@ function renderView() {
     <MemoryRouter initialEntries={["/knowledge"]}>
       <Routes>
         <Route path="/knowledge" element={<KnowledgeView />} />
-        <Route path="/knowledge/:id" element={<div>片段详情页</div>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -46,12 +45,19 @@ describe("KnowledgeView", () => {
     expect(screen.queryByText(/相关度/)).toBeNull();
   });
 
-  it("点击卡片跳转到片段详情页", async () => {
+  it("点击卡片打开片段详情抽屉（不跳转页面）", async () => {
     (api.documents.list as any).mockResolvedValue({ items: [mkFrag(1)], total: 1 });
+    (api.documents.get as any).mockResolvedValue({
+      id: "1", filename: "doc1.txt", category: "文本",
+      uploaded_at: "2026-07-11T00:00:00Z", doc_id: "d1",
+      text: "片段完整正文内容。",
+    });
     renderView();
     await waitFor(() => expect(screen.getByText(/片段正文 1/)).toBeTruthy());
     fireEvent.click(screen.getByText(/片段正文 1/));  // 点卡片内容 → 冒泡到 Card onClick
-    await waitFor(() => expect(screen.getByText("片段详情页")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("片段详情")).toBeTruthy());
+    expect(screen.getByText(/片段完整正文内容/)).toBeTruthy();
+    expect(api.documents.get).toHaveBeenCalledWith("1");
   });
 
   it("分页：片段总数超过一页时显示分页控件", async () => {

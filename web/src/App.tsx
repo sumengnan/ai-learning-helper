@@ -8,7 +8,6 @@ import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { ChatPage } from "./pages/ChatPage";
 import { KnowledgeView } from "./pages/KnowledgeView";
-import { KnowledgeDetailView } from "./pages/KnowledgeDetailView";
 import QuestionBankView from "./pages/QuestionBankView";
 import WrongAnswersView from "./pages/WrongAnswersView";
 import DownloadsView from "./pages/DownloadsView";
@@ -30,7 +29,6 @@ function ShellRoutes() {
           <Routes location={location}>
             <Route path="/" element={<ChatPage />} />
             <Route path="/knowledge" element={<KnowledgeView />} />
-            <Route path="/knowledge/:id" element={<KnowledgeDetailView />} />
             <Route path="/questions" element={<QuestionBankView />} />
             <Route path="/wrong" element={<WrongAnswersView />} />
             <Route path="/downloads" element={<DownloadsView />} />
