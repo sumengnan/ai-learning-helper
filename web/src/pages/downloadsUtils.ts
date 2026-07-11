@@ -1,6 +1,7 @@
 // 下载文件：大小格式化 + 按 MIME 类型派生标签/配色/图标，供卡片统一呈现
 import type { ChipProps } from "@mui/material";
 import type { SvgIconComponent } from "@mui/icons-material";
+import { api } from "../api/client";
 import ImageIcon from "@mui/icons-material/Image";
 import PictureAsPdfIcon from "@mui/icons-material/PictureAsPdf";
 import AudioFileIcon from "@mui/icons-material/AudioFile";
@@ -19,6 +20,16 @@ export function previewKind(contentType: string): PreviewKind {
       || c.includes("markdown") || c.includes("csv") || c.includes("javascript"))
     return "text";
   return "none";
+}
+
+// 鉴权取 blob 后触发浏览器保存（下载接口需 Bearer，<a href> 带不了）
+export async function downloadById(id: string, filename: string): Promise<void> {
+  const blob = await api.downloads.blob(id);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
 }
 
 export function formatBytes(n: number): string {

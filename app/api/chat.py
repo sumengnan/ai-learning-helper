@@ -100,7 +100,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                   summarizer=_summarizer, conv_memory=_conv_memory)
 
     def _build_registry(user_id: str, save_wrong: bool, conv_id: str,
-                        has_attachments: bool) -> ToolRegistry:
+                        has_attachments: bool, download_sink: list | None = None) -> ToolRegistry:
         reg = ToolRegistry()
         for t in harness.registry.tools():
             reg.register(t)
@@ -108,7 +108,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         dstore = getattr(harness, "download_store", None)
         if dstore is not None:
             reg.register(SaveDownloadTool(
-                dstore, config.download_max_mb * 1024 * 1024, user_id, conv_id))
+                dstore, config.download_max_mb * 1024 * 1024, user_id, conv_id,
+                sink=download_sink))
         if question_store is not None:
             reg.register(SampleQuestionsTool(question_store, user_id))
             if save_wrong and wrong_store is not None:
@@ -142,8 +143,11 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             attachment_store is not None
             and attachment_store.count_conv(user_id, req.conversation_id) > 0)
         history = store.messages(req.conversation_id)
+        # 本轮 save_download 生成的文件收集于此，逐个挂到对应工具 step 供聊天内联展示
+        turn_downloads: list[dict] = []
+        dl_consumed = [0]
         registry = _build_registry(user_id, req.save_wrong, req.conversation_id,
-                                   has_attachments)
+                                   has_attachments, download_sink=turn_downloads)
         gate_on = verifier is not None and config.enable_answer_gate
         # 喂给模型的消息：带附件时追加只含文件名的名单提示（不含内容），入库仍用原文
         model_message = req.message
@@ -232,6 +236,11 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                 collect["grounding"].append(
                                     {"tool": st["tool"], "content": ev.result.content,
                                      "is_error": ev.result.is_error})
+                            # save_download 成功：把本轮生成的文件挂到该 step（随 steps 落库，供聊天内联展示）
+                            if st["tool"] == "save_download" and not ev.result.is_error \
+                                    and dl_consumed[0] < len(turn_downloads):
+                                st["download"] = turn_downloads[dl_consumed[0]]
+                                dl_consumed[0] += 1
                     elif isinstance(ev, Progress):
                         collect["progress"].append({"scope": ev.scope, "text": ev.text,
                                                     "status": ev.status, "key": ev.key})

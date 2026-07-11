@@ -12,7 +12,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { listItemVariants } from "../components/motion";
-import { formatBytes, fileMeta, previewKind } from "./downloadsUtils";
+import { formatBytes, fileMeta, previewKind, downloadById } from "./downloadsUtils";
 import { DownloadPreviewDialog, type PreviewFile } from "./DownloadPreviewDialog";
 
 interface Download {
@@ -61,15 +61,7 @@ export default function DownloadsView() {
     });
   }
 
-  async function download(d: Download) {
-    // 下载需带 Bearer，故取鉴权 blob 再触发保存
-    const blob = await api.downloads.blob(d.id);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = d.filename;
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
-  }
+  const download = (d: Download) => downloadById(d.id, d.filename);
 
   async function confirmDelete() {
     const ids = confirmIds ?? [];

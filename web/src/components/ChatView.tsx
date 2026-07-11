@@ -12,6 +12,7 @@ import { motion } from "framer-motion";
 import type { ChatMessage } from "../types";
 import { streamChat, attachChat, stopRun, sendDecision, api } from "../api/client";
 import { AgentProgress } from "./AgentProgress";
+import { MessageDownloads } from "./MessageDownloads";
 import { EmptyHint } from "./EmptyHint";
 import { ProgressBlock } from "./ProgressBlock";
 import { PlanBlock } from "./PlanBlock";
@@ -87,6 +88,7 @@ export function ChatView({ conversationId, initial, autoSend }:
   const runIdRef = useRef<string | null>(null);
   // 本轮 turn 句柄（来自 X-Run-Id / 接回的 runId），用于 stop 与刷新后接回
   const turnRunIdRef = useRef<string | null>(null);
+  const sawDownloadRef = useRef(false);   // 本轮是否调用过 save_download（决定完成后是否补拉 download）
   const [approval, setApproval] = useState<
     { approvalId: string; command: string; reason: string } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -184,7 +186,10 @@ export function ChatView({ conversationId, initial, autoSend }:
   // 把一个 SSE 事件应用到最后一条（助手）消息上；RunError 时调 markError。
   const applyEvent = (e: any, markError: () => void) => {
     if (e.type === "TextDelta") upd((a) => { a.content += e.data.text; });
-    else if (e.type === "ToolStarted") upd((a) => a.steps!.push({ tool: e.data.tool_call.name, args: e.data.tool_call.arguments }));
+    else if (e.type === "ToolStarted") {
+      if (e.data.tool_call.name === "save_download") sawDownloadRef.current = true;
+      upd((a) => a.steps!.push({ tool: e.data.tool_call.name, args: e.data.tool_call.arguments }));
+    }
     else if (e.type === "ToolFinished") upd((a) => {
       const s = a.steps![a.steps!.length - 1];
       if (s) { s.result = e.data.result.content; s.isError = e.data.result.is_error; }
@@ -212,6 +217,7 @@ export function ChatView({ conversationId, initial, autoSend }:
     const assistant: ChatMessage = { role: "assistant", content: "", steps: [], status: "streaming" };
     setMessages((m) => [...m, userMsg, assistant]);
     let outcome: "done" | "error" | "stopped" = "done";
+    sawDownloadRef.current = false;
     setInput(""); setPending([]); setBusy(true); busyRef.current = true;
     const controller = new AbortController();
     abortRef.current = controller;
@@ -226,7 +232,23 @@ export function ChatView({ conversationId, initial, autoSend }:
     } finally {
       upd((a) => { a.status = outcome; });   // 收尾状态：完成/失败/已停止
       setBusy(false); busyRef.current = false;
+      // 本轮生成了文件：流式事件不含下载 id，完成后补拉带 download 的 steps 供内联展示
+      if (outcome !== "stopped" && sawDownloadRef.current) void attachDownloads();
     }
+  }
+
+  // 从服务端重新取回本轮助手消息的 steps（含 save_download 挂上的 download），合并到当前气泡
+  async function attachDownloads() {
+    try {
+      const msgs = await api.messages(conversationId);
+      const rid = turnRunIdRef.current;
+      const fin = [...msgs].reverse().find((m) => m.run_id === rid && m.role === "assistant");
+      const dls = fin?.steps?.filter((s) => s.download) ?? [];
+      if (fin?.steps && dls.length > 0) upd((a) => {
+        a.steps = fin.steps!.map((s) => ({
+          tool: s.tool, args: s.args, result: s.result, isError: s.is_error, download: s.download }));
+      });
+    } catch { /* 补拉失败不影响正文，用户仍可去下载页 */ }
   }
 
   // 停止本轮生成：显式取消后端后台任务（断开已不再取消它）+ 断开本地流。
@@ -260,7 +282,7 @@ export function ChatView({ conversationId, initial, autoSend }:
           if (fin) upd((a) => {
             a.content = fin.content;
             a.status = (fin.status as ChatMessage["status"]) ?? "done";
-            a.steps = fin.steps?.map((s) => ({ tool: s.tool, args: s.args, result: s.result, isError: s.is_error })) ?? a.steps;
+            a.steps = fin.steps?.map((s) => ({ tool: s.tool, args: s.args, result: s.result, isError: s.is_error, download: s.download })) ?? a.steps;
             a.progress = fin.progress ?? a.progress;
           });
         } catch { /* 重载失败保持原样 */ }
@@ -372,6 +394,10 @@ export function ChatView({ conversationId, initial, autoSend }:
                   {m.role === "assistant" ? "…" : ""}
                 </Typography>
               )}
+              {m.role === "assistant" && m.steps && (() => {
+                const dls = m.steps.filter((s) => s.download).map((s) => s.download!);
+                return dls.length > 0 ? <MessageDownloads items={dls} /> : null;
+              })()}
               {m.role === "assistant" && (() => {
                 const live = busy && i === messages.length - 1 && m.status === "streaming";
                 // 生成中且已有内容 → 底部 loading（覆盖工具执行等数据暂停时的「卡住」错觉）；

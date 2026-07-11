@@ -5,10 +5,17 @@ export type Attachment = {
   size: number;
   content_type: string;
 };
+// 助手在本轮用 save_download 生成的文件，挂在对应工具 step 上，供聊天内联预览/下载
+export type StepDownload = {
+  id: string;
+  filename: string;
+  content_type: string;
+  size: number;
+};
 export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
-  steps?: { tool: string; args: any; result?: string; isError?: boolean }[];
+  steps?: { tool: string; args: any; result?: string; isError?: boolean; download?: StepDownload }[];
   progress?: { scope: string; text: string; status?: "running" | "ok" | "error" | null; key?: string | null }[];
   usage?: { tokens: number; cost: number | null };
   attachments?: Attachment[];

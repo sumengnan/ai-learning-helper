@@ -136,7 +136,8 @@ export const api = {
       body: JSON.stringify({ title }) }).then(() => undefined),
   messages: (id: string): Promise<{
     role: string; content: string;
-    steps?: { tool: string; args: unknown; result?: string; is_error?: boolean }[] | null;
+    steps?: { tool: string; args: unknown; result?: string; is_error?: boolean;
+              download?: { id: string; filename: string; content_type: string; size: number } }[] | null;
     progress?: { scope: string; text: string; status?: "running" | "ok" | "error" | null; key?: string | null }[] | null;
     attachments?: Attachment[] | null;
     run_id?: string | null;

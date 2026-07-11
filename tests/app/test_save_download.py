@@ -40,3 +40,18 @@ async def test_oversize_returns_error_no_store(tmp_path):
     tool, store = _tool(tmp_path, max_mb=0)                     # 0MB 上限 → 任何内容都超
     out = await tool.run(tool.Params(filename="big.txt", content="hello"))
     assert "失败" in out and "上限" in out and store.list("u1") == []
+
+
+@pytest.mark.asyncio
+async def test_sink_collects_generated_file(tmp_path):
+    # 生成的文件收进 sink，供聊天消息内联展示
+    store = DownloadStore(str(tmp_path / "f"), ":memory:")
+    sink: list = []
+    tool = SaveDownloadTool(store, 25 * 1024 * 1024, "u1", "conv1", sink=sink)
+    await tool.run(tool.Params(filename="note.md", content="hi"))
+    assert len(sink) == 1
+    assert sink[0]["filename"] == "note.md" and sink[0]["content_type"] == "text/markdown"
+    assert sink[0]["id"] and sink[0]["size"] == len("hi".encode())
+    # 失败不入 sink
+    await tool.run(tool.Params(filename="x.png", content="不是base64", encoding="base64"))
+    assert len(sink) == 1
