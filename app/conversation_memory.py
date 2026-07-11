@@ -54,5 +54,10 @@ class ConversationMemoryService:
             return []
         hits = await self._memory.search(query, self._collection_for(conv_id), k * _OVERFETCH)
         if before_seq is not None:
-            hits = [h for h in hits if (h.metadata or {}).get("seq", -1) < before_seq]
+            # 只对「原文轮次」记录（带 seq）套用窗口外过滤；智能写入产出的提炼事实
+            # 无 seq、属语义记忆（位置无关），恒可召回，不参与窗口裁剪。
+            def _in_scope(h):
+                md = h.metadata or {}
+                return "seq" not in md or md["seq"] < before_seq
+            hits = [h for h in hits if _in_scope(h)]
         return hits[:k]
