@@ -1,9 +1,25 @@
+from types import SimpleNamespace
+
 import pytest
 
 from harness.browser.fake import FakeBrowser
 from harness.tools.base import ToolRegistry, ToolExecutor
 from harness.tools.builtins.browse_tool import BrowseTool
 from harness.types import ToolCall
+
+
+class _FakeSandbox:
+    """模拟沙箱：exec(python3 -c 解析脚本 host) 返回容器内 DNS 结果。"""
+
+    def __init__(self, ip_map):
+        self._ip_map = ip_map
+        self.hosts = []
+
+    async def exec(self, cmd, timeout):
+        host = cmd[-1]                       # ["python3","-c",script,host]
+        self.hosts.append(host)
+        return SimpleNamespace(
+            stdout="\n".join(self._ip_map.get(host, [])), stderr="", exit_code=0)
 
 ARTICLE = (
     "<html><head><title>标题T</title></head><body>"
@@ -60,6 +76,34 @@ async def test_browse_redirect_to_internal_blocked():
     r = await ex.execute(ToolCall(id="c1", name="browse",
                                   arguments={"url": "http://example.com/a"}))
     assert r.is_error is True   # 重定向跳被策略拦截
+
+
+async def test_browse_dns_resolved_in_sandbox():
+    # 有沙箱时主机名 DNS 下沉到容器解析：确认走了 sandbox.exec 而非宿主 resolve，且放行
+    # （FakeBrowser 的逐跳 url_validator 用宿主 resolve，真实 SandboxedBrowser 会忽略它、
+    #  由容器内 runner 校验，故此处宿主 resolve 也置公网以免干扰）
+    fb = FakeBrowser({"http://example.com/a": ("标题T", ARTICLE)})
+    sb = _FakeSandbox({"example.com": ["93.184.216.34"]})
+    tool = BrowseTool(fb, allowed_domains=[], block_private=True, timeout=5,
+                      wait_until="load", max_chars=8000,
+                      resolve=lambda h: ["93.184.216.34"], sandbox=sb)
+    out = await tool.run(tool.Params(url="http://example.com/a"))
+    assert "标题T" in out
+    assert sb.hosts == ["example.com"]        # 确实走了沙箱内 DNS 解析
+
+
+async def test_browse_sandbox_dns_internal_blocked():
+    # 沙箱解析到内网 → 前置校验以沙箱 DNS 为准拦截（即便宿主看似公网），fetch 都不会发生
+    fb = FakeBrowser({})
+    sb = _FakeSandbox({"evil.com": ["10.0.0.5"]})
+    tool = BrowseTool(fb, allowed_domains=[], block_private=True, timeout=5,
+                      wait_until="load", max_chars=8000,
+                      resolve=lambda h: ["93.184.216.34"], sandbox=sb)
+    reg = ToolRegistry(); reg.register(tool)
+    ex = ToolExecutor(reg)
+    r = await ex.execute(ToolCall(id="c1", name="browse",
+                                  arguments={"url": "http://evil.com/"}))
+    assert r.is_error is True
 
 
 async def test_browse_empty_content_message():

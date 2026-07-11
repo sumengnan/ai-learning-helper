@@ -7,13 +7,7 @@ from pydantic import BaseModel
 
 from ..base import Tool
 from ...net.policy import check_url
-
-# 在沙箱容器内解析主机名 → 打印去重后的 IP（每行一个）。请求真正出网发生在沙箱，
-# 故 DNS 也在沙箱内解析，避免宿主与沙箱两侧 DNS 视图不一致。
-_RESOLVE_SCRIPT = (
-    "import socket,sys\n"
-    "print('\\n'.join(sorted({ai[4][0] for ai in socket.getaddrinfo(sys.argv[1], None)})))"
-)
+from ...net.sandbox_dns import resolve_in_sandbox
 
 
 def _parse_response(raw: str) -> tuple[int, str | None, str]:
@@ -56,9 +50,7 @@ class SandboxedHttpRequestTool(Tool):
         self._max_redirects = max_redirects
 
     async def _resolve_in_sandbox(self, host: str) -> list[str]:
-        res = await self._sandbox.exec(
-            ["python3", "-c", _RESOLVE_SCRIPT, host], self._timeout + 5)
-        return [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
+        return await resolve_in_sandbox(self._sandbox, host, self._timeout)
 
     async def run(self, params: "SandboxedHttpRequestTool.Params") -> str:
         url = params.url
