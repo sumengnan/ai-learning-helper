@@ -15,9 +15,12 @@ class ConversationMemoryService:
     MemoryStore 检索不读 metadata，seq 过滤在应用层做。整轮较短时按整轮入库可规避。
     """
 
-    def __init__(self, memory, collection_prefix: str = "conversation") -> None:
+    def __init__(self, memory, collection_prefix: str = "conversation",
+                 writer=None, sample_rate: float = 1.0) -> None:
         self._memory = memory
         self._prefix = collection_prefix
+        self._writer = writer
+        self._sample_rate = sample_rate
 
     def _collection_for(self, conv_id: str) -> str:
         return f"{self._prefix}:{conv_id}"
@@ -26,11 +29,23 @@ class ConversationMemoryService:
         """把一轮对话文本写入向量库。seq 为该轮在历史中的消息前缀位置（供窗口外过滤）。
 
         调用方应在轮结束落库后异步触发（每条要一次远程 embedding，勿阻塞聊天路径）。
+        启用 writer 时走智能写入（提炼/去重/矛盾），否则原文入库（SP1 行为，向后兼容）。
         """
         if not text or not text.strip():
             return []
+        if self._writer is not None and self._should_sample(text):
+            return await self._writer.write(conv_id, self._prefix, text)
         return await self._memory.add_texts(
             [text], self._collection_for(conv_id), {"seq": seq})
+
+    def _should_sample(self, text: str) -> bool:
+        if self._sample_rate >= 1.0:
+            return True
+        if self._sample_rate <= 0.0:
+            return False
+        import hashlib
+        h = int(hashlib.md5(text.encode("utf-8")).hexdigest(), 16) % 1000
+        return h < self._sample_rate * 1000
 
     async def retrieve(self, conv_id: str, query: str, k: int, *,
                        before_seq: int | None = None) -> list[MemoryHit]:
@@ -39,5 +54,10 @@ class ConversationMemoryService:
             return []
         hits = await self._memory.search(query, self._collection_for(conv_id), k * _OVERFETCH)
         if before_seq is not None:
-            hits = [h for h in hits if (h.metadata or {}).get("seq", -1) < before_seq]
+            # 只对「原文轮次」记录（带 seq）套用窗口外过滤；智能写入产出的提炼事实
+            # 无 seq、属语义记忆（位置无关），恒可召回，不参与窗口裁剪。
+            def _in_scope(h):
+                md = h.metadata or {}
+                return "seq" not in md or md["seq"] < before_seq
+            hits = [h for h in hits if _in_scope(h)]
         return hits[:k]

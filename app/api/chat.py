@@ -92,7 +92,10 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 max_summary_tokens=config.context_summary_max_tokens)
         if getattr(config, "context_enable_retrieval", True) and \
                 getattr(harness, "memory", None) is not None:
-            _conv_memory = ConversationMemoryService(harness.memory)
+            _conv_memory = ConversationMemoryService(
+                harness.memory,
+                writer=getattr(harness, "memory_writer", None),
+                sample_rate=config.memory_write_sample_rate)
     _assembler = ContextAssembler(config, config.model,
                                   summarizer=_summarizer, conv_memory=_conv_memory)
 

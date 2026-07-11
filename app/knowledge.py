@@ -50,7 +50,8 @@ class KnowledgeService:
         hits = await self._memory.search(query, self._collection_for(user_id), k)
         results = []
         for h in hits:
-            relevance = max(0, min(100, round(100 / (1 + h.distance))))
+            # distance = 1 - 融合分（越小越相关，可能为负）；相关度 = 融合分裁剪到 0–100%
+            relevance = max(0, min(100, round((1 - h.distance) * 100)))
             item = self._fragment(h.id, h.text, h.metadata, h.created_at)
             item["relevance"] = relevance
             results.append(item)

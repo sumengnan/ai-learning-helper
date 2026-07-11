@@ -24,6 +24,7 @@ class Harness:
     system_prompt: str
     memory: object | None = None
     memory_store: object | None = None
+    memory_writer: object | None = None
     download_store: object | None = None
     skill_registry: object | None = None
     sandbox: object | None = None            # 绑进工具的会话级沙箱代理（SandboxProxy）
@@ -40,6 +41,7 @@ def build_harness(config) -> Harness:
     pool: dict = {}   # 工具池：name -> Tool，供 dispatch 组装子 agent registry
     memory = None
     memory_store = None
+    memory_writer = None
 
     def _reg(tool):
         reg.register(tool)
@@ -81,9 +83,30 @@ def build_harness(config) -> Harness:
             config.embedding_base_url, config.embedding_api_key or config.api_key,
             config.embedding_model, config.embedding_dimension)
         mem_store = SqliteVecBackend(config.memory_db_path, config.embedding_dimension)
-        mem = Memory(mem_store, embedder, config.chunk_size, config.chunk_overlap)
+        from harness.memory.reranker import NoOpReranker
+        from harness.memory.retriever import RetrievalConfig, Retriever
+        _rcfg = RetrievalConfig(
+            candidate_pool=config.retrieval_candidate_pool,
+            w_relevance=config.retrieval_w_relevance,
+            w_recency=config.retrieval_w_recency,
+            w_importance=config.retrieval_w_importance,
+            recency_half_life_days=config.retrieval_recency_half_life_days,
+            use_keyword=config.retrieval_use_keyword,
+            use_mmr=config.retrieval_use_mmr,
+            mmr_lambda=config.retrieval_mmr_lambda,
+            rrf_k=config.retrieval_rrf_k)
+        _retriever = Retriever(mem_store, embedder, NoOpReranker(), _rcfg)
+        mem = Memory(mem_store, embedder, config.chunk_size, config.chunk_overlap,
+                     retriever=_retriever)
         memory = mem
         memory_store = mem_store
+        if config.memory_write_extract:
+            from harness.memory.writer import MemoryWriter
+            from app.completion import build_completer
+            memory_writer = MemoryWriter(
+                mem_store, embedder, _retriever,
+                build_completer(client, config.model),
+                candidate_k=config.memory_write_candidate_k)
         _reg(SearchMemoryTool(mem, default_k=config.search_top_k))
         _reg(RememberTool(mem))
         _reg(RecallEpisodesTool(EpisodicMemory(mem), default_k=config.episode_recall_k))
@@ -169,6 +192,7 @@ def build_harness(config) -> Harness:
         checkpoint_store=CheckpointStore(config.persistence_db_path),
         trajectory_store=traj, sink=TrajectorySink(traj),
         system_prompt=config.app_system_prompt + PLAN_SYSTEM_GUIDANCE,
-        memory=memory, memory_store=memory_store, download_store=dstore,
+        memory=memory, memory_store=memory_store, memory_writer=memory_writer,
+        download_store=dstore,
         skill_registry=skill_registry, sandbox=sandbox, sandbox_manager=sandbox_manager,
         mcp_manager=mcp_manager)
