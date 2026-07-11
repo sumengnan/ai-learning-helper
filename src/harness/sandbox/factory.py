@@ -5,18 +5,20 @@ from .local import LocalSandbox
 
 
 def _docker_for(config, image: str, labels: dict | None = None,
-                network: str | None = None, display_name: str = "基础沙箱"):
+                network: str | None = None, display_name: str = "基础沙箱",
+                mem_limit: str | None = None):
     """按 config 造一个指定镜像的 DockerSandbox（除 image/labels/network 外参数完全一致）。
 
     network 为 None 时取 config.sandbox_network；一次性代码子沙箱可传 config.sandbox_sub_network
-    强制禁网。display_name 用于前端进度里区分基础沙箱/子沙箱。
+    强制禁网。mem_limit 为 None 时取 config.sandbox_mem_limit；浏览器子沙箱可传更大额度
+    （config.browser_sandbox_mem_limit）避免 Chromium 被 OOM。display_name 区分基础/子沙箱。
     """
     from .docker import DockerSandbox
     return DockerSandbox(
         docker_host=config.sandbox_docker_host, image=image,
         workspace=config.sandbox_workspace, user=config.sandbox_user,
         network=network if network is not None else config.sandbox_network,
-        mem_limit=config.sandbox_mem_limit,
+        mem_limit=mem_limit if mem_limit is not None else config.sandbox_mem_limit,
         cpus=config.sandbox_cpus, pids_limit=config.sandbox_pids_limit,
         read_only=config.sandbox_read_only,
         tls_ca_cert=config.sandbox_docker_tls_ca_cert,
