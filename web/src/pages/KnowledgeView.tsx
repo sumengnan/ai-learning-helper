@@ -9,10 +9,10 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import SearchIcon from "@mui/icons-material/Search";
 import DescriptionIcon from "@mui/icons-material/Description";
 import { AnimatePresence, motion } from "framer-motion";
-import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { listItemVariants } from "../components/motion";
 import { categoryColor, fmtDate } from "./knowledgeUtils";
+import { KnowledgeDetailDrawer } from "./KnowledgeDetailDrawer";
 
 const PAGE_SIZE = 8;
 
@@ -31,7 +31,7 @@ export function KnowledgeView() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const navigate = useNavigate();
+  const [previewId, setPreviewId] = useState<string | null>(null);
 
   const searching = results !== null;
 
@@ -137,7 +137,7 @@ export function KnowledgeView() {
               <motion.div key={d.id} layout variants={listItemVariants}
                 initial="initial" animate="animate" exit="exit">
                 <Card variant="outlined"
-                  onClick={() => navigate(`/knowledge/${d.id}`)}
+                  onClick={() => setPreviewId(d.id)}
                   sx={{
                     cursor: "pointer", transition: "border-color .15s, box-shadow .15s",
                     "&:hover": { borderColor: "primary.main", boxShadow: 2 },
@@ -202,6 +202,9 @@ export function KnowledgeView() {
             onChange={(_, p) => setPage(p)} />
         </Box>
       )}
+
+      {/* 片段预览抽屉：右侧滑出，不跳转页面 */}
+      <KnowledgeDetailDrawer id={previewId} onClose={() => setPreviewId(null)} />
     </Box>
   );
 }
