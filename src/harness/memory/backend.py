@@ -37,6 +37,15 @@ class MemoryBackend(Protocol):
         """按实体键查同一实体的记录（SP3 upsert-by-entity 用）。"""
         ...
 
+    def list_by_owner(self, owner_id: str, kind: str, *,
+                      limit: int | None = None, offset: int = 0) -> list[MemoryRecord]:
+        """按 owner+kind 列举未废弃记录（rowid 降序）。"""
+        ...
+
+    def count_by_owner(self, owner_id: str, kind: str) -> int:
+        """owner+kind 未废弃记录数。"""
+        ...
+
     def set_superseded(self, ids: list[str]) -> None:
         """把指定记录标记 superseded=1（检索默认排除，行保留可恢复）。"""
         ...

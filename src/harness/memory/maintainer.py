@@ -53,8 +53,12 @@ class MemoryMaintainer:
         return clusters
 
     async def consolidate(self, owner_id: str, kind: str) -> dict:
-        records = [r for r in self._backend.list_by_owner(owner_id, kind)
-                   if r.mem_type == MemType.EPISODIC][:self._config.max_source]
+        all_epi = [r for r in self._backend.list_by_owner(owner_id, kind)
+                   if r.mem_type == MemType.EPISODIC]
+        records = all_epi[:self._config.max_source]
+        if len(all_epi) > self._config.max_source:
+            log.info("consolidate: %d episodic 超过 max_source=%d，本次只处理前 %d 条",
+                     len(all_epi), self._config.max_source, self._config.max_source)
         if not records:
             return {"clusters": 0, "merged": 0, "created": 0}
         embs = self._backend.get_embeddings([r.id for r in records])
@@ -73,12 +77,17 @@ class MemoryMaintainer:
                 continue
             try:
                 vec = (await self._embedder.embed([text]))[0]
-                self._backend.upsert([MemoryRecord(
+                new_ids = self._backend.upsert([MemoryRecord(
                     owner_id=owner_id, kind=kind, mem_type=MemType.SEMANTIC,
                     text=text, embedding=vec, source="consolidate")])
-                self._backend.set_superseded([m.id for m in cl])
             except Exception as e:
-                log.warning("consolidate apply failed: %s", e)
+                log.warning("consolidate upsert failed: %s", e)
+                continue
+            try:
+                self._backend.set_superseded([m.id for m in cl])
+            except Exception as e:                       # 补偿回滚：删掉刚写入的新记录，保持原子
+                log.warning("consolidate supersede failed, rolling back: %s", e)
+                self._backend.delete(new_ids)
                 continue
             nclusters += 1
             merged += len(cl)

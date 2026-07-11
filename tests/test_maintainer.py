@@ -60,3 +60,28 @@ async def test_consolidate_llm_failure_skips_cluster(mock_embedder):
     out = await m.consolidate("u1", "k")
     assert out["created"] == 0
     assert b.get(["a"])[0].superseded == 0
+
+
+async def test_consolidate_supersede_failure_rolls_back(mock_embedder):
+    b = SqliteVecBackend(":memory:", dimension=3)
+    b.upsert([_epi("a", [1.0, 0.0, 0.0]), _epi("b", [1.0, 0.0, 0.0])])
+
+    class _FailSupersede:
+        def __init__(self, inner):
+            self._inner = inner
+        def __getattr__(self, n):
+            return getattr(self._inner, n)
+        def set_superseded(self, ids):
+            raise RuntimeError("supersede 失败")
+
+    wrapped = _FailSupersede(b)
+    m = MemoryMaintainer(wrapped, mock_embedder(dimension=3),
+                         ScriptedCompleter(["蒸馏结果"]),
+                         ConsolidationConfig(min_cluster=2), now_fn=lambda: 1000)
+    out = await m.consolidate("u1", "k")
+    assert out["created"] == 0                        # 未计入
+    assert b.get(["a"])[0].superseded == 0            # 源未被 supersede
+    from harness.memory.record import MemoryFilter
+    incl = b.vector_search([1.0, 0.0, 0.0],
+                           filters=MemoryFilter(owner_id="u1", mem_type="semantic"), k=5)
+    assert not any(h.record.source == "consolidate" for h in incl)   # 新记录已回滚
