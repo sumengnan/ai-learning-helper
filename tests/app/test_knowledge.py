@@ -2,12 +2,12 @@
 from app.knowledge import KnowledgeService, EmptyDocument
 from app.documents import DocumentStore
 from harness.memory.memory import Memory
-from harness.memory.store import MemoryStore
+from harness.memory.sqlite_backend import SqliteVecBackend
 import pytest
 
 
 def _service(mock_embedder):
-    store = MemoryStore(":memory:", dimension=64)
+    store = SqliteVecBackend(":memory:", dimension=64)
     mem = Memory(store, mock_embedder(dimension=64), chunk_size=1000, overlap=0)
     return KnowledgeService(mem, store, DocumentStore(":memory:")), mem
 

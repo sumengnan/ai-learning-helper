@@ -60,9 +60,9 @@ def _client(make_mock, turns=None):
 
 def _client_with_kb(make_mock, mock_embedder):
     from harness.memory.memory import Memory
-    from harness.memory.store import MemoryStore
+    from harness.memory.sqlite_backend import SqliteVecBackend
     from app.documents import DocumentStore
-    mstore = MemoryStore(":memory:", dimension=64)
+    mstore = SqliteVecBackend(":memory:", dimension=64)
     mem = Memory(mstore, mock_embedder(dimension=64), 1000, 0)
     traj = TrajectoryStore(":memory:")
     harness = Harness(client=make_mock([]), registry=ToolRegistry(),

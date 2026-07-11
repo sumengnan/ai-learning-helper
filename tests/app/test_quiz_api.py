@@ -14,7 +14,7 @@ from harness.tools.base import ToolRegistry
 from harness.persistence.checkpoint import CheckpointStore
 from harness.persistence.trajectory import TrajectoryStore, TrajectorySink
 from harness.memory.memory import Memory
-from harness.memory.store import MemoryStore
+from harness.memory.sqlite_backend import SqliteVecBackend
 
 
 @pytest.fixture(autouse=True)
@@ -35,7 +35,7 @@ GEN_JSON = ('[{"type":"single","stem":"光合作用在哪?","options":["线粒�
 
 
 def _app(make_mock, mock_embedder, with_memory=True, complete=None):
-    mstore = MemoryStore(":memory:", dimension=64)
+    mstore = SqliteVecBackend(":memory:", dimension=64)
     mem = Memory(mstore, mock_embedder(dimension=64), 1000, 0) if with_memory else None
     traj = TrajectoryStore(":memory:")
     harness = Harness(client=make_mock([]), registry=ToolRegistry(),

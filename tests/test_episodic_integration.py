@@ -4,14 +4,14 @@ from harness.context.manager import ContextManager
 from harness.tools.base import ToolRegistry
 from harness.memory.episodic import EpisodicMemory, EpisodeRecorder
 from harness.memory.memory import Memory
-from harness.memory.store import MemoryStore
+from harness.memory.sqlite_backend import SqliteVecBackend
 from harness.tools.builtins.episode_tools import RecallEpisodesTool
 from harness.llm.base import StreamChunk, ToolCallDelta
 from harness.events import ToolFinished
 
 
 async def test_recorded_run_recalled_next(make_mock, text_turn, mock_embedder):
-    store = MemoryStore(":memory:", dimension=64)
+    store = SqliteVecBackend(":memory:", dimension=64)
     mem = Memory(store, mock_embedder(dimension=64), chunk_size=1000, overlap=0)
     ep = EpisodicMemory(mem)
     rec = EpisodeRecorder(ep)

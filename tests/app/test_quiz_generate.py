@@ -1,13 +1,13 @@
 import json
 import pytest
 from harness.memory.memory import Memory
-from harness.memory.store import MemoryStore
+from harness.memory.sqlite_backend import SqliteVecBackend
 from app.questions import QuestionStore
 from app.quiz_service import QuizService, QuizError, NoKnowledge
 
 
 def _memory(mock_embedder):
-    return Memory(MemoryStore(":memory:", dimension=64), mock_embedder(dimension=64), 1000, 0)
+    return Memory(SqliteVecBackend(":memory:", dimension=64), mock_embedder(dimension=64), 1000, 0)
 
 
 GEN_JSON = json.dumps([

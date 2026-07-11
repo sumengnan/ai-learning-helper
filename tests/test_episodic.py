@@ -1,13 +1,13 @@
 # tests/test_episodic.py
 from harness.memory.episodic import Episode, EpisodicMemory, EpisodeRecorder
 from harness.memory.memory import Memory
-from harness.memory.store import MemoryStore
+from harness.memory.sqlite_backend import SqliteVecBackend
 from harness.events import RunFinished, RunError, TextDelta
 from harness.types import Message, Role
 
 
 def _episodic(mock_embedder):
-    store = MemoryStore(":memory:", dimension=64)
+    store = SqliteVecBackend(":memory:", dimension=64)
     mem = Memory(store, mock_embedder(dimension=64), chunk_size=1000, overlap=0)
     return EpisodicMemory(mem)
 
@@ -68,7 +68,7 @@ async def test_recorder_no_terminal_no_record(mock_embedder):
 
 
 async def test_episodes_isolated_from_knowledge(mock_embedder):
-    store = MemoryStore(":memory:", dimension=64)
+    store = SqliteVecBackend(":memory:", dimension=64)
     mem = Memory(store, mock_embedder(dimension=64), chunk_size=1000, overlap=0)
     ep = EpisodicMemory(mem)
     await mem.add_texts(["知识库内容"], "knowledge")

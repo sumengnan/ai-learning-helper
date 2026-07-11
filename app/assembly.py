@@ -71,7 +71,7 @@ def build_harness(config) -> Harness:
     # 记忆（有 api_key 即可注册；知识库为空时检索返回空，不报错）
     if config.api_key or config.embedding_api_key:
         from harness.memory.embeddings import OpenAICompatibleEmbeddingClient
-        from harness.memory.store import MemoryStore
+        from harness.memory.sqlite_backend import SqliteVecBackend
         from harness.memory.memory import Memory
         from harness.memory.episodic import EpisodicMemory
         from harness.tools.builtins.memory_search import SearchMemoryTool
@@ -80,7 +80,7 @@ def build_harness(config) -> Harness:
         embedder = OpenAICompatibleEmbeddingClient(
             config.embedding_base_url, config.embedding_api_key or config.api_key,
             config.embedding_model, config.embedding_dimension)
-        mem_store = MemoryStore(config.memory_db_path, config.embedding_dimension)
+        mem_store = SqliteVecBackend(config.memory_db_path, config.embedding_dimension)
         mem = Memory(mem_store, embedder, config.chunk_size, config.chunk_overlap)
         memory = mem
         memory_store = mem_store
