@@ -100,3 +100,19 @@ def cost_usd(usage: Usage, model: str, price_map: dict) -> float | None:
         return None
     in_per_1k, out_per_1k = price
     return usage.prompt_tokens / 1000 * in_per_1k + usage.completion_tokens / 1000 * out_per_1k
+
+
+def tiered_cost(prompt_tokens: int, completion_tokens: int, tiers: list) -> float | None:
+    """分层计费：按输入长度选档，返回该次调用的估算成本（货币由调用方约定）。
+
+    tiers 为 [[输入上限tokens, 输入价/百万token, 输出价/百万token], ...]，须升序。
+    取首个「输入 tokens ≤ 上限」的档；都超过则用末档（封顶价）。tiers 为空返回 None。
+    """
+    if not tiers:
+        return None
+    in_rate, out_rate = tiers[-1][1], tiers[-1][2]
+    for limit, ir, orr in tiers:
+        if prompt_tokens <= limit:
+            in_rate, out_rate = ir, orr
+            break
+    return prompt_tokens / 1_000_000 * in_rate + completion_tokens / 1_000_000 * out_rate

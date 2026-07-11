@@ -24,6 +24,7 @@ export interface StatsOverview {
       runs: number; runs_finished: number; runs_error: number; success_rate: number;
       model_calls: number; total_tokens: number; total_prompt: number; total_completion: number;
       avg_latency_ms: number; p95_latency_ms: number; retries: number; cost_usd: number | null;
+      cost_currency: string;
       conversations: number; messages: number;
     };
     daily: DailyPoint[];

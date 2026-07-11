@@ -129,7 +129,9 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
         except sqlite3.Error:
             mem_conn = None
         stats_service = StatsService(trajectory_conn=traj_conn, app_conn=stats_app_conn,
-                                     memory_conn=mem_conn)
+                                     memory_conn=mem_conn,
+                                     price_tiers=config.model_price_tiers,
+                                     currency=config.price_currency)
     app.include_router(make_stats_router(stats_service))
 
     # 会话级沙箱：启动时清扫上次遗留的孤儿容器；关停时销毁全部会话容器。
