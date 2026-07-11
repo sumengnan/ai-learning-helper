@@ -45,10 +45,11 @@ class SqliteVecBackend:
 
     # ---- 写 ----
     def upsert(self, records: list[MemoryRecord]) -> list[str]:
-        ids: list[str] = []
-        for r in records:
+        for r in records:                       # 整批预校验，保证异常时零写入（原子）
             if len(r.embedding) != self._dim:
                 raise ValueError(f"向量维度不符：期望 {self._dim}，收到 {len(r.embedding)}")
+        ids: list[str] = []
+        for r in records:
             old = self._conn.execute(
                 "SELECT rowid FROM memory_records WHERE id = ?", (r.id,)).fetchone()
             if old is not None:
