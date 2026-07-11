@@ -215,7 +215,9 @@ class DockerSandbox:
     async def list_files(self, path: str = ".") -> list[str]:
         await self.start()
         real = resolve_in_workspace(self.workspace, path)  # #2：先约束路径再执行
-        res = await self.exec(["ls", "-1", real], timeout=10)
+        # 用 _exec_raw：ls 是轻量文件操作（与 read_file/write_file 同类），不刷沙箱进度；
+        # 作为 list_files 工具被调用时另有「工具调用」面板展示。
+        res = await self._exec_raw(["ls", "-1", real], timeout=10)
         return [ln for ln in res.stdout.splitlines() if ln]
 
     async def archive_workspace(self) -> bytes:
