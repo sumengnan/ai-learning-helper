@@ -50,3 +50,34 @@ async def test_empty_store_returns_empty(mock_embedder):
 async def test_record_empty_text_is_noop(mock_embedder):
     svc = _service(mock_embedder)
     assert await svc.record_turn("c1", seq=0, text="   ") == []
+
+
+class _FakeWriter:
+    def __init__(self):
+        self.calls = []
+    async def write(self, owner_id, kind, text):
+        self.calls.append((owner_id, kind, text))
+        return ["new1"]
+
+
+async def test_record_turn_uses_writer_when_present(mock_embedder):
+    from app.conversation_memory import ConversationMemoryService
+    from harness.memory.memory import Memory
+    from harness.memory.sqlite_backend import SqliteVecBackend
+    mem = Memory(SqliteVecBackend(":memory:", dimension=64), mock_embedder(dimension=64))
+    fw = _FakeWriter()
+    svc = ConversationMemoryService(mem, writer=fw)
+    out = await svc.record_turn("c1", 0, "我在学 Python")
+    assert out == ["new1"]
+    assert fw.calls == [("c1", "conversation", "我在学 Python")]
+
+
+async def test_record_turn_default_raw_when_no_writer(mock_embedder):
+    from app.conversation_memory import ConversationMemoryService
+    from harness.memory.memory import Memory
+    from harness.memory.sqlite_backend import SqliteVecBackend
+    mem = Memory(SqliteVecBackend(":memory:", dimension=64), mock_embedder(dimension=64))
+    svc = ConversationMemoryService(mem)
+    await svc.record_turn("c1", 0, "快速排序是一种排序算法")
+    hits = await svc.retrieve("c1", "排序算法", k=1)
+    assert hits and hits[0].text == "快速排序是一种排序算法"
