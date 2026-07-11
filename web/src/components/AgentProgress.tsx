@@ -17,15 +17,18 @@ function mcpParts(name: string): { server: string; tool: string } | null {
   return m ? { server: m[1], tool: m[2] } : null;
 }
 
+// 标题右侧「最后一步」预览的硬字数上限，超出显示 …
+const SUMMARY_MAX = 24;
+
 // 工具名标签：MCP 工具显示「MCP」小标签 + server·tool，普通工具原样显示。
-function ToolLabel({ name, sx }: { name: string; sx?: object }) {
+function ToolLabel({ name, sx, maxChars }: { name: string; sx?: object; maxChars?: number }) {
   const mcp = mcpParts(name);
-  if (!mcp) return <EllipsisText text={name} sx={sx} />;
+  if (!mcp) return <EllipsisText text={name} sx={sx} maxChars={maxChars} />;
   return (
     <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, minWidth: 0, ...sx }}>
       <Chip label="MCP" size="small" color="secondary" variant="outlined"
         sx={{ height: 16, "& .MuiChip-label": { px: 0.5, fontSize: 10, fontWeight: 700 } }} />
-      <EllipsisText text={`${mcp.server} · ${mcp.tool}`} />
+      <EllipsisText text={`${mcp.server} · ${mcp.tool}`} maxChars={maxChars} />
     </Box>
   );
 }
@@ -62,7 +65,7 @@ export function AgentProgress({ steps, live = false, stopped = false }: {
       ) : (
         <CheckCircleIcon sx={{ fontSize: 14 }} color="success" />
       )}
-      <ToolLabel name={last.tool} sx={{ ml: 0.5 }} />
+      <ToolLabel name={last.tool} sx={{ ml: 0.5 }} maxChars={SUMMARY_MAX} />
       {lastPending && !live && (
         <Typography variant="caption" color="text.secondary" sx={{ ml: 0.5, flexShrink: 0 }}>
           {cutLabel}

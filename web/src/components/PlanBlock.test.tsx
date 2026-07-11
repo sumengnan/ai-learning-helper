@@ -22,10 +22,12 @@ describe("PlanBlock", () => {
     ]);
     render(<PlanBlock text={snap} />);
     expect(screen.getByText("1/4 完成")).toBeTruthy();
-    const order = screen
+    const all = screen
       .getAllByText(/查资料|计算|重试：换沙箱|汇总/)
       .map((e) => e.textContent);
-    expect(order).toEqual(["查资料", "计算", "重试：换沙箱", "汇总"]);
+    // 首项为标题右侧「当前步骤」预览（进行中的那步）；其后为有序步骤清单
+    expect(all[0]).toBe("重试：换沙箱");
+    expect(all.slice(1)).toEqual(["查资料", "计算", "重试：换沙箱", "汇总"]);
   });
 
   it("生成中：运行中的步骤显示进度圈", () => {

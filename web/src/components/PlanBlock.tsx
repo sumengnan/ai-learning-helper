@@ -1,4 +1,5 @@
 import { Box, Typography, CircularProgress } from "@mui/material";
+import { EllipsisText } from "./EllipsisText";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
 import RadioButtonUncheckedIcon from "@mui/icons-material/RadioButtonUnchecked";
@@ -45,8 +46,19 @@ export function PlanBlock({ text, live = false, stopped = false }: {
       : live && anyRunning ? "running"
         : stopped && anyRunning ? "stopped"
           : "ok";
+  // 标题后紧跟「当前步骤」预览：优先进行中，其次最后一个已完成，否则第一个；超长截断为 …
+  const current = steps.find((s) => s.status === "running")
+    ?? [...steps].reverse().find((s) => s.status === "done")
+    ?? steps[0];
   const summary = (
-    <Typography variant="caption" color="text.secondary">{done}/{steps.length} 完成</Typography>
+    <>
+      <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
+        {done}/{steps.length} 完成
+      </Typography>
+      <Box sx={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", ml: 0.5 }}>
+        <EllipsisText text={current.title} maxChars={24} sx={{ opacity: 0.85 }} />
+      </Box>
+    </>
   );
   return (
     <CollapsibleBlock

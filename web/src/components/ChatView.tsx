@@ -50,6 +50,25 @@ function TypingDots() {
   );
 }
 
+// 耗时格式化为「几分几秒」；不足 1 分只显示秒
+export function fmtDuration(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  if (total < 60) return `${total} 秒`;
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m} 分 ${s} 秒`;
+}
+
+// 生成中的实时耗时：每秒自增，从 startedAt 计到当下
+function RunTimer({ startedAt }: { startedAt: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <span>耗时 {fmtDuration(now - startedAt)}</span>;
+}
+
 // 内容已开始但仍在生成时的底部活跃指示：即使数据暂停（如工具执行中）也表明「仍在处理」，
 // 避免看起来卡住。
 function StreamingHint() {
@@ -212,7 +231,7 @@ export function ChatView({ conversationId, initial, autoSend }:
     else if (e.type === "Progress" && e.data.scope === "sources") upd((a) => {
       try { a.sources = JSON.parse(e.data.text); } catch { /* 忽略坏 JSON */ }
     });
-    else if (e.type === "Progress") upd((a) => { (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text, status: e.data.status, key: e.data.key }); });
+    else if (e.type === "Progress") upd((a) => { (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text, status: e.data.status, key: e.data.key, agent: e.data.agent }); });
     else if (e.type === "RunStarted") runIdRef.current = e.data.run_id;
     else if (e.type === "ApprovalRequired") setApproval({ approvalId: e.data.approval_id, command: e.data.command, reason: e.data.reason });
     else if (e.type === "ApprovalResolved") setApproval(null);
@@ -231,7 +250,8 @@ export function ChatView({ conversationId, initial, autoSend }:
       id: p.id, filename: p.filename, size: p.size, content_type: p.content_type }));
     const userMsg: ChatMessage = { role: "user", content: msg,
       attachments: attachments.length ? attachments : undefined };
-    const assistant: ChatMessage = { role: "assistant", content: "", steps: [], status: "streaming" };
+    const assistant: ChatMessage = { role: "assistant", content: "", steps: [], status: "streaming",
+      startedAt: Date.now() };
     stickRef.current = true;   // 发送即恢复跟随：即使之前上滑看历史，也自动回到底部
     setMessages((m) => [...m, userMsg, assistant]);
     let outcome: "done" | "error" | "stopped" = "done";
@@ -247,7 +267,10 @@ export function ChatView({ conversationId, initial, autoSend }:
       if (err?.name === "AbortError") outcome = "stopped";
       else { upd((a) => { a.content += `\n[连接失败] ${err}`; }); outcome = "error"; }
     } finally {
-      upd((a) => { a.status = outcome; });   // 收尾状态：完成/失败/已停止
+      upd((a) => {   // 收尾状态：完成/失败/已停止；冻结本轮耗时
+        a.status = outcome;
+        if (a.startedAt != null && a.elapsedMs == null) a.elapsedMs = Date.now() - a.startedAt;
+      });
       setBusy(false); busyRef.current = false;
     }
   }
@@ -265,7 +288,8 @@ export function ChatView({ conversationId, initial, autoSend }:
     if (busyRef.current) return;
     turnRunIdRef.current = runId;
     setBusy(true); busyRef.current = true;
-    upd((a) => { a.content = ""; a.steps = []; a.progress = undefined; a.sources = undefined; });
+    upd((a) => { a.content = ""; a.steps = []; a.progress = undefined; a.sources = undefined;
+      a.startedAt = a.startedAt ?? Date.now(); a.elapsedMs = undefined; });
     let outcome: "done" | "error" | "stopped" = "done";
     let reloaded = false;
     const controller = new AbortController();
@@ -291,7 +315,10 @@ export function ChatView({ conversationId, initial, autoSend }:
       } else if (err?.name === "AbortError") outcome = "stopped";
       else outcome = "error";
     } finally {
-      if (!reloaded) upd((a) => { a.status = outcome; });
+      if (!reloaded) upd((a) => {
+        a.status = outcome;
+        if (a.startedAt != null && a.elapsedMs == null) a.elapsedMs = Date.now() - a.startedAt;
+      });
       setBusy(false); busyRef.current = false;
     }
   }
@@ -422,13 +449,26 @@ export function ChatView({ conversationId, initial, autoSend }:
                 if (m.status === "interrupted") return <ReplyStatus kind="interrupted" />;
                 return null;
               })()}
-              {showTools && m.usage && (
-                <Typography variant="caption" color="text.secondary"
-                  sx={{ display: "flex", alignItems: "center", gap: 0.5, mt: 0.5 }}>
-                  tokens <RollingNumber value={m.usage.tokens} />
-                  {m.usage.cost != null ? ` · $${m.usage.cost.toFixed(4)}` : ""}
-                </Typography>
-              )}
+              {showTools && m.role === "assistant" && (() => {
+                const streaming = m.status === "streaming" && m.startedAt != null;
+                const showElapsed = streaming || m.elapsedMs != null;
+                if (!showElapsed && !m.usage) return null;
+                return (
+                  <Typography variant="caption" color="text.secondary" component="div"
+                    sx={{ display: "flex", alignItems: "center", gap: 0.5, mt: 0.5, flexWrap: "wrap" }}>
+                    {/* 耗时：生成中实时计数，完成后冻结 */}
+                    {streaming ? <RunTimer startedAt={m.startedAt!} />
+                      : m.elapsedMs != null ? <span>耗时 {fmtDuration(m.elapsedMs)}</span> : null}
+                    {m.usage && (
+                      <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
+                        {showElapsed ? <span>·</span> : null}
+                        <span>tokens</span> <RollingNumber value={m.usage.tokens} />
+                        {m.usage.cost != null ? <span>· ${m.usage.cost.toFixed(4)}</span> : null}
+                      </Box>
+                    )}
+                  </Typography>
+                );
+              })()}
             </Paper>
           </MotionBox>
         ))}

@@ -48,6 +48,16 @@ def _percentile(values: list[float], p: float) -> float:
     return s[f] + (s[c] - s[f]) * (k - f)
 
 
+def _iso_delta_ms(start: str, end: str) -> float | None:
+    """两个 ISO 时间字符串之差（毫秒）；解析失败返回 None。"""
+    try:
+        a = datetime.fromisoformat(start)
+        b = datetime.fromisoformat(end)
+    except (ValueError, TypeError):
+        return None
+    return (b - a).total_seconds() * 1000.0
+
+
 def _step_bucket(n: int) -> str:
     if n <= 1:
         return "1"
@@ -124,15 +134,21 @@ class StatsService:
         tool_errors: Counter = Counter()
         steps_per_run: Counter = Counter()
         daily: dict[str, dict] = defaultdict(lambda: {"runs": 0, "tokens": 0})
+        run_start: dict[str, str] = {}
+        run_end: dict[str, str] = {}
 
         for run_id, typ, created_at, d in events:
             day = (created_at or "")[:10]
             if typ == "RunStarted":
                 runs_started.add(run_id)
+                if created_at:
+                    run_start[run_id] = created_at
                 if day:
                     daily[day]["runs"] += 1
             elif typ == "RunFinished":
                 runs_finished.add(run_id)
+                if created_at:
+                    run_end[run_id] = created_at
             elif typ == "RunError":
                 runs_error.add(run_id)
             elif typ == "StepStarted":
@@ -172,6 +188,14 @@ class StatsService:
         n_started = len(runs_started) or 0
         success_rate = (len(runs_finished) / n_started) if n_started else 0.0
         step_vals = list(steps_per_run.values())
+        # 每个 run 的端到端耗时（RunStarted→RunFinished 墙钟）
+        durations: list[float] = []
+        for rid, start in run_start.items():
+            end = run_end.get(rid)
+            if end:
+                ms = _iso_delta_ms(start, end)
+                if ms is not None and ms >= 0:
+                    durations.append(ms)
         return {
             "runs_started": n_started,
             "runs_finished": len(runs_finished),
@@ -185,6 +209,8 @@ class StatsService:
             "cost_usd": round(total_cost, 4) if any_cost else None,
             "avg_latency_ms": round(sum(latencies) / len(latencies)) if latencies else 0,
             "p95_latency_ms": round(_percentile(latencies, 95)),
+            "avg_run_duration_ms": round(sum(durations) / len(durations)) if durations else 0,
+            "total_run_duration_ms": round(sum(durations)),
             "avg_steps": round(sum(step_vals) / len(step_vals), 1) if step_vals else 0.0,
             "max_steps": max(step_vals) if step_vals else 0,
             "total_steps": sum(step_vals),
@@ -340,6 +366,8 @@ class StatsService:
                 "total_completion": agg["total_completion"],
                 "avg_latency_ms": agg["avg_latency_ms"],
                 "p95_latency_ms": agg["p95_latency_ms"],
+                "avg_run_duration_ms": agg["avg_run_duration_ms"],
+                "total_run_duration_ms": agg["total_run_duration_ms"],
                 "retries": agg["retries"],
                 "cost_usd": agg["cost_usd"],
                 "conversations": app_counts["conversations"],

@@ -169,6 +169,20 @@ def test_activity_series_length_and_shape():
     assert today["runs"] == 2 and today["tokens"] == 150
 
 
+def test_run_duration_aggregation():
+    tc = _traj_conn()
+    _ev(tc, "r1", 0, "RunStarted", {"run_id": "r1"}, created_at="2026-07-11T10:00:00+00:00")
+    _ev(tc, "r1", 1, "RunFinished", {"message": {}}, created_at="2026-07-11T10:00:05+00:00")
+    _ev(tc, "r2", 0, "RunStarted", {"run_id": "r2"}, created_at="2026-07-11T10:01:00+00:00")
+    _ev(tc, "r2", 1, "RunFinished", {"message": {}}, created_at="2026-07-11T10:01:03+00:00")
+    tc.commit()
+    svc = StatsService(trajectory_conn=tc, app_conn=_app_conn(), memory_conn=None,
+                       now=lambda: FIXED_NOW)
+    t = svc.overview("u")["ops"]["totals"]
+    assert t["avg_run_duration_ms"] == 4000       # (5000 + 3000) / 2
+    assert t["total_run_duration_ms"] == 8000
+
+
 def test_empty_databases_do_not_crash():
     svc = StatsService(trajectory_conn=_traj_conn(), app_conn=_app_conn(), memory_conn=None,
                        now=lambda: FIXED_NOW)

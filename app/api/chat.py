@@ -239,7 +239,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                      "is_error": ev.result.is_error})
                     elif isinstance(ev, Progress):
                         collect["progress"].append({"scope": ev.scope, "text": ev.text,
-                                                    "status": ev.status, "key": ev.key})
+                                                    "status": ev.status, "key": ev.key,
+                                                    "agent": ev.agent})
                     # 交付门下缓冲终态事件（不转发）；直通模式转发全部
                     if passthrough or not isinstance(ev, (TextDelta, RunFinished, RunError)):
                         yield ev
@@ -272,7 +273,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             def _emit_verify(text, status=None, key=None):
                 ev = Progress("verify", text, status=status, key=key)
                 progress.append({"scope": ev.scope, "text": ev.text,
-                                 "status": ev.status, "key": ev.key})
+                                 "status": ev.status, "key": ev.key, "agent": ev.agent})
                 return ev
 
             def _emit_sources(items):
