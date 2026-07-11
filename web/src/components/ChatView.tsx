@@ -2,9 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import {
   Box, Paper, TextField, Button, Typography, FormControlLabel, Switch,
   Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions,
-  IconButton, Tooltip, Snackbar, Alert,
+  IconButton, Tooltip, Snackbar, Alert, CircularProgress,
 } from "@mui/material";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
+import CheckCircleIcon from "@mui/icons-material/CheckCircle";
+import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
+import StopCircleIcon from "@mui/icons-material/StopCircle";
 import { motion } from "framer-motion";
 import type { ChatMessage } from "../types";
 import { streamChat, sendDecision, api } from "../api/client";
@@ -40,6 +43,32 @@ function TypingDots() {
           transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut", delay: i * 0.15 }}
         />
       ))}
+    </Box>
+  );
+}
+
+// 内容已开始但仍在生成时的底部活跃指示：即使数据暂停（如工具执行中）也表明「仍在处理」，
+// 避免看起来卡住。
+function StreamingHint() {
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, mt: 0.5 }}>
+      <CircularProgress size={12} thickness={5} />
+      <Typography variant="caption" color="text.secondary">生成中…</Typography>
+    </Box>
+  );
+}
+
+// 助手回复的终态状态行：完成 / 失败 / 已停止
+function ReplyStatus({ kind }: { kind: "done" | "error" | "stopped" }) {
+  const map = {
+    done: { icon: <CheckCircleIcon sx={{ fontSize: 14 }} color="success" />, text: "已完成", color: "success.main" },
+    error: { icon: <ErrorOutlineIcon sx={{ fontSize: 14 }} color="error" />, text: "回复失败", color: "error.main" },
+    stopped: { icon: <StopCircleIcon sx={{ fontSize: 14 }} color="disabled" />, text: "已停止", color: "text.disabled" },
+  }[kind];
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mt: 0.5 }}>
+      {map.icon}
+      <Typography variant="caption" sx={{ color: map.color }}>{map.text}</Typography>
     </Box>
   );
 }
@@ -161,8 +190,9 @@ export function ChatView({ conversationId, initial, autoSend }:
       id: p.id, filename: p.filename, size: p.size, content_type: p.content_type }));
     const userMsg: ChatMessage = { role: "user", content: msg,
       attachments: attachments.length ? attachments : undefined };
-    const assistant: ChatMessage = { role: "assistant", content: "", steps: [] };
+    const assistant: ChatMessage = { role: "assistant", content: "", steps: [], status: "streaming" };
     setMessages((m) => [...m, userMsg, assistant]);
+    let outcome: "done" | "error" | "stopped" = "done";
     setInput(""); setPending([]); setBusy(true); busyRef.current = true;
     const controller = new AbortController();
     abortRef.current = controller;
@@ -178,14 +208,18 @@ export function ChatView({ conversationId, initial, autoSend }:
       else if (e.type === "RunStarted") runIdRef.current = e.data.run_id;
       else if (e.type === "ApprovalRequired") setApproval({ approvalId: e.data.approval_id, command: e.data.command, reason: e.data.reason });
       else if (e.type === "ApprovalResolved") setApproval(null);
-      else if (e.type === "RunError") upd((a) => { a.content += `\n[出错] ${e.data.error}`; });
+      else if (e.type === "RunError") upd((a) => { a.content += `\n[出错] ${e.data.error}`; outcome = "error"; });
     };
     try {
       await streamChat(conversationId, msg, onEvent, controller.signal, saveWrongRef.current,
         attachments.map((a) => a.id));
     } catch (err: any) {
-      if (err?.name !== "AbortError") upd((a) => { a.content += `\n[连接失败] ${err}`; });
-    } finally { setBusy(false); busyRef.current = false; }
+      if (err?.name === "AbortError") outcome = "stopped";
+      else { upd((a) => { a.content += `\n[连接失败] ${err}`; }); outcome = "error"; }
+    } finally {
+      upd((a) => { a.status = outcome; });   // 收尾状态：完成/失败/已停止
+      setBusy(false); busyRef.current = false;
+    }
   }
 
   // 停止本轮生成：中断 SSE fetch（AbortError 被 send() 静默处理），后端在客户端断开时
@@ -284,6 +318,16 @@ export function ChatView({ conversationId, initial, autoSend }:
                   {m.role === "assistant" ? "…" : ""}
                 </Typography>
               )}
+              {m.role === "assistant" && (() => {
+                const live = busy && i === messages.length - 1 && m.status === "streaming";
+                // 生成中且已有内容 → 底部 loading（覆盖工具执行等数据暂停时的「卡住」错觉）；
+                // 内容为空时上面已显示 TypingDots，不重复。
+                if (live) return m.content ? <StreamingHint /> : null;
+                if (m.status === "done") return <ReplyStatus kind="done" />;
+                if (m.status === "error") return <ReplyStatus kind="error" />;
+                if (m.status === "stopped") return <ReplyStatus kind="stopped" />;
+                return null;
+              })()}
               {showTools && m.usage && (
                 <Typography variant="caption" color="text.secondary"
                   sx={{ display: "flex", alignItems: "center", gap: 0.5, mt: 0.5 }}>

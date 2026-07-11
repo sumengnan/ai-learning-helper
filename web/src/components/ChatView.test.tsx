@@ -103,6 +103,40 @@ describe("ChatView", () => {
     await waitFor(() => expect(screen.getByText("发送")).toBeTruthy());  // 中断后恢复
   });
 
+  it("回复完成后显示「已完成」状态", async () => {
+    render(<ChatView conversationId="c1" initial={[]} />);
+    fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "hi" } });
+    fireEvent.click(screen.getByText("发送"));
+    await waitFor(() => expect(screen.getByText("你好")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("已完成")).toBeTruthy());
+  });
+
+  it("回复出错（RunError）后显示「回复失败」状态", async () => {
+    vi.mocked(streamChat).mockImplementationOnce(
+      async (_cid: string, _msg: string, onEvent: (e: any) => void) => {
+        onEvent({ type: "TextDelta", data: { text: "部分" } });
+        onEvent({ type: "RunError", data: { error: "boom" } });
+      });
+    render(<ChatView conversationId="c1" initial={[]} />);
+    fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "hi" } });
+    fireEvent.click(screen.getByText("发送"));
+    await waitFor(() => expect(screen.getByText("回复失败")).toBeTruthy());
+  });
+
+  it("用户停止后显示「已停止」状态", async () => {
+    vi.mocked(streamChat).mockImplementationOnce(
+      (_cid: string, _msg: string, _onEvent: (e: any) => void, signal?: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () =>
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+        }));
+    render(<ChatView conversationId="c1" initial={[]} />);
+    fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "hi" } });
+    fireEvent.click(screen.getByText("发送"));
+    fireEvent.click(await screen.findByText("停止"));
+    await waitFor(() => expect(screen.getByText("已停止")).toBeTruthy());
+  });
+
   it("交付门：先收到校验进度、后收到终稿 TextDelta → 只渲染终稿、进度可见", async () => {
     // 模拟服务端交付门顺序：校验中 → 校验通过 → 终稿分片 → 合成 RunFinished
     vi.mocked(streamChat).mockImplementationOnce(

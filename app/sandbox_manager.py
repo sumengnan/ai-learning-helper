@@ -232,6 +232,8 @@ class SandboxProxy:
         label = f"{language}{version}" if version else language
         conv = _current_conv.get() or ""
         labels = {_SANDBOX_LABEL: "true", "conv_id": conv, "role": "ephemeral"}
+        # 先启动基础沙箱，让「启动 基础沙箱…」进度排在子沙箱之前（基础是承载会话工作区的容器）
+        await base.start()
         # 子沙箱的「启动…」进度由 sub.start() 按 display_name 上报（与基础沙箱区分）
         sub = _docker_for(cfg, image, labels=labels,
                           network=getattr(cfg, "sandbox_sub_network", "none"),
