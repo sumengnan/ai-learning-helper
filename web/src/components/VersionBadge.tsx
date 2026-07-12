@@ -7,8 +7,10 @@ import HelpOutlineIcon from "@mui/icons-material/HelpOutlineOutlined";
 import { fetchVersion, type VersionInfo } from "../api/client";
 
 const short = (s: string) => (s && s !== "dev" ? s.slice(0, 7) : s || "dev");
+const ver = (s?: string) => (s && s !== "dev" ? `v${s}` : "dev");
 
 // 前端版本：构建期由 vite define 注入（未走 CI 时为 "dev"）
+const FE_VER = __APP_VERSION__;
 const FE_SHA = __GIT_SHA__;
 const FE_BUILT = __BUILD_TIME__;
 
@@ -28,11 +30,11 @@ export function VersionBadge({ open }: { open: boolean }) {
     };
   }, []);
 
-  const fe = short(FE_SHA);
-  const be = backend ? short(backend.git_sha) : state === "error" ? "?" : "…";
-  // 都取到真实 sha 且相等 => 前后端来自同一次部署
+  const fe = ver(FE_VER);
+  const be = backend ? ver(backend.version) : state === "error" ? "?" : "…";
+  // 都取到真实版本号且相等 => 前后端来自同一次部署
   const matched = state === "ok" && backend != null
-    && FE_SHA !== "dev" && backend.git_sha === FE_SHA;
+    && FE_VER !== "dev" && backend.version === FE_VER;
 
   const { icon, color } =
     state === "loading" ? { icon: <HelpOutlineIcon fontSize="inherit" />, color: "text.disabled" }
@@ -41,8 +43,8 @@ export function VersionBadge({ open }: { open: boolean }) {
 
   const tip = (
     <Box sx={{ lineHeight: 1.7 }}>
-      <div>前端 {fe}</div>
-      <div>后端 {be}{backend?.version ? ` (v${backend.version})` : ""}</div>
+      <div>前端 {fe}（{short(FE_SHA)}）</div>
+      <div>后端 {be}{backend ? `（${short(backend.git_sha)}）` : ""}</div>
       {FE_BUILT && <div>前端构建 {FE_BUILT}</div>}
       {backend?.built_at && <div>后端构建 {backend.built_at}</div>}
       <div style={{ marginTop: 4 }}>

@@ -18,15 +18,33 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write        # 允许推送自增版本号的 git tag
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0      # 取全部 tag，用于计算下一个版本号
 
-      - name: 计算版本戳
+      - name: 计算自增版本号
         id: meta
         run: |
-          # 短 sha 既作镜像 tag，也经 build-arg 烙进前端 bundle 与后端环境变量（版本自检用）
+          # 大.中版本由仓库根 VERSION 文件声明（如 0.0），用户主动改它才动大/中；
+          # 小版本（patch）由 CI 在该 大.中 下自增：取现有 <大>.<中>.<n> 最高的 n + 1，
+          # 该 大.中 尚无 tag（用户刚改了大/中）则从 1 起。concurrency 已串行化，无竞争。
+          base="$(tr -d '[:space:]' < VERSION)"
+          if ! printf '%s' "$base" | grep -qE '^[0-9]+\.[0-9]+$'; then
+            echo "VERSION 必须是 大.中 两段数字（如 0.0 / 0.1 / 1.0），实际: '$base'" >&2
+            exit 1
+          fi
+          git fetch --tags --force >/dev/null 2>&1 || true
+          esc="${base//./\\.}"
+          last="$(git tag -l "${base}.*" | grep -E "^${esc}\.[0-9]+$" | sed "s/^${esc}\.//" | sort -n | tail -n1)"
+          if [ -z "$last" ]; then patch=1; else patch=$((last + 1)); fi
+          version="${base}.${patch}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "本次版本号：$version（大.中=$base）"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -43,12 +61,21 @@ jobs:
           push: true
           tags: |
             ${{ env.IMAGE }}:latest
-            ${{ env.IMAGE }}:${{ steps.meta.outputs.sha }}
+            ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
           build-args: |
+            APP_VERSION=${{ steps.meta.outputs.version }}
             APP_GIT_SHA=${{ steps.meta.outputs.sha }}
             APP_BUILD_TIME=${{ steps.meta.outputs.built_at }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: 推送版本 git tag
+        run: |
+          # 镜像推送成功后再打 tag，让下次构建能递增；失败的构建不消耗版本号。
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.meta.outputs.version }}"
+          git push origin "${{ steps.meta.outputs.version }}"
 
       - name: 安装 sshpass
         run: sudo apt-get update && sudo apt-get install -y sshpass
@@ -73,7 +100,7 @@ jobs:
             "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
             "set -e; cd ${{ env.DEPLOY_DIR }}; \
              test -f .env || { echo '缺少 .env，请先在服务器 ${{ env.DEPLOY_DIR }}/.env 放好密钥'; exit 1; }; \
-             export APP_IMAGE_TAG='${{ steps.meta.outputs.sha }}'; \
+             export APP_IMAGE_TAG='${{ steps.meta.outputs.version }}'; \
              docker compose up -d --pull always --no-build; \
              docker image prune -f; \
              docker compose ps"

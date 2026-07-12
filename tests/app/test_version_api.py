@@ -12,18 +12,21 @@ def _client() -> TestClient:
 
 
 def test_version_reports_injected_build_info(monkeypatch):
+    monkeypatch.setenv("APP_VERSION", "0.0.3")
     monkeypatch.setenv("APP_GIT_SHA", "abc1234")
     monkeypatch.setenv("APP_BUILD_TIME", "2026-07-12T00:00:00Z")
     body = _client().get("/api/version").json()
+    assert body["version"] == "0.0.3"
     assert body["git_sha"] == "abc1234"
     assert body["built_at"] == "2026-07-12T00:00:00Z"
-    assert body["version"]  # 非空版本号
 
 
 def test_version_falls_back_to_dev_when_not_injected(monkeypatch):
+    monkeypatch.delenv("APP_VERSION", raising=False)
     monkeypatch.delenv("APP_GIT_SHA", raising=False)
     monkeypatch.delenv("APP_BUILD_TIME", raising=False)
     body = _client().get("/api/version").json()
+    assert body["version"] == "dev"
     assert body["git_sha"] == "dev"
     assert body["built_at"] == ""
 
