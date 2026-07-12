@@ -47,6 +47,33 @@ describe("ChatView", () => {
     await waitFor(() => expect(screen.getByText("已完成")).toBeTruthy());
   });
 
+  it("StrictMode 假卸载打断首次接回 → 自动重连续流，不误判为「已停止」", async () => {
+    // 第一次 attach 被 StrictMode 卸载清理 abort；第二次应自动重连并续流至完成
+    vi.mocked(attachChat)
+      .mockImplementationOnce((_rid: string, _onEvent: (e: any) => void, signal?: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () =>
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+        }))
+      .mockImplementationOnce(async (_rid: string, onEvent: (e: any) => void) => {
+        onEvent({ type: "TextDelta", data: { text: "续上了" } });
+        onEvent({ type: "RunFinished", data: {} });
+      });
+    render(
+      <React.StrictMode>
+        <ChatView conversationId="c1" initial={[
+          { role: "user", content: "问题" },
+          { role: "assistant", content: "断点前", status: "streaming", runId: "R1" },
+        ]} />
+      </React.StrictMode>,
+    );
+    // 重连后续流到完成，展示续上内容与「已完成」，且从不停留在「已停止」
+    await waitFor(() => expect(screen.getByText("续上了")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("已完成")).toBeTruthy());
+    expect(screen.queryByText("已停止")).toBeNull();
+    expect(vi.mocked(attachChat).mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("非 streaming 的历史消息不触发接回", async () => {
     render(<ChatView conversationId="c1" initial={[
       { role: "user", content: "q" },

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Box, Card, CardContent, Typography, Stack, Button, CircularProgress, Alert,
@@ -49,11 +49,6 @@ export default function HomeView() {
     URL.revokeObjectURL(url);
   }
 
-  const greeting = useMemo(() => {
-    const h = new Date().getHours();
-    return h < 6 ? "夜深了" : h < 12 ? "早上好" : h < 18 ? "下午好" : "晚上好";
-  }, []);
-
   if (error) return <Box sx={{ p: 4 }}><Alert severity="error">概览加载失败：{error}</Alert></Box>;
   if (!data) return (
     <Box sx={{ display: "grid", placeItems: "center", height: "60vh" }}><CircularProgress /></Box>
@@ -73,13 +68,60 @@ export default function HomeView() {
         </Select>
       </Stack>
 
-      {/* 欢迎 + 继续 + 快捷 */}
-      <Typography sx={{ fontSize: 26, fontWeight: 700, letterSpacing: "-.02em", mt: 2 }}>
-        {greeting}，继续保持
-      </Typography>
-      <Typography sx={{ color: "text.secondary", fontSize: 14.5, mb: 2 }}>
-        下面是你的学习进度，以及 AI 最近为你做了什么
-      </Typography>
+      {/* 我的积累 */}
+      <Eyebrow>我的积累</Eyebrow>
+      <Box sx={{ display: "grid", gap: 1.75, gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4,1fr)" } }}>
+        {[
+          { lbl: "📚 学习资料", v: learn.assets.documents, sub: "已建索引 · 查看 →", onClick: () => nav("/knowledge") },
+          { lbl: "✏️ 题库", v: learn.assets.questions, sub: learn.assets.questions ? "去练习 →" : "生成一套 →", act: true, onClick: () => nav("/questions") },
+          { lbl: "❌ 错题本", v: learn.assets.wrong_answers, sub: learn.assets.wrong_answers ? "去复习 →" : "目前全对 👍", onClick: () => nav("/wrong") },
+          { lbl: "🧠 AI 记的偏好", v: learn.assets.memory, sub: "点击查看它记住了什么 →", onClick: () => setMemoryOpen(true) },
+        ].map((a) => (
+          <Card key={a.lbl} onClick={a.onClick} sx={(t) => ({ ...cardSx(t), cursor: "pointer",
+            transition: ".15s", "&:hover": { borderColor: "primary.main", transform: "translateY(-1px)" } })}>
+            <CardContent>
+              <Typography sx={{ fontSize: 12.5, color: "text.secondary" }}>{a.lbl}</Typography>
+              <Typography sx={{ fontSize: 29, fontWeight: 700, letterSpacing: "-.025em",
+                fontVariantNumeric: "tabular-nums", mt: 0.3 }}>{a.v}</Typography>
+              <Typography sx={{ fontSize: 12, color: a.act ? "primary.main" : "text.disabled",
+                fontWeight: a.act ? 600 : 400 }}>{a.sub}</Typography>
+            </CardContent>
+          </Card>
+        ))}
+      </Box>
+      {learn.recent_downloads.length > 0 && (
+        <Card sx={(t) => ({ ...cardSx(t), mt: 1.75 })}>
+          <CardContent sx={{ display: "flex", alignItems: "center", gap: 1.25, flexWrap: "wrap",
+            py: 1.5, "&:last-child": { pb: 1.5 } }}>
+            <Typography sx={{ fontSize: 12.5, color: "text.secondary", fontWeight: 600, mr: 0.5 }}>最近生成的产物</Typography>
+            {learn.recent_downloads.map((d) => {
+              const canPreview = previewKind(d.content_type) !== "none";
+              return (
+                <Stack key={d.id} direction="row" spacing={0.25} sx={{ alignItems: "center",
+                  border: 1, borderColor: "divider", borderRadius: 5, pl: 1.25, pr: 0.25, py: 0.25 }}>
+                  <Typography noWrap sx={{ fontSize: 13, maxWidth: 220 }}>{d.filename}</Typography>
+                  {canPreview && (
+                    <Tooltip title="预览"><IconButton size="small" aria-label={`预览 ${d.filename}`}
+                      onClick={() => setPreview({ id: d.id, filename: d.filename, content_type: d.content_type })}>
+                      <VisibilityIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
+                  )}
+                  <Tooltip title="下载"><IconButton size="small" aria-label={`下载 ${d.filename}`}
+                    onClick={() => download(d.id, d.filename)}>
+                    <DownloadIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
+                </Stack>
+              );
+            })}
+            <Box sx={{ flex: 1 }} />
+            <Typography onClick={() => nav("/downloads")}
+              sx={{ fontSize: 13, color: "primary.main", fontWeight: 600, cursor: "pointer" }}>
+              查看全部 →
+            </Typography>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* 继续学习：继续上次 + 快捷入口 */}
+      <Eyebrow>继续学习</Eyebrow>
       <Box sx={{ display: "grid", gap: 1.75, gridTemplateColumns: { xs: "1fr", md: "1.5fr 1fr" } }}>
         <Card sx={(t) => ({ ...cardSx(t), position: "relative", overflow: "hidden" })}>
           <Box sx={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 4, bgcolor: "primary.main" }} />
@@ -129,58 +171,6 @@ export default function HomeView() {
           </CardContent>
         </Card>
       </Box>
-
-      {/* 我的积累 */}
-      <Eyebrow>我的积累</Eyebrow>
-      <Box sx={{ display: "grid", gap: 1.75, gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4,1fr)" } }}>
-        {[
-          { lbl: "📚 学习资料", v: learn.assets.documents, sub: "已建索引 · 查看 →", onClick: () => nav("/knowledge") },
-          { lbl: "🧠 AI 记的偏好", v: learn.assets.memory, sub: "点击查看它记住了什么 →", onClick: () => setMemoryOpen(true) },
-          { lbl: "✏️ 题库", v: learn.assets.questions, sub: learn.assets.questions ? "去练习 →" : "生成一套 →", act: true, onClick: () => nav("/questions") },
-          { lbl: "❌ 错题本", v: learn.assets.wrong_answers, sub: learn.assets.wrong_answers ? "去复习 →" : "目前全对 👍", onClick: () => nav("/wrong") },
-        ].map((a) => (
-          <Card key={a.lbl} onClick={a.onClick} sx={(t) => ({ ...cardSx(t), cursor: "pointer",
-            transition: ".15s", "&:hover": { borderColor: "primary.main", transform: "translateY(-1px)" } })}>
-            <CardContent>
-              <Typography sx={{ fontSize: 12.5, color: "text.secondary" }}>{a.lbl}</Typography>
-              <Typography sx={{ fontSize: 29, fontWeight: 700, letterSpacing: "-.025em",
-                fontVariantNumeric: "tabular-nums", mt: 0.3 }}>{a.v}</Typography>
-              <Typography sx={{ fontSize: 12, color: a.act ? "primary.main" : "text.disabled",
-                fontWeight: a.act ? 600 : 400 }}>{a.sub}</Typography>
-            </CardContent>
-          </Card>
-        ))}
-      </Box>
-      {learn.recent_downloads.length > 0 && (
-        <Card sx={(t) => ({ ...cardSx(t), mt: 1.75 })}>
-          <CardContent sx={{ display: "flex", alignItems: "center", gap: 1.25, flexWrap: "wrap",
-            py: 1.5, "&:last-child": { pb: 1.5 } }}>
-            <Typography sx={{ fontSize: 12.5, color: "text.secondary", fontWeight: 600, mr: 0.5 }}>最近生成的产物</Typography>
-            {learn.recent_downloads.map((d) => {
-              const canPreview = previewKind(d.content_type) !== "none";
-              return (
-                <Stack key={d.id} direction="row" spacing={0.25} sx={{ alignItems: "center",
-                  border: 1, borderColor: "divider", borderRadius: 5, pl: 1.25, pr: 0.25, py: 0.25 }}>
-                  <Typography noWrap sx={{ fontSize: 13, maxWidth: 220 }}>{d.filename}</Typography>
-                  {canPreview && (
-                    <Tooltip title="预览"><IconButton size="small" aria-label={`预览 ${d.filename}`}
-                      onClick={() => setPreview({ id: d.id, filename: d.filename, content_type: d.content_type })}>
-                      <VisibilityIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
-                  )}
-                  <Tooltip title="下载"><IconButton size="small" aria-label={`下载 ${d.filename}`}
-                    onClick={() => download(d.id, d.filename)}>
-                    <DownloadIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
-                </Stack>
-              );
-            })}
-            <Box sx={{ flex: 1 }} />
-            <Typography onClick={() => nav("/downloads")}
-              sx={{ fontSize: 13, color: "primary.main", fontWeight: 600, cursor: "pointer" }}>
-              查看全部 →
-            </Typography>
-          </CardContent>
-        </Card>
-      )}
 
       {/* AI 在为我做什么 */}
       <Eyebrow>AI 在为我做什么</Eyebrow>

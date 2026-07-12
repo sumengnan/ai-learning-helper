@@ -64,6 +64,12 @@ export function ChatView({ conversationId, initial, autoSend }:
   const [saveWrong, setSaveWrong] = useState(() => readBool(SAVE_WRONG_KEY, false));
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
+  // 区分「用户点停止」与「卸载/StrictMode 重挂载导致的 abort」：只有前者才落「已停止」终态，
+  // 后者应保留 streaming 由重挂载后重新接回，续上而非中断。
+  const userStoppedRef = useRef(false);
+  // 组件真实挂载中标记（StrictMode 会 setup→cleanup→setup，cleanup 里置 false、二次 setup 置回 true），
+  // 用于判断一次 abort 后是否应自动重连。
+  const mountedRef = useRef(false);
   // 危险命令人工确认：run_id 来自 RunStarted 事件，用于拼回传 URL
   const runIdRef = useRef<string | null>(null);
   // 本轮 turn 句柄（来自 X-Run-Id / 接回的 runId），用于 stop 与刷新后接回
@@ -152,8 +158,12 @@ export function ChatView({ conversationId, initial, autoSend }:
     setSaveWrong(v); localStorage.setItem(SAVE_WRONG_KEY, v ? "1" : "0");
   };
 
-  // 卸载（含 App 用 key={activeId} 切换对话触发 remount）时取消在途流
-  useEffect(() => () => abortRef.current?.abort(), []);
+  // 卸载（含 App 用 key={activeId} 切换对话触发 remount）时取消在途流。
+  // mountedRef 让 send/reattach 能区分「真卸载」与「StrictMode 假卸载」，后者需自动重连。
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; abortRef.current?.abort(); };
+  }, []);
 
   // 跟随滚动：AI 回复流式更新时自动滚到底部；用户主动上滑离开底部则暂停跟随
   useEffect(() => {
@@ -212,7 +222,8 @@ export function ChatView({ conversationId, initial, autoSend }:
       startedAt: Date.now() };
     stickRef.current = true;   // 发送即恢复跟随：即使之前上滑看历史，也自动回到底部
     setMessages((m) => [...m, userMsg, assistant]);
-    let outcome: "done" | "error" | "stopped" = "done";
+    let outcome: "done" | "error" | "stopped" | null = "done";
+    userStoppedRef.current = false;
     setInput(""); setPending([]); setBusy(true); busyRef.current = true;
     const controller = new AbortController();
     abortRef.current = controller;
@@ -222,19 +233,28 @@ export function ChatView({ conversationId, initial, autoSend }:
         attachments.map((a) => a.id),
         (rid) => { turnRunIdRef.current = rid; upd((a) => { a.runId = rid; }); });
     } catch (err: any) {
-      if (err?.name === "AbortError") outcome = "stopped";
+      // 用户点停止 → 已停止；非用户 abort（卸载/重挂载）→ null：不落终态，保留 streaming 待重连
+      if (err?.name === "AbortError") outcome = userStoppedRef.current ? "stopped" : null;
       else { upd((a) => { a.content += `\n[连接失败] ${err}`; }); outcome = "error"; }
     } finally {
+      setBusy(false); busyRef.current = false;
+      if (outcome === null) {
+        // 非用户主动中断：后端后台任务仍在跑，若组件仍挂载且已拿到 run 句柄 → 自动接回续流
+        const rid = turnRunIdRef.current;
+        if (mountedRef.current && rid) void reattach(rid);
+        return;
+      }
+      const status = outcome;   // 早返回后已排除 null
       upd((a) => {   // 收尾状态：完成/失败/已停止；冻结本轮耗时
-        a.status = outcome;
+        a.status = status;
         if (a.startedAt != null && a.elapsedMs == null) a.elapsedMs = Date.now() - a.startedAt;
       });
-      setBusy(false); busyRef.current = false;
     }
   }
 
   // 停止本轮生成：显式取消后端后台任务（断开已不再取消它）+ 断开本地流。
   function stop() {
+    userStoppedRef.current = true;   // 标记为用户主动停止：本次 abort 才落「已停止」终态
     const tid = turnRunIdRef.current;
     if (tid) void stopRun(tid);
     abortRef.current?.abort();
@@ -244,11 +264,12 @@ export function ChatView({ conversationId, initial, autoSend }:
   // 里 flush 的部分文本重复），再回放+实时续流直到结束。
   async function reattach(runId: string) {
     if (busyRef.current) return;
+    userStoppedRef.current = false;
     turnRunIdRef.current = runId;
     setBusy(true); busyRef.current = true;
     upd((a) => { a.content = ""; a.steps = []; a.progress = undefined; a.sources = undefined;
       a.startedAt = a.startedAt ?? Date.now(); a.elapsedMs = undefined; });
-    let outcome: "done" | "error" | "stopped" = "done";
+    let outcome: "done" | "error" | "stopped" | null = "done";
     let reloaded = false;
     const controller = new AbortController();
     abortRef.current = controller;
@@ -270,14 +291,21 @@ export function ChatView({ conversationId, initial, autoSend }:
             a.sources = fin.sources ?? a.sources;
           });
         } catch { /* 重载失败保持原样 */ }
-      } else if (err?.name === "AbortError") outcome = "stopped";
+      // 用户点停止 → 已停止；非用户 abort（卸载/StrictMode 假卸载）→ null：不落终态、稍后重连
+      } else if (err?.name === "AbortError") outcome = userStoppedRef.current ? "stopped" : null;
       else outcome = "error";
     } finally {
+      setBusy(false); busyRef.current = false;
+      if (outcome === null) {
+        // 被卸载/重挂载打断：组件仍挂载（StrictMode 假卸载后已重挂）→ 重新接回，续上而非停留
+        if (mountedRef.current) void reattach(runId);
+        return;
+      }
+      const status = outcome;   // 早返回后已排除 null
       if (!reloaded) upd((a) => {
-        a.status = outcome;
+        a.status = status;
         if (a.startedAt != null && a.elapsedMs == null) a.elapsedMs = Date.now() - a.startedAt;
       });
-      setBusy(false); busyRef.current = false;
     }
   }
 
