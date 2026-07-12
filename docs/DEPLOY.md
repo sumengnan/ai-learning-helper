@@ -2,10 +2,17 @@
 
 `main` 分支有 push 时，`.github/workflows/deploy.yml` 会自动：
 1. 在 GitHub Actions 里**构建镜像并推送到 Docker Hub** `sumengnan/ai-learning-helper`
-   （打两个 tag：`:latest` 与 `:<短 sha>`）；
+   （打两个 tag：`:latest` 与 `:<版本号>`）；
 2. 把 `docker-compose.yml` 拷到服务器 `/opt/ai-learning-helper`；
-3. SSH 进服务器 `docker compose up -d --pull always --no-build`，**拉取**刚推的镜像滚动更新
+3. SSH 进服务器 `docker compose up -d --pull always --no-build`，**拉取**该版本镜像滚动更新
    （服务器不构建、不需要源码）。
+
+### 版本号（自增）
+
+镜像 tag 用语义版本号，从 `0.0.1` 起，每次部署 patch **自动 +1**（`0.0.1` → `0.0.2` → …）。
+实现：workflow 读取仓库里最高的 `x.y.z` git tag 递增，构建后把新版本号作为镜像 tag，并回推一个
+同名 git tag 作为下次递增的依据（`concurrency` 已串行化，无版本竞争）。手动指定版本可自行
+`git tag 0.1.0 && git push origin 0.1.0`，下次就从 `0.1.1` 继续。
 
 前端在镜像构建阶段（Node 20）打包成 `web/dist`，由 FastAPI 生产环境托管，与后端同源，无需单独 web 服务。
 
@@ -74,14 +81,15 @@ compose 挂载了宿主 `/var/run/docker.sock`，应用可调用宿主 Docker �
 
 ## 部署自检：前后端版本
 
-镜像构建时会把这次 push 的短 git sha + UTC 构建时间同时烙进**前端 bundle**与**后端环境变量**：
+镜像构建时会把这次部署的**版本号** + 短 git sha + UTC 构建时间同时烙进**前端 bundle**与
+**后端环境变量**：
 
 - 后端：`GET /api/version` → `{version, git_sha, built_at}`（公开端点，登录前也可访问）。
-- 前端：左侧菜单底部的版本徽标显示 `前端 <sha> · 后端 <sha>`，悬停看构建时间。
-  - ✓ 绿色 = 前后端 sha 一致（同一次部署都成功了）。
+- 前端：左侧菜单底部的版本徽标显示 `前端 v0.0.x · 后端 v0.0.x`，悬停看 git sha 与构建时间。
+  - ✓ 绿色 = 前后端版本一致（同一次部署都成功了）。
   - ⚠ 橙色 = 不一致（通常是浏览器缓存了旧前端，或某一端没更新成功）。
 
-命令行快速核对：`curl -s http://<host>:8000/api/version`。本地非 CI 构建时两端都显示 `dev`。
+命令行快速核对：`curl -s http://<host>:8000/api/version`。本地非 CI 构建时版本显示 `dev`。
 
 ## 手动触发 / 排障
 
