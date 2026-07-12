@@ -19,7 +19,7 @@ import Brightness4Icon from "@mui/icons-material/Brightness4";
 import Brightness7Icon from "@mui/icons-material/Brightness7";
 import LogoutIcon from "@mui/icons-material/Logout";
 import MenuIcon from "@mui/icons-material/Menu";
-import SmartToyIcon from "@mui/icons-material/SmartToy";
+import FaceRetouchingNaturalIcon from "@mui/icons-material/FaceRetouchingNatural";
 import { useColorMode } from "../ThemeModeProvider";
 import { useAuth } from "../auth/AuthProvider";
 import { VersionBadge } from "./VersionBadge";
@@ -79,7 +79,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       >
         <Toolbar sx={{ px: 2, overflow: "hidden", gap: 1,
           justifyContent: navOpen ? "flex-start" : "center" }}>
-          <SmartToyIcon sx={{ color: "primary.main", fontSize: 28, flexShrink: 0 }} />
+          <FaceRetouchingNaturalIcon sx={{ color: "primary.main", fontSize: 28, flexShrink: 0 }} />
           <AnimatePresence initial={false}>
             {navOpen && (
               <motion.div
