@@ -1,13 +1,15 @@
 services:
   app:
+    # 部署：服务器 docker compose pull 拉 Docker Hub 上 CI 推的镜像（APP_IMAGE_TAG=<sha>，
+    # 缺省 latest）。build 段仅供本地 `docker compose build` 使用；服务器用 --no-build 不触发。
+    image: sumengnan/ai-learning-helper:${APP_IMAGE_TAG:-latest}
     build:
       context: .
       args:
-        # 版本戳：CI 部署时用环境变量注入（APP_GIT_SHA=<short sha>、APP_BUILD_TIME=<UTC>）；
-        # 本地直接 build 时回退 dev。
+        # 版本戳：本地 build 时用环境变量注入（APP_GIT_SHA=<short sha>、APP_BUILD_TIME=<UTC>）；
+        # 缺省回退 dev。CI 构建时由 build-push-action 传入。
         APP_GIT_SHA: ${APP_GIT_SHA:-dev}
         APP_BUILD_TIME: ${APP_BUILD_TIME:-}
-    image: ai-learning-helper:latest
     container_name: ai-learning-helper
     restart: unless-stopped
     # 机密与模型配置从服务器上的 .env 读取（含 HARNESS_API_KEY / AUTH_SECRET 等）

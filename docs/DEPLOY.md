@@ -1,14 +1,17 @@
-# 自动部署（GitHub Actions → 服务器 docker compose）
+# 自动部署（GitHub Actions → Docker Hub → 服务器 docker compose）
 
 `main` 分支有 push 时，`.github/workflows/deploy.yml` 会自动：
-1. 用 SSH（密码）把源码 `rsync` 到服务器 `/opt/ai-learning-helper`；
-2. SSH 进服务器执行 `docker compose up -d --build`，在服务器上构建镜像并滚动更新。
+1. 在 GitHub Actions 里**构建镜像并推送到 Docker Hub** `sumengnan/ai-learning-helper`
+   （打两个 tag：`:latest` 与 `:<短 sha>`）；
+2. 把 `docker-compose.yml` 拷到服务器 `/opt/ai-learning-helper`；
+3. SSH 进服务器 `docker compose up -d --pull always --no-build`，**拉取**刚推的镜像滚动更新
+   （服务器不构建、不需要源码）。
 
 前端在镜像构建阶段（Node 20）打包成 `web/dist`，由 FastAPI 生产环境托管，与后端同源，无需单独 web 服务。
 
 ## 需要的 GitHub Secrets
 
-仓库 Settings → Secrets and variables → Actions（你已配置）：
+仓库 Settings → Secrets and variables → Actions：
 
 | Secret | 说明 |
 | --- | --- |
@@ -16,6 +19,8 @@
 | `SERVER_USER` | SSH 用户名 |
 | `SERVER_PASSWORD` | SSH 密码 |
 | `SERVER_PORT` | SSH 端口（如 22） |
+| `DOCKERHUB_USERNAME` | Docker Hub 用户名（`sumengnan`） |
+| `DOCKERHUB_TOKEN` | Docker Hub 访问令牌（Account Settings → Security → New Access Token，Read/Write） |
 
 ## 服务器一次性准备
 
@@ -28,7 +33,7 @@ curl -fsSL https://get.docker.com | sh
 # 2. 让部署用户免 sudo 用 docker（改组后需重新登录）
 sudo usermod -aG docker "$USER"
 
-# 3. 建部署目录并归属给部署用户（否则 rsync 到 /opt 会没权限）
+# 3. 建部署目录并归属给部署用户（否则 scp 到 /opt 会没权限）
 sudo mkdir -p /opt/ai-learning-helper
 sudo chown -R "$USER" /opt/ai-learning-helper
 
@@ -36,6 +41,9 @@ sudo chown -R "$USER" /opt/ai-learning-helper
 #    生产务必设置随机 AUTH_SECRET 与真实 HARNESS_API_KEY
 vim /opt/ai-learning-helper/.env
 ```
+
+> 镜像仓库 `sumengnan/ai-learning-helper` 为**公开**，服务器免登录直接 `pull`。若日后改为私有，
+> 需在服务器上先 `docker login`（或在 workflow 拉取步骤前加 `docker login`）。
 
 `.env` 至少需要：
 
@@ -49,8 +57,8 @@ AUTH_SECRET=改成一段足够长的随机串
 ## 数据持久化
 
 所有运行时数据都落在挂载卷 `/opt/ai-learning-helper/data/`（`app.db` / `harness.db` /
-`memory.db` / `downloads/` / `attachments/`），重建容器不丢。`rsync --delete` 与镜像构建
-都不会碰 `.env` 和 `data/`。
+`memory.db` / `downloads/` / `attachments/`），重建/换镜像都不丢。部署只覆盖
+`docker-compose.yml`，不碰 `.env` 和 `data/`。
 
 ## 代码沙箱 / 浏览器工具
 
