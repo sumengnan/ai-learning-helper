@@ -33,3 +33,5 @@ services:
       - ./data:/app/data
       # 应用会调用宿主 Docker 起代码/浏览器子沙箱（启用 HARNESS_ENABLE_SANDBOX/BROWSER 时）
       - /var/run/docker.sock:/var/run/docker.sock
+      # Docker SSL/TLS 证书目录（Docker daemon 配置与 TLS 客户端证书），只读挂载
+      - /etc/docker:/etc/docker:ro
