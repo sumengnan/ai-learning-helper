@@ -18,6 +18,11 @@ class HarnessConfig(BaseSettings):
     max_steps: int = 10
     temperature: float = 0.7
     request_timeout: float = 60.0
+    # 透传给 chat.completions.create 的额外请求体（默认空=不改变行为）。用于开关厂商私有参数，
+    # 例如 Qwen3 关闭「思考模式」提速：HARNESS_LLM_EXTRA_BODY={"enable_thinking": false}
+    # （DashScope 百炼 compatible-mode 用此形式；自托管 vLLM 用
+    # {"chat_template_kwargs": {"enable_thinking": false}}）。
+    llm_extra_body: dict = {}
     max_retries: int = 2
     retry_base_delay: float = 0.5
     max_tokens_budget: int | None = None

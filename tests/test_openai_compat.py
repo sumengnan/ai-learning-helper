@@ -104,6 +104,32 @@ async def test_done_chunk_falls_back_to_tiktoken(monkeypatch):
     assert done.usage.total_tokens > 0   # tiktoken 估算
 
 
+async def test_extra_body_passed_when_configured(monkeypatch):
+    cfg = HarnessConfig(api_key="k", llm_extra_body={"enable_thinking": False})
+    client = OpenAICompatibleClient(cfg)
+    events = [_FakeEvent(_FakeDelta(content="hi"))]
+
+    async def fake_create(**kwargs):
+        assert kwargs["extra_body"] == {"enable_thinking": False}   # 透传
+        return _fake_stream(events)
+
+    monkeypatch.setattr(client._client.chat.completions, "create", fake_create)
+    [c async for c in client.stream([Message(role=Role.USER, content="hi")], [])]
+
+
+async def test_extra_body_omitted_by_default(monkeypatch):
+    cfg = HarnessConfig(api_key="k")            # 默认空 → 不加 extra_body（零行为变更）
+    client = OpenAICompatibleClient(cfg)
+    events = [_FakeEvent(_FakeDelta(content="hi"))]
+
+    async def fake_create(**kwargs):
+        assert "extra_body" not in kwargs
+        return _fake_stream(events)
+
+    monkeypatch.setattr(client._client.chat.completions, "create", fake_create)
+    [c async for c in client.stream([Message(role=Role.USER, content="hi")], [])]
+
+
 async def test_include_usage_disabled_omits_stream_options(monkeypatch):
     cfg = HarnessConfig(api_key="k", include_usage=False)
     client = OpenAICompatibleClient(cfg)

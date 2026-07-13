@@ -41,6 +41,8 @@ class OpenAICompatibleClient:
             kwargs["stream_options"] = {"include_usage": True}
         if tools:
             kwargs["tools"] = tools
+        if self._config.llm_extra_body:
+            kwargs["extra_body"] = self._config.llm_extra_body
 
         completion_parts: list[str] = []
         captured = None
