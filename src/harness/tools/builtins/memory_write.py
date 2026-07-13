@@ -8,7 +8,10 @@ from ...memory.memory import Memory
 
 class RememberTool(Tool):
     name = "remember"
-    description = "把一段值得长期记住的信息写入知识库，供以后检索。"
+    description = (
+        "把一段值得长期记住的信息写入你的长期记忆，供以后自动检索参考。"
+        "注意：这是你私有的记忆，不是用户的「知识库」；"
+        "若用户要求把资料/数据保存到知识库，请改用 save_to_knowledge。")
 
     class Params(BaseModel):
         text: str

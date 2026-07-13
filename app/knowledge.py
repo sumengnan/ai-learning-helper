@@ -37,6 +37,23 @@ class KnowledgeService:
         self._doc_store.create(user_id, doc_id, filename, len(data), chunk_ids, excerpt)
         return {"id": doc_id, "filename": filename, "num_chunks": len(chunk_ids)}
 
+    async def ingest_text(self, user_id: str, title: str, text: str) -> dict:
+        """把一段文本作为正式文档存入用户知识库（供聊天中「保存到知识库」使用）。
+
+        与 ingest 一致：写入 knowledge:{user_id} 向量集合并建立 doc_store 文档记录，
+        故会出现在知识库菜单、可检索、可删除。区别仅是输入为文本而非上传文件。
+        """
+        if not text.strip():
+            raise EmptyDocument(title)
+        doc_id = uuid4().hex
+        chunk_ids = await self._memory.add_texts(
+            [text], self._collection_for(user_id),
+            {"source": title, "doc_id": doc_id, "user_id": user_id})
+        excerpt = " ".join(text.split())[:200]
+        self._doc_store.create(user_id, doc_id, title, len(text.encode("utf-8")),
+                               chunk_ids, excerpt)
+        return {"id": doc_id, "filename": title, "num_chunks": len(chunk_ids)}
+
     def list_fragments(self, user_id: str, page: int = 1, size: int = 8) -> dict:
         """分页列举该用户知识库的所有片段（chunk），每片一项。"""
         kind = self._collection

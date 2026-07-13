@@ -30,6 +30,7 @@ from ..summarizer import RollingSummarizer
 from ..sources import SOURCE_GUIDE, SourceSink, wrap_tool
 from ..tools.attachment_tools import ListAttachmentsTool, ReadAttachmentTool
 from ..tools.exam_tools import SampleQuestionsTool, SaveWrongAnswerTool
+from ..tools.knowledge_tools import SaveToKnowledgeTool
 from ..tools.save_download import SaveDownloadTool
 from ..verify import Verdict
 
@@ -75,7 +76,8 @@ class _Decision(BaseModel):
 
 
 def make_chat_router(harness, store, config, question_store=None, wrong_store=None,
-                     verifier=None, attachment_store=None, run_manager=None) -> APIRouter:
+                     verifier=None, attachment_store=None, run_manager=None,
+                     knowledge_service=None) -> APIRouter:
     router = APIRouter()
     # 断点续传：一轮生成跑成脱离请求的后台任务，事件走 RunManager 内存总线（见 app/run_manager.py）。
     # 未注入时退化为每路由独立实例（测试/无续传场景），行为仍正确、只是跨请求接不上。
@@ -116,6 +118,10 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         if dstore is not None:
             _reg(SaveDownloadTool(
                 dstore, config.download_max_mb * 1024 * 1024, user_id))
+        # 知识库保存：按用户隔离，写入 knowledge:{user_id} 并建立文档记录，
+        # 使内容出现在「知识库」菜单（区别于 remember 写入的私有记忆）。
+        if knowledge_service is not None:
+            _reg(SaveToKnowledgeTool(knowledge_service, user_id))
         if question_store is not None:
             _reg(SampleQuestionsTool(question_store, user_id))
             if save_wrong and wrong_store is not None:
