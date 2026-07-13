@@ -137,6 +137,43 @@ async def test_window_bounds_long_history_and_no_orphan_tools():
     assert tool_ids <= call_ids
 
 
+async def test_layered_preserves_tool_pairing_with_blocks():
+    """layered（前置摘要+召回块）裁剪含工具轮的长历史，仍不破坏「tool_calls ↔ tool 结果」
+    配对、不留孤儿 tool——这是多轮工具任务（考试回放已抽题目）在 layered 下的正确性前提。"""
+    from harness.types import ToolCall
+
+    def _tool_turn(i):
+        return [
+            Message(role=Role.USER, content=f"第{i}轮：抽题 " + "填充" * 20),
+            Message(role=Role.ASSISTANT, content=None,
+                    tool_calls=[ToolCall(id=f"c{i}", name="sample_questions",
+                                         arguments={"count": 10})]),
+            Message(role=Role.TOOL, content=f"[第{i}轮的10题]", tool_call_id=f"c{i}"),
+            Message(role=Role.ASSISTANT, content=f"第{i}轮：第1题"),
+        ]
+
+    hist = [m for i in range(30) for m in _tool_turn(i)]   # 超窗口长历史
+    cfg = _Cfg()
+    cfg.context_strategy = "layered"
+    cfg.context_window_tokens = 6000
+    cfg.context_response_reserve_tokens = 1000
+    cfg.context_working_ratio = 0.5
+    asm = ContextAssembler(cfg, "gpt-4o-mini",
+                           summarizer=_FakeSummarizer(), conv_memory=_FakeConvMemory())
+    mgr = await asm.build_manager("你是助手", hist, "继续考试", "c1")
+    built = mgr.build(RunState(run_id="r"))
+
+    # ① 每个 tool 结果都出现在其 tool_call 之后（配对完整、顺序正确，绝不孤儿）
+    open_ids: set[str] = set()
+    for m in built:
+        if m.role == Role.TOOL:
+            assert m.tool_call_id in open_ids, "layered 裁剪产生了孤儿 tool 结果"
+        if m.role == Role.ASSISTANT and m.tool_calls:
+            open_ids.update(tc.id for tc in m.tool_calls)
+    # ② 规模仍受窗口约束
+    assert count_message_tokens(built, "gpt-4o-mini") <= cfg.context_window_tokens
+
+
 async def test_layered_summary_failure_degrades_gracefully():
     cfg = _Cfg()
     cfg.context_strategy = "layered"

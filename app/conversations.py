@@ -7,9 +7,18 @@ import uuid
 from datetime import datetime, timezone
 
 from harness.persistence.serialize import message_from_dict, message_to_dict
-from harness.types import Message
+from harness.types import Message, Role, ToolCall
 
 from .db import migrate, open_db
+
+
+def _load_steps(steps_json: str) -> list[dict]:
+    """解析 steps 列 JSON；坏数据/非列表一律当空，绝不影响历史回放。"""
+    try:
+        v = json.loads(steps_json)
+    except (ValueError, TypeError):
+        return []
+    return [s for s in v if isinstance(s, dict)] if isinstance(v, list) else []
 
 
 def _now() -> str:
@@ -45,11 +54,22 @@ class ConversationStore:
             (conv_id, user_id)).fetchone() is not None
 
     def messages(self, conv_id: str) -> list[Message]:
+        """回放为 LLM 历史。助手轮若带工具轨迹(steps)，先回放「工具调用+结果」消息、
+        再放最终答复——使下一轮模型能看到本轮工具产出（如已抽的题目/检索结果），
+        不必重复调用工具（否则多轮考试会每轮重新抽题、从头开始）。"""
         rows = self._conn.execute(
-            "SELECT role, content, tool_calls, tool_call_id FROM conversation_messages "
+            "SELECT role, content, tool_calls, tool_call_id, steps FROM conversation_messages "
             "WHERE conv_id = ? ORDER BY seq", (conv_id,)).fetchall()
         out: list[Message] = []
-        for role, content, tool_calls, tool_call_id in rows:
+        for i, (role, content, tool_calls, tool_call_id, steps) in enumerate(rows):
+            if role == "assistant" and steps:
+                for j, st in enumerate(_load_steps(steps)):
+                    cid = f"h{i}_{j}"        # 合成 id：assistant.tool_calls 与 tool 消息配对
+                    out.append(Message(role=Role.ASSISTANT, tool_calls=[
+                        ToolCall(id=cid, name=st.get("tool", ""),
+                                 arguments=st.get("args") or {})]))
+                    out.append(Message(role=Role.TOOL, tool_call_id=cid,
+                                       content=str(st.get("result") or "")))
             out.append(message_from_dict({
                 "role": role, "content": content,
                 "tool_calls": json.loads(tool_calls) if tool_calls else [],

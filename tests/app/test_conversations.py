@@ -22,6 +22,43 @@ def test_append_and_messages_roundtrip():
     assert msgs[0].role == Role.USER and msgs[1].role == Role.ASSISTANT
 
 
+def test_messages_replays_tool_calls_into_llm_history():
+    """带工具轨迹(steps)的助手轮：messages() 回放「工具调用+结果」供下一轮模型看到，
+    使多轮工具任务（如考试抽题）不因上下文丢工具产出而重复调用。"""
+    s = ConversationStore(":memory:")
+    cid = s.create("u1", "考试")
+    s.start_turn(cid, Message(role=Role.USER, content="从题库抽10题考试"), "r1")
+    s.finish_turn(cid, "r1", "第1题：1+1=?",
+                  steps=[{"tool": "sample_questions", "args": {"count": 10},
+                          "result": "[题1…题10 的完整JSON]", "is_error": False}])
+    msgs = s.messages(cid)
+    assert [m.role.value for m in msgs] == ["user", "assistant", "tool", "assistant"]
+    assert msgs[1].tool_calls[0].name == "sample_questions"
+    assert msgs[1].tool_calls[0].arguments == {"count": 10}
+    assert "题10" in msgs[2].content                       # 抽到的题回放进上下文
+    assert msgs[2].tool_call_id == msgs[1].tool_calls[0].id  # 调用与结果配对
+    assert msgs[3].content == "第1题：1+1=?"
+
+
+def test_messages_multi_step_replayed_in_order():
+    s = ConversationStore(":memory:")
+    cid = s.create("u1")
+    s.start_turn(cid, Message(role=Role.USER, content="做题"), "r1")
+    s.finish_turn(cid, "r1", "结果",
+                  steps=[{"tool": "a", "args": {}, "result": "ra"},
+                         {"tool": "b", "args": {}, "result": "rb"}])
+    roles = [m.role.value for m in s.messages(cid)]
+    assert roles == ["user", "assistant", "tool", "assistant", "tool", "assistant"]
+
+
+def test_messages_without_steps_unchanged():
+    s = ConversationStore(":memory:")
+    cid = s.create("u1")
+    s.start_turn(cid, Message(role=Role.USER, content="hi"), "r1")
+    s.finish_turn(cid, "r1", "yo")
+    assert [m.content for m in s.messages(cid)] == ["hi", "yo"]
+
+
 def test_add_run_and_run_ids_scoped_by_owner():
     s = ConversationStore(":memory:")
     cid = s.create("u1")
@@ -67,7 +104,7 @@ def test_finish_turn_defaults_meta_to_none():
     assert asst["tokens"] is None and asst["cost"] is None and asst["elapsed_ms"] is None
 
 
-def test_append_steps_persist_for_ui_only():
+def test_append_steps_persist_for_ui_and_replay_to_llm():
     s = ConversationStore(":memory:")
     cid = s.create("u1")
     steps = [{"tool": "calculator", "args": {"expression": "1+1"},
@@ -78,5 +115,9 @@ def test_append_steps_persist_for_ui_only():
     assert [m["role"] for m in ui] == ["user", "assistant"]
     assert ui[0]["steps"] is None          # 用户消息不带 steps
     assert ui[1]["steps"] == steps         # 工具轨迹挂在助手消息上，切换回来可还原
-    # LLM 历史不受影响（steps 纯 UI 用途）
-    assert [m.content for m in s.messages(cid)] == ["1+1?", "是 2"]
+    # LLM 历史：工具调用+结果被回放（供下一轮模型看到本轮工具产出）
+    llm = s.messages(cid)
+    assert [m.role.value for m in llm] == ["user", "assistant", "tool", "assistant"]
+    assert llm[1].tool_calls[0].name == "calculator"
+    assert llm[2].content == "2"
+    assert llm[3].content == "是 2"
