@@ -39,6 +39,17 @@ export interface VersionInfo {
   built_at: string;
 }
 
+export interface Question {
+  id: string;
+  type: string;
+  stem: string;
+  options: string[] | null;
+  answer: unknown;
+  explanation: string;
+  source: string;
+  created_at: string;
+}
+
 /** 后端版本信息（公开端点，无需鉴权），用于页脚部署自检。 */
 export async function fetchVersion(): Promise<VersionInfo> {
   const r = await fetch("/api/version");
@@ -215,18 +226,28 @@ export const api = {
       authFetch(`/api/documents/${id}`, { method: "DELETE" }).then(() => undefined),
   },
   questions: {
-    generate: (topic: string, count: number, types: string[]) =>
-      authFetch("/api/questions/generate", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic, count, types }),
-      }).then(async (r) => {
-        if (!r.ok) throw new Error(await detail(r, "出题失败"));
+    list: (params: { page?: number; size?: number; type?: string; source?: string; q?: string } = {}):
+      Promise<{ items: Question[]; total: number }> => {
+      const sp = new URLSearchParams();
+      sp.set("page", String(params.page ?? 1));
+      sp.set("size", String(params.size ?? 20));
+      if (params.type) sp.set("type", params.type);
+      if (params.source) sp.set("source", params.source);
+      if (params.q) sp.set("q", params.q);
+      return authFetch(`/api/questions?${sp.toString()}`).then((r) => r.json());
+    },
+    sources: (): Promise<string[]> =>
+      authFetch("/api/questions/sources").then((r) => r.json()),
+    import: (file: File): Promise<{ imported: number; skipped_invalid: number; skipped_duplicate: number }> => {
+      const fd = new FormData(); fd.append("file", file);
+      return authFetch("/api/questions/import", { method: "POST", body: fd }).then(async (r) => {
+        if (!r.ok) throw new Error(await detail(r, `导入失败：${r.status}`));
         return r.json();
-      }),
-    list: () => authFetch("/api/questions").then((r) => r.json()),
-    remove: (id: string) =>
+      });
+    },
+    remove: (id: string): Promise<void> =>
       authFetch(`/api/questions/${id}`, { method: "DELETE" }).then(() => undefined),
-    removeMany: (ids: string[]) =>
+    removeMany: (ids: string[]): Promise<void> =>
       authFetch("/api/questions/delete", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids }),
