@@ -1,5 +1,5 @@
 import {
-  Drawer, Box, Typography, Chip, Stack, IconButton, Divider,
+  Dialog, Box, Typography, Chip, Stack, IconButton, Divider,
 } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
@@ -25,15 +25,15 @@ function answerText(q: Question): string {
   return String(q.answer ?? "");
 }
 
-// 题目详情抽屉：右侧滑出，直接渲染内存中的题目对象（列表已含全字段，无需再请求）。
+// 题目详情弹框：页面居中弹出，直接渲染内存中的题目对象（列表已含全字段，无需再请求）。
 export function QuestionDetailDrawer({ question, onClose }: {
   question: Question | null; onClose: () => void;
 }) {
   return (
-    <Drawer anchor="right" open={question !== null} onClose={onClose}
-      slotProps={{ paper: { sx: { width: { xs: "100%", sm: 560 }, maxWidth: "100%" } } }}>
+    <Dialog open={question !== null} onClose={onClose} maxWidth="sm" fullWidth
+      slotProps={{ paper: { sx: { maxHeight: "85vh" } } }}>
       {question && (
-        <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 1.5, height: "100%" }}>
+        <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 1.5, maxHeight: "85vh" }}>
           <Stack direction="row" spacing={1}
             sx={{ alignItems: "center", justifyContent: "space-between" }}>
             <Typography variant="h6" sx={{ fontWeight: 700 }}>题目详情</Typography>
@@ -85,6 +85,6 @@ export function QuestionDetailDrawer({ question, onClose }: {
           </Box>
         </Box>
       )}
-    </Drawer>
+    </Dialog>
   );
 }

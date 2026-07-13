@@ -37,19 +37,10 @@ describe("QuestionBankView", () => {
     expect(screen.getByText(/叶绿体/)).toBeTruthy();   // 答案按选项文本显示
   });
 
-  it("点题目卡片打开详情抽屉", async () => {
+  it("点题目卡片打开详情弹框", async () => {
     render(<MemoryRouter><QuestionBankView /></MemoryRouter>);
     await waitFor(() => screen.getByText(/光合作用在哪/));
     fireEvent.click(screen.getByText(/光合作用在哪/));
     await waitFor(() => expect(screen.getByText("题目详情")).toBeTruthy());
-  });
-
-  it("勾选后批量删除调用 removeMany", async () => {
-    (api.questions.removeMany as any).mockResolvedValue(undefined);
-    render(<MemoryRouter><QuestionBankView /></MemoryRouter>);
-    await waitFor(() => screen.getByText(/光合作用在哪/));
-    fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(screen.getByText(/批量删除/));
-    await waitFor(() => expect(api.questions.removeMany).toHaveBeenCalledWith(["1"]));
   });
 });

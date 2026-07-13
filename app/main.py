@@ -107,7 +107,7 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
 
     app.include_router(make_version_router())
     app.include_router(make_auth_router(auth, require_captcha=config.require_captcha))
-    app.include_router(make_conversations_router(store, harness, attachment_store))
+    app.include_router(make_conversations_router(store, harness, attachment_store, config))
     app.include_router(make_chat_router(harness, store, config,
                                         question_store=question_store, wrong_store=wrong_store,
                                         verifier=verifier, attachment_store=attachment_store,

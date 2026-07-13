@@ -54,3 +54,32 @@ async def test_ingest_text_empty_raises(mock_embedder):
     svc, _ = _service(mock_embedder)
     with pytest.raises(EmptyDocument):
         await svc.ingest_text("u1", "空", "   ")
+
+
+async def test_list_fragments_filter_by_category(mock_embedder):
+    """按分类（文件名后缀推导）筛选知识库片段。"""
+    svc, _ = _service(mock_embedder)
+    await svc.ingest_text("u1", "a.txt", "文本内容一")     # 文本
+    await svc.ingest_text("u1", "b.docx", "word 内容")     # Word
+    await svc.ingest_text("u1", "c.txt", "文本内容二")     # 文本
+    await svc.ingest_text("u1", "d.md", "# 标题")          # Markdown
+
+    text_page = svc.list_fragments("u1", 1, 10, category="文本")
+    assert text_page["total"] == 2
+    assert all(it["category"] == "文本" for it in text_page["items"])
+
+    word_page = svc.list_fragments("u1", 1, 10, category="Word")
+    assert word_page["total"] == 1
+
+    # 不传分类返回全部
+    assert svc.list_fragments("u1", 1, 10)["total"] == 4
+
+
+async def test_list_fragments_category_paginates(mock_embedder):
+    svc, _ = _service(mock_embedder)
+    for i in range(5):
+        await svc.ingest_text("u1", f"n{i}.txt", f"文本 {i}")
+    p1 = svc.list_fragments("u1", 1, 2, category="文本")
+    p3 = svc.list_fragments("u1", 3, 2, category="文本")
+    assert p1["total"] == 5 and len(p1["items"]) == 2
+    assert len(p3["items"]) == 1                # 第 3 页余 1 条

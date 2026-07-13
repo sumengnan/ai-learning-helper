@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Box, Typography, Button, Card, CardContent, TextField, InputAdornment,
-  IconButton, Checkbox, Chip, Stack, Pagination, Alert, MenuItem, Select,
+  IconButton, Chip, Stack, Pagination, Alert, MenuItem, Select,
   CircularProgress, FormControl, InputLabel, type ChipProps,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import DeleteIcon from "@mui/icons-material/Delete";
-import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
 import SearchIcon from "@mui/icons-material/Search";
 import SourceIcon from "@mui/icons-material/Source";
 import { AnimatePresence, motion } from "framer-motion";
@@ -57,7 +56,6 @@ export default function QuestionBankView() {
   const [type, setType] = useState("");
   const [source, setSource] = useState("");
   const [sources, setSources] = useState<string[]>([]);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [preview, setPreview] = useState<Question | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -88,22 +86,11 @@ export default function QuestionBankView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]);
 
-  const toggle = (id: string) => setSelected((s) => {
-    const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n;
-  });
-
   async function reload() {
-    setSelected(new Set());
     await Promise.all([load(page, { q: q.trim(), type, source }), refreshSources()]);
   }
 
   async function removeOne(id: string) { await api.questions.remove(id); await reload(); }
-
-  async function removeSelected() {
-    if (selected.size === 0) return;
-    await api.questions.removeMany([...selected]);
-    await reload();
-  }
 
   async function upload(file: File) {
     setBusy(true); setError(null); setNotice(null);
@@ -112,7 +99,7 @@ export default function QuestionBankView() {
       setNotice(`导入完成：新增 ${r.imported} 道，跳过重复 ${r.skipped_duplicate} 道，无效 ${r.skipped_invalid} 道。`);
       setPage(1);
       await reload();
-    } catch (e: any) { setError(String(e?.message || e)); }
+    } catch (e: any) { setError(`导入失败：${String(e?.message || e)}`); }
     finally { setBusy(false); if (fileRef.current) fileRef.current.value = ""; }
   }
 
@@ -126,17 +113,12 @@ export default function QuestionBankView() {
           <Typography variant="h5" sx={{ fontWeight: 700 }}>题库</Typography>
           <Typography color="text.secondary" variant="body2">共 {total} 道题目</Typography>
         </Box>
-        <Stack direction="row" spacing={1}>
-          <Button variant="outlined" color="error" startIcon={<DeleteSweepIcon />}
-            onClick={removeSelected} disabled={selected.size === 0}>
-            批量删除（{selected.size}）
-          </Button>
-          <Button component="label" variant="contained" startIcon={<UploadFileIcon />} disabled={busy}>
-            导入题库
-            <input ref={fileRef} hidden type="file" accept=".txt,.md,.pdf,.docx"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); }} />
-          </Button>
-        </Stack>
+        <Button component="label" variant="contained" disabled={busy}
+          startIcon={busy ? <CircularProgress size={16} color="inherit" /> : <UploadFileIcon />}>
+          {busy ? "导入中…" : "导入题库"}
+          <input ref={fileRef} hidden type="file" accept=".txt,.md,.pdf,.docx"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); }} />
+        </Button>
       </Box>
 
       {/* 筛选工具条：题名 + 题型 + 来源 */}
@@ -177,30 +159,33 @@ export default function QuestionBankView() {
                 <Card variant="outlined"
                   sx={{ "&:hover": { borderColor: "primary.main", boxShadow: 2 } }}>
                   <CardContent sx={{ display: "flex", gap: 1, "&:last-child": { pb: 2 } }}>
-                    <Checkbox sx={{ p: 0, mt: 0.25 }} checked={selected.has(item.id)}
-                      onChange={() => toggle(item.id)} />
                     <Box sx={{ minWidth: 0, flex: 1, cursor: "pointer" }} onClick={() => setPreview(item)}>
                       {/* 题目：正文色加粗，作为主内容突出 */}
                       <Typography variant="body1" sx={{ fontWeight: 700, color: "text.primary", ...clampSx }}>
                         {item.stem}
                       </Typography>
-                      {/* 答案：浅色块 + 左侧彩条 + 「答案」彩色标签，与题目拉开区分度 */}
+                      {/* 答案：淡色块 + 左侧细条 + 「答案」彩色标签；正文最多 3 行超出省略 */}
                       <Box sx={{
                         mt: 0.75, px: 1, py: 0.5, borderRadius: 1,
-                        borderLeft: "3px solid", borderColor: "primary.main",
-                        bgcolor: (t) => alpha(t.palette.primary.main, 0.07),
+                        borderLeft: "2px solid", borderColor: "primary.light",
+                        bgcolor: (t) => alpha(t.palette.primary.main, 0.04),
                       }}>
-                        <Typography variant="body2" sx={{ color: "text.secondary", ...clampSx }}>
+                        <Typography variant="body2" sx={{
+                          color: "text.secondary",
+                          display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical",
+                          overflow: "hidden", wordBreak: "break-all",
+                        }}>
                           <Box component="span" sx={{ color: "primary.main", fontWeight: 600 }}>答案：</Box>
                           {answerText(item)}
                         </Typography>
                       </Box>
-                      {/* 底部：题型 + 来源，用分隔线与题目/答案隔开；题型在来源前 */}
+                      {/* 底部：题型 + 来源（均 outlined 轻量），分隔线与题目/答案隔开；题型在来源前 */}
                       <Stack direction="row" spacing={1} sx={{
                         mt: 1, pt: 1, alignItems: "center", flexWrap: "wrap",
                         borderTop: "1px dashed", borderColor: "divider",
                       }}>
-                        <Chip size="small" label={typeLabel(item.type)} color={typeColor(item.type)} />
+                        <Chip size="small" variant="outlined"
+                          label={typeLabel(item.type)} color={typeColor(item.type)} />
                         {item.source && (
                           <Chip size="small" variant="outlined" color="info"
                             icon={<SourceIcon />} label={item.source} />

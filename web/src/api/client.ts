@@ -179,6 +179,11 @@ export const api = {
   rename: (id: string, title: string): Promise<void> =>
     authFetch(`/api/conversations/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title }) }).then(() => undefined),
+  // 用第一句话自动命名对话（后端 LLM 提炼标题；失败兜底截断）
+  autotitle: (id: string, message: string): Promise<{ title: string | null }> =>
+    authFetch(`/api/conversations/${id}/autotitle`, { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }) }).then((r) => r.json()),
   messages: (id: string): Promise<{
     role: string; content: string;
     steps?: { tool: string; args: unknown; result?: string; is_error?: boolean }[] | null;
@@ -196,12 +201,13 @@ export const api = {
     authFetch(`/api/conversations/${id}`, { method: "DELETE" }).then(() => undefined),
   documents: {
     // 知识库以切分后的片段（chunk）为单元：每片一项，标注来源文件名
-    list: (page = 1, size = 8): Promise<{
+    list: (page = 1, size = 8, category = ""): Promise<{
       items: { id: string; filename: string; uploaded_at: string;
                category: string; excerpt: string }[];
       total: number;
     }> =>
-      authFetch(`/api/documents?page=${page}&size=${size}`).then((r) => r.json()),
+      authFetch(`/api/documents?page=${page}&size=${size}`
+        + (category ? `&category=${encodeURIComponent(category)}` : "")).then((r) => r.json()),
     search: (q: string): Promise<{
       id: string; filename: string; uploaded_at: string;
       category: string; excerpt: string; relevance: number;

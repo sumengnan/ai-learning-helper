@@ -54,13 +54,26 @@ class KnowledgeService:
                                chunk_ids, excerpt)
         return {"id": doc_id, "filename": title, "num_chunks": len(chunk_ids)}
 
-    def list_fragments(self, user_id: str, page: int = 1, size: int = 8) -> dict:
-        """分页列举该用户知识库的所有片段（chunk），每片一项。"""
+    def list_fragments(self, user_id: str, page: int = 1, size: int = 8,
+                       category: str | None = None) -> dict:
+        """分页列举该用户知识库的所有片段（chunk），每片一项。
+
+        category 给定时按分类筛选。分类由文件名后缀运行时推导、非独立存储列，
+        故走「取全量 → 过滤 → 应用层分页」（个人知识库规模可接受）。
+        """
         kind = self._collection
+        if not category:
+            offset = (max(1, page) - 1) * size
+            records = self._memory_store.list_by_owner(user_id, kind, limit=size, offset=offset)
+            items = [self._fragment(r.id, r.text, r.metadata, r.created_at) for r in records]
+            return {"items": items, "total": self._memory_store.count_by_owner(user_id, kind)}
+        records = self._memory_store.list_by_owner(user_id, kind)      # 全量
+        matched = [r for r in records
+                   if _category((r.metadata or {}).get("source", "")) == category]
         offset = (max(1, page) - 1) * size
-        records = self._memory_store.list_by_owner(user_id, kind, limit=size, offset=offset)
-        items = [self._fragment(r.id, r.text, r.metadata, r.created_at) for r in records]
-        return {"items": items, "total": self._memory_store.count_by_owner(user_id, kind)}
+        page_recs = matched[offset:offset + size]
+        items = [self._fragment(r.id, r.text, r.metadata, r.created_at) for r in page_recs]
+        return {"items": items, "total": len(matched)}
 
     async def search(self, user_id: str, query: str, k: int = 30) -> list[dict]:
         """片段级语义检索：每个命中 chunk 一项，带相关度。"""

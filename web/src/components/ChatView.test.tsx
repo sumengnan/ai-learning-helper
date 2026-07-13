@@ -15,7 +15,7 @@ vi.mock("../api/client", () => ({
   attachChat: vi.fn(async () => undefined),
   stopRun: vi.fn(async () => undefined),
   sendDecision: vi.fn(async () => undefined),
-  api: { messages: vi.fn(async () => []) },
+  api: { messages: vi.fn(async () => []), autotitle: vi.fn(async () => ({ title: null })) },
 }));
 
 describe("ChatView", () => {

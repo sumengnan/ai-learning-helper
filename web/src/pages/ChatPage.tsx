@@ -1,8 +1,6 @@
 // web/src/pages/ChatPage.tsx
 import { useEffect, useState } from "react";
-import {
-  Box, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Button,
-} from "@mui/material";
+import { Box } from "@mui/material";
 import type { Conversation, ChatMessage } from "../types";
 import { api } from "../api/client";
 import { ConversationList } from "../components/ConversationList";
@@ -14,8 +12,6 @@ export function ChatPage() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [initial, setInitial] = useState<ChatMessage[]>([]);
   const [autoSend, setAutoSend] = useState<string | null>(null);
-  const [newOpen, setNewOpen] = useState(false);
-  const [newName, setNewName] = useState("");
 
   const refresh = () => api.list().then(setConvs);
 
@@ -49,17 +45,11 @@ export function ChatPage() {
     })));
     setActiveId(id);
   }
-  // 新建对话：弹窗输入名称
-  function newConv() {
-    setNewName("");
-    setNewOpen(true);
-  }
-  async function createNamed() {
-    const title = newName.trim() || "新对话";
-    const { id } = await api.create(title);
+  // 新建对话：直接创建空对话，标题由发出的第一句话自动生成
+  async function newConv() {
+    const { id } = await api.create();
     await refresh();
     setAutoSend(null); setInitial([]); setActiveId(id);
-    setNewOpen(false);
   }
   async function ask(question: string) {
     const { id } = await api.create();
@@ -70,38 +60,17 @@ export function ChatPage() {
     await api.remove(id); await refresh();
     if (id === activeId) { setActiveId(null); setInitial([]); setAutoSend(null); }
   }
-  async function rename(id: string, title: string) {
-    await api.rename(id, title); await refresh();
-  }
 
   return (
     <Box sx={{ display: "flex", height: "100%" }}>
       <ConversationList items={convs} activeId={activeId} onSelect={select}
-        onNew={newConv} onDelete={del} onRename={rename} />
+        onNew={newConv} onDelete={del} />
       <Box sx={{ flex: 1, minWidth: 0, height: "100%", bgcolor: "background.paper" }}>
         {activeId
-          ? <ChatView key={activeId} conversationId={activeId} initial={initial} autoSend={autoSend} />
+          ? <ChatView key={activeId} conversationId={activeId} initial={initial}
+              autoSend={autoSend} onTitled={refresh} />
           : <EmptyHint onAsk={ask} />}
       </Box>
-
-      <Dialog open={newOpen} onClose={() => setNewOpen(false)}
-        slotProps={{ paper: { sx: { width: 360 } } }}>
-        <DialogTitle>新建对话</DialogTitle>
-        <DialogContent>
-          <TextField
-            autoFocus fullWidth variant="standard" value={newName}
-            placeholder="新对话"
-            onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") void createNamed(); }}
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setNewOpen(false)}>取消</Button>
-          <Button variant="contained" disableElevation onClick={() => void createNamed()}>
-            创建
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Box>
   );
 }

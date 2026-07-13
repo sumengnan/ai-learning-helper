@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Box, Typography, Button, Card, CardContent, TextField, InputAdornment,
   IconButton, CircularProgress, Alert, Chip, Stack, Pagination,
+  FormControl, InputLabel, Select, MenuItem,
 } from "@mui/material";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import DeleteIcon from "@mui/icons-material/Delete";
@@ -15,6 +16,7 @@ import { categoryColor, fmtDate, relevanceColor } from "./knowledgeUtils";
 import { KnowledgeDetailDrawer } from "./KnowledgeDetailDrawer";
 
 const PAGE_SIZE = 8;
+const CATEGORIES = ["PDF", "Word", "文本", "Markdown", "其他"];
 
 // 一张卡片 = 一个切分后的片段（chunk），filename 是其来源文件名
 type Fragment = {
@@ -26,17 +28,19 @@ export function KnowledgeView() {
   const [docs, setDocs] = useState<Fragment[]>([]);
   const [total, setTotal] = useState(0);
   const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("");                    // 类型筛选（空=全部）
   const [results, setResults] = useState<Fragment[] | null>(null); // 非 null = 搜索态
   const [page, setPage] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
 
   const searching = results !== null;
 
-  const loadList = useCallback((p: number) => {
-    return api.documents.list(p, PAGE_SIZE).then((r) => {
+  const loadList = useCallback((p: number, cat: string) => {
+    return api.documents.list(p, PAGE_SIZE, cat).then((r) => {
       setDocs(r.items);
       setTotal(r.total);
     });
@@ -61,18 +65,19 @@ export function KnowledgeView() {
     return () => clearTimeout(t);
   }, [query]);
 
-  // 列表态：翻页或回到列表态时按后端分页加载
+  // 列表态：翻页 / 回到列表态 / 切换类型时按后端分页加载
   useEffect(() => {
-    if (!searching) loadList(page).catch((e: any) => setError(String(e?.message || e)));
-  }, [page, searching, loadList]);
+    if (!searching) loadList(page, category).catch((e: any) => setError(String(e?.message || e)));
+  }, [page, searching, category, loadList]);
 
   async function upload(file: File) {
-    setBusy(true); setError(null);
+    setBusy(true); setError(null); setNotice(null);
     try {
-      await api.documents.upload(file);
+      const r = await api.documents.upload(file);
+      setNotice(`已导入《${r.filename}》，切分 ${r.num_chunks} 个片段`);
       setQuery(""); setResults(null);
-      if (page === 1) await loadList(1); else setPage(1);
-    } catch (e: any) { setError(String(e?.message || e)); }
+      if (page === 1) await loadList(1, category); else setPage(1);
+    } catch (e: any) { setError(`导入失败：${String(e?.message || e)}`); }
     finally { setBusy(false); if (fileRef.current) fileRef.current.value = ""; }
   }
 
@@ -82,14 +87,18 @@ export function KnowledgeView() {
       setResults((rs) => (rs ?? []).filter((d) => d.id !== id));
     } else {
       const next = docs.length === 1 && page > 1 ? page - 1 : page;
-      if (next !== page) setPage(next); else await loadList(page);
+      if (next !== page) setPage(next); else await loadList(page, category);
     }
   }
 
+  // 搜索态结果在前端按类型过滤（列表态过滤在后端）
+  const searchList = searching
+    ? (category ? (results ?? []).filter((d) => d.category === category) : (results ?? []))
+    : [];
   const shown = searching
-    ? (results ?? []).slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+    ? searchList.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
     : docs;
-  const totalCount = searching ? (results ?? []).length : total;
+  const totalCount = searching ? searchList.length : total;
   const pageCount = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   return (
@@ -100,8 +109,9 @@ export function KnowledgeView() {
           <Typography variant="h5" sx={{ fontWeight: 700 }}>知识库</Typography>
           <Typography color="text.secondary" variant="body2">共 {total} 篇文档片段</Typography>
         </Box>
-        <Button component="label" variant="contained" startIcon={<UploadFileIcon />} disabled={busy}>
-          导入文档
+        <Button component="label" variant="contained" disabled={busy}
+          startIcon={busy ? <CircularProgress size={16} color="inherit" /> : <UploadFileIcon />}>
+          {busy ? "导入中…" : "导入文档"}
           <input
             ref={fileRef} hidden type="file" accept=".pdf,.docx,.txt,.md"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); }}
@@ -109,21 +119,32 @@ export function KnowledgeView() {
         </Button>
       </Box>
 
-      {/* 搜索框 */}
-      <TextField
-        fullWidth size="small" placeholder="搜索文档…"
-        value={query} onChange={(e) => setQuery(e.target.value)}
-        slotProps={{
-          input: {
-            startAdornment: (
-              <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>
-            ),
-            endAdornment: busy ? <CircularProgress size={18} /> : undefined,
-          },
-        }}
-      />
+      {/* 搜索框 + 类型筛选 */}
+      <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+        <TextField
+          fullWidth size="small" placeholder="搜索文档…"
+          value={query} onChange={(e) => setQuery(e.target.value)}
+          slotProps={{
+            input: {
+              startAdornment: (
+                <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>
+              ),
+              endAdornment: busy ? <CircularProgress size={18} /> : undefined,
+            },
+          }}
+        />
+        <FormControl size="small" sx={{ minWidth: 140 }}>
+          <InputLabel>类型</InputLabel>
+          <Select label="类型" value={category}
+            onChange={(e) => { setCategory(e.target.value); setPage(1); }}>
+            <MenuItem value="">全部类型</MenuItem>
+            {CATEGORIES.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+          </Select>
+        </FormControl>
+      </Stack>
 
-      {error && <Alert severity="error">{error}</Alert>}
+      {notice && <Alert severity="success" onClose={() => setNotice(null)}>{notice}</Alert>}
+      {error && <Alert severity="error" onClose={() => setError(null)}>{error}</Alert>}
 
       {/* 文档卡片列 */}
       {shown.length === 0 ? (

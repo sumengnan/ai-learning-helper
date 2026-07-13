@@ -173,6 +173,12 @@ class ConversationStore:
         self._conn.commit()
         return cur.rowcount > 0
 
+    def get_title(self, user_id: str, conv_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT title FROM conversations WHERE id = ? AND user_id = ?",
+            (conv_id, user_id)).fetchone()
+        return row[0] if row is not None else None
+
     def add_run(self, conv_id: str, run_id: str) -> None:
         """登记一次 Agent 运行归属于哪个会话，供删除会话时清理其检查点/轨迹。"""
         self._conn.execute(

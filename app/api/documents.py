@@ -31,13 +31,13 @@ def make_documents_router(service, doc_store, config) -> APIRouter:
             raise HTTPException(status_code=400, detail="文档为空或无法提取文本")
 
     @router.get("/api/documents")
-    async def list_fragments(page: int = 1, size: int = 8,
+    async def list_fragments(page: int = 1, size: int = 8, category: str = "",
                              user_id: str = Depends(current_user)):
-        # 知识库以切分后的片段（chunk）为展示单元，每片一项
+        # 知识库以切分后的片段（chunk）为展示单元，每片一项；category 非空则按分类筛选
         if service is None:
             return {"items": [], "total": 0}
         size = max(1, min(100, size))
-        return service.list_fragments(user_id, max(1, page), size)
+        return service.list_fragments(user_id, max(1, page), size, category or None)
 
     @router.get("/api/documents/search")
     async def search_fragments(q: str = "", k: int = 30,

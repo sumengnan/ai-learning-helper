@@ -5,6 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..auth import current_user
+from ..completion import build_completer
+from ..titling import make_title
 
 
 class _Create(BaseModel):
@@ -15,8 +17,17 @@ class _Rename(BaseModel):
     title: str
 
 
-def make_conversations_router(store, harness=None, attachment_store=None) -> APIRouter:
+class _AutoTitle(BaseModel):
+    message: str
+
+
+def make_conversations_router(store, harness=None, attachment_store=None,
+                              config=None) -> APIRouter:
     router = APIRouter()
+    # 自动命名用的单发 completer（有 harness+config 才装配；缺失则接口降级为不改名）
+    title_completer = None
+    if harness is not None and config is not None:
+        title_completer = build_completer(harness.client, config.model)
 
     @router.get("/api/conversations")
     async def list_conversations(user_id: str = Depends(current_user)):
@@ -35,6 +46,19 @@ def make_conversations_router(store, harness=None, attachment_store=None) -> API
         if not store.rename(user_id, conv_id, title):
             raise HTTPException(status_code=404, detail="对话不存在")
         return {"ok": True}
+
+    @router.post("/api/conversations/{conv_id}/autotitle")
+    async def autotitle(conv_id: str, body: _AutoTitle,
+                        user_id: str = Depends(current_user)):
+        # 用第一句话自动命名。仅当标题仍为默认「新对话」时生成，避免覆盖。
+        if not store.exists(user_id, conv_id):
+            raise HTTPException(status_code=404, detail="对话不存在")
+        current = store.get_title(user_id, conv_id)
+        if title_completer is None or (current and current != "新对话"):
+            return {"title": current}
+        title = await make_title(title_completer, body.message)
+        store.rename(user_id, conv_id, title)
+        return {"title": title}
 
     @router.get("/api/conversations/{conv_id}/messages")
     async def get_messages(conv_id: str, user_id: str = Depends(current_user)):

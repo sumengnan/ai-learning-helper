@@ -8,6 +8,7 @@ vi.mock("../api/client", () => ({
     create: vi.fn().mockResolvedValue({ id: "new1" }),
     messages: vi.fn().mockResolvedValue([]),
     rename: vi.fn().mockResolvedValue(undefined),
+    autotitle: vi.fn().mockResolvedValue({ title: null }),
     remove: vi.fn().mockResolvedValue(undefined),
   },
   streamChat: vi.fn().mockResolvedValue(undefined),

@@ -2,13 +2,12 @@ import { Fragment, useState } from "react";
 import type { Conversation } from "../types";
 import {
   Box, Button, List, ListItemButton, ListItemText, ListSubheader, IconButton,
-  TextField, Typography, Dialog, DialogTitle, DialogContent, DialogContentText,
+  Typography, Dialog, DialogTitle, DialogContent, DialogContentText,
   DialogActions,
 } from "@mui/material";
 import { AnimatePresence, motion } from "framer-motion";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
-import EditIcon from "@mui/icons-material/Edit";
 import { chromeBg } from "./AppShell";
 import { listItemVariants } from "./motion";
 
@@ -41,20 +40,12 @@ function groupByTime(items: Conversation[]): { label: string; items: Conversatio
   return groups;
 }
 
-export function ConversationList({ items, activeId, onSelect, onNew, onDelete, onRename }: {
+export function ConversationList({ items, activeId, onSelect, onNew, onDelete }: {
   items: Conversation[]; activeId: string | null;
   onSelect: (id: string) => void; onNew: () => void; onDelete: (id: string) => void;
-  onRename: (id: string, title: string) => void;
 }) {
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null);
 
-  const startEdit = (c: Conversation) => { setEditingId(c.id); setDraft(c.title); };
-  const commit = () => {
-    if (editingId && draft.trim()) onRename(editingId, draft.trim());
-    setEditingId(null);
-  };
   const confirmDelete = () => {
     if (pendingDelete) onDelete(pendingDelete.id);
     setPendingDelete(null);
@@ -105,48 +96,25 @@ export function ConversationList({ items, activeId, onSelect, onNew, onDelete, o
               >
               <ListItemButton
                 selected={c.id === activeId}
-                onClick={() => (editingId === c.id ? undefined : onSelect(c.id))}
+                onClick={() => onSelect(c.id)}
                 sx={{
                   mx: 1, borderRadius: 1.5,
                   "&:hover .conv-actions": { opacity: 1 },
                 }}
               >
-                {editingId === c.id ? (
-                  <TextField
-                    autoFocus fullWidth size="small" variant="standard" value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
-                    onBlur={commit}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") commit();
-                      else if (e.key === "Escape") setEditingId(null);
-                    }}
-                  />
-                ) : (
-                  <>
-                    <ListItemText
-                      primary={c.title}
-                      slotProps={{ primary: { noWrap: true } }}
-                      onDoubleClick={() => startEdit(c)}
-                    />
-                    <Box className="conv-actions" sx={{ opacity: 0, display: "flex", ml: 0.5 }}>
-                      <IconButton
-                        size="small"
-                        onClick={(e) => { e.stopPropagation(); startEdit(c); }}
-                        aria-label="重命名对话"
-                      >
-                        <EditIcon fontSize="small" />
-                      </IconButton>
-                      <IconButton
-                        size="small"
-                        onClick={(e) => { e.stopPropagation(); setPendingDelete(c); }}
-                        aria-label="删除对话"
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
-                    </Box>
-                  </>
-                )}
+                <ListItemText
+                  primary={c.title}
+                  slotProps={{ primary: { noWrap: true } }}
+                />
+                <Box className="conv-actions" sx={{ opacity: 0, display: "flex", ml: 0.5 }}>
+                  <IconButton
+                    size="small"
+                    onClick={(e) => { e.stopPropagation(); setPendingDelete(c); }}
+                    aria-label="删除对话"
+                  >
+                    <DeleteOutlineIcon fontSize="small" />
+                  </IconButton>
+                </Box>
               </ListItemButton>
               </motion.div>
             ))}

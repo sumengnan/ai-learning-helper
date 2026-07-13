@@ -54,8 +54,9 @@ function TypingDots() {
 // 耗时格式化保持从此处导出（历史引用/测试用），实现移入 duration.ts
 export { fmtDuration } from "./duration";
 
-export function ChatView({ conversationId, initial, autoSend }:
-  { conversationId: string; initial: ChatMessage[]; autoSend?: string | null }) {
+export function ChatView({ conversationId, initial, autoSend, onTitled }:
+  { conversationId: string; initial: ChatMessage[]; autoSend?: string | null;
+    onTitled?: () => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initial);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -220,8 +221,13 @@ export function ChatView({ conversationId, initial, autoSend }:
       attachments: attachments.length ? attachments : undefined };
     const assistant: ChatMessage = { role: "assistant", content: "", steps: [], status: "streaming",
       startedAt: Date.now() };
+    // 新对话首条消息：用它自动命名（并行、不阻塞回复；失败不影响聊天）
+    const isFirst = messages.length === 0;
     stickRef.current = true;   // 发送即恢复跟随：即使之前上滑看历史，也自动回到底部
     setMessages((m) => [...m, userMsg, assistant]);
+    if (isFirst && msg) {
+      void api.autotitle(conversationId, msg).then(() => onTitled?.()).catch(() => {});
+    }
     let outcome: "done" | "error" | "stopped" | null = "done";
     userStoppedRef.current = false;
     setInput(""); setPending([]); setBusy(true); busyRef.current = true;
