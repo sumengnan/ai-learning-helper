@@ -95,7 +95,8 @@ def build_harness(config) -> Harness:
             reranker = HttpReranker(
                 config.rerank_base_url,
                 config.rerank_api_key or config.embedding_api_key or config.api_key,
-                config.rerank_model, timeout=config.rerank_timeout,
+                config.rerank_model, style=config.rerank_style,
+                timeout=config.rerank_timeout,
                 top_n=config.rerank_top_n or None)
         _rcfg = RetrievalConfig(
             candidate_pool=config.retrieval_candidate_pool,

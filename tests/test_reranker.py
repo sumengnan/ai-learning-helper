@@ -120,3 +120,41 @@ async def test_request_payload_and_url(fake_httpx):
     assert call["json"]["documents"] == ["a", "b"]
     assert call["json"]["top_n"] == 1
     assert call["headers"]["Authorization"] == "Bearer sk-1"
+
+
+# ---- DashScope / 千问 qwen rerank 格式 ----
+
+async def test_dashscope_reorders_by_score(fake_httpx):
+    # 千问响应：结果在 output.results 里
+    fake_httpx.data = {"output": {"results": [
+        {"index": 2, "relevance_score": 0.9},
+        {"index": 0, "relevance_score": 0.5},
+        {"index": 1, "relevance_score": 0.1}]}}
+    r = HttpReranker(
+        "https://ws-x.cn-beijing.maas.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank",
+        "sk-1", "qwen3-rerank", style="dashscope")
+    out = await r.rerank("q", [_cand("a"), _cand("b"), _cand("c")])
+    assert _texts(out) == ["c", "a", "b"]
+
+
+async def test_dashscope_request_shape(fake_httpx):
+    fake_httpx.data = {"output": {"results": [{"index": 0, "relevance_score": 1.0}]}}
+    url = "https://ws-x.cn-beijing.maas.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
+    r = HttpReranker(url, "sk-1", "qwen3-rerank", style="dashscope", top_n=2)
+    await r.rerank("什么是文本排序模型", [_cand("a"), _cand("b"), _cand("c")])
+    call = fake_httpx.calls[-1]
+    assert call["url"] == url                                    # 完整 endpoint，不追加 /rerank
+    assert call["json"]["model"] == "qwen3-rerank"
+    assert call["json"]["input"] == {
+        "query": "什么是文本排序模型", "documents": ["a", "b", "c"]}
+    assert call["json"]["parameters"]["top_n"] == 2              # min(top_n, 候选数)
+    assert call["json"]["parameters"]["return_documents"] is False
+    assert call["headers"]["Authorization"] == "Bearer sk-1"
+
+
+async def test_dashscope_falls_back_on_error(fake_httpx):
+    fake_httpx.exc = httpx.ConnectError("boom")
+    r = HttpReranker("https://ws-x.maas.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank",
+                     "sk-1", "qwen3-rerank", style="dashscope")
+    out = await r.rerank("q", [_cand("a"), _cand("b"), _cand("c")])
+    assert _texts(out) == ["a", "b", "c"]

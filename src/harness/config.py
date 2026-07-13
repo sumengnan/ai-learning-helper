@@ -55,9 +55,10 @@ class HarnessConfig(BaseSettings):
     # 全局作用于所有检索路径（知识库/题库/对话记忆/search_memory）。端点须为
     # OpenAI/Cohere/Jina 兼容的 POST {base}/rerank。失败自动降级为原序，不打断检索。
     enable_rerank: bool = False
-    rerank_base_url: str = ""             # 如 https://api.siliconflow.cn/v1
+    rerank_style: str = "openai"         # openai（Cohere/Jina/SiliconFlow 兼容）| dashscope（千问 qwen）
+    rerank_base_url: str = ""             # openai 风格填到 /v1；dashscope 填完整 endpoint
     rerank_api_key: str = ""             # 空则回退 embedding_api_key → api_key
-    rerank_model: str = ""               # 如 BAAI/bge-reranker-v2-m3
+    rerank_model: str = ""               # 如 BAAI/bge-reranker-v2-m3 或 qwen3-rerank
     rerank_timeout: float = 30.0
     rerank_top_n: int = 0                # 0=送全部候选精排；>0 只精排前 N（省调用成本）
     # 容器沙箱
