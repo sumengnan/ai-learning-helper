@@ -102,6 +102,20 @@ describe("ChatView", () => {
     expect((screen.getByLabelText("考试答错自动保存错题集") as HTMLInputElement).checked).toBe(false);
   });
 
+  it("空产出（仅 RunFinished、无 TextDelta）→ 标失败并提示，不显示「已完成」", async () => {
+    // 模型空回复：流正常结束但没有任何正文。前端须视为失败，避免"…"+「已完成」的误导
+    vi.mocked(streamChat).mockImplementationOnce(
+      async (_cid: string, _msg: string, onEvent: (e: any) => void) => {
+        onEvent({ type: "RunFinished", data: {} });
+      });
+    render(<ChatView conversationId="c1" initial={[]} />);
+    fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "hi" } });
+    fireEvent.click(screen.getByText("发送"));
+    await waitFor(() => expect(screen.getByText("（本轮未产出内容，请重试）")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("回复失败")).toBeTruthy());
+    expect(screen.queryByText("已完成")).toBeNull();
+  });
+
   it("危险命令 ApprovalRequired → 弹窗渲染，批准后回传 sendDecision", async () => {
     vi.mocked(streamChat).mockImplementationOnce(
       async (_cid: string, _msg: string, onEvent: (e: any) => void) => {

@@ -149,3 +149,20 @@ def test_gate_off_passthrough_streams_live(make_mock, text_turn):
     assert _verify_progress(events) == []               # 无校验进度
     assert _final(events) == "直通答案"
     assert store.messages(cid)[-1].content == "直通答案"
+
+
+def test_gate_off_empty_completion_surfaces_error(make_mock):
+    """直通模式下模型空产出（无文本/无工具调用/无异常）：必须给在途客户端补发可见 RunError，
+    并落库为 error——否则前端会静默显示"…"+"已完成"，把失败伪装成成功。"""
+    from harness.llm.base import StreamChunk
+    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,
+                    enable_answer_gate=False)
+    store = ConversationStore(":memory:")
+    empty_turn = [StreamChunk(type="done")]             # 只有 done：既无 text 也无 tool_call
+    app = create_app(config=cfg, harness=_harness(make_mock, [empty_turn]),
+                     store=store, doc_store=DocumentStore(":memory:"))
+    client = TestClient(app)
+    h = _auth(client)
+    cid, events = _run_chat(client, h, "问")
+    assert any(e["type"] == "RunError" for e in events), "空产出应补发 RunError 让前端标红"
+    assert store.ui_messages(cid)[-1]["status"] == "error"   # 落库为 error 而非 done

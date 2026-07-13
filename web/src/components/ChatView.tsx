@@ -246,7 +246,14 @@ export function ChatView({ conversationId, initial, autoSend }:
       }
       const status = outcome;   // 早返回后已排除 null
       upd((a) => {   // 收尾状态：完成/失败/已停止；冻结本轮耗时
-        a.status = status;
+        // 空产出兜底：流正常结束(done)却没有任何正文 → 视为失败并给出提示，
+        // 避免把"…"+「已完成」这种静默失败伪装成成功（后端通常已补发 RunError，此为双保险）。
+        if (status === "done" && !a.content.trim()) {
+          a.status = "error";
+          a.content = "（本轮未产出内容，请重试）";
+        } else {
+          a.status = status;
+        }
         if (a.startedAt != null && a.elapsedMs == null) a.elapsedMs = Date.now() - a.startedAt;
       });
     }
@@ -303,7 +310,13 @@ export function ChatView({ conversationId, initial, autoSend }:
       }
       const status = outcome;   // 早返回后已排除 null
       if (!reloaded) upd((a) => {
-        a.status = status;
+        // 空产出兜底（同 send）：接回正常结束却无正文 → 视为失败，避免"…"+「已完成」误导
+        if (status === "done" && !a.content.trim()) {
+          a.status = "error";
+          a.content = "（本轮未产出内容，请重试）";
+        } else {
+          a.status = status;
+        }
         if (a.startedAt != null && a.elapsedMs == null) a.elapsedMs = Date.now() - a.startedAt;
       });
     }
