@@ -5,6 +5,7 @@ import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from .query_planner import QueryPlanner
 from .record import MemoryFilter, MemoryRecord
 
 
@@ -69,6 +70,12 @@ class RetrievalConfig:
     use_mmr: bool = True
     mmr_lambda: float = 0.7
     rrf_k: int = 60
+    # 查询期召回增强（默认全关=零行为变更）；均需注入 complete，见 QueryPlanner
+    use_entity_recall: bool = False
+    use_multi_query: bool = False
+    use_hyde: bool = False
+    multi_query_n: int = 3
+    query_plan_timeout_s: float = 2.0
 
 
 def _age_days(created_at_iso: str, now: datetime) -> float:
@@ -94,33 +101,68 @@ class Retriever:
     """在 MemoryBackend 之上编排：向量+关键词召回 → RRF → 加权 → MMR → Reranker → top-k。"""
 
     def __init__(self, backend, embedder, reranker, config: RetrievalConfig,
-                 *, now_fn=None) -> None:
+                 *, complete=None, now_fn=None) -> None:
         self._backend = backend
         self._embedder = embedder
         self._reranker = reranker
         self._config = config
+        self._complete = complete   # 查询期 LLM；None 时三路增强自动跳过
         self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
 
     async def retrieve(self, query_text: str, filters: MemoryFilter, k: int,
                        *, config: RetrievalConfig | None = None) -> list[ScoredHit]:
         cfg = config or self._config
         pool = max(k, cfg.candidate_pool)
-        query_vec = (await self._embedder.embed([query_text]))[0]
-        vec_hits = self._backend.vector_search(
-            query_vec, filters=filters, k=pool)
-        kw_hits = (self._backend.keyword_search(
-            query_text, filters=filters, k=pool) if cfg.use_keyword else [])
+
+        # 查询规划：一次 LLM 得多查询改写/HyDE 假设文档/实体键（未启用或失败→空规划降级）
+        planner = QueryPlanner(
+            self._complete, multi_query=cfg.use_multi_query,
+            multi_query_n=cfg.multi_query_n, hyde=cfg.use_hyde,
+            entity=cfg.use_entity_recall, timeout_s=cfg.query_plan_timeout_s)
+        plan = await planner.plan(query_text)
+
+        # 批量 embedding：原查询 + 各改写 + HyDE 假设文档，一次算完
+        embed_texts = [query_text, *plan.variants]
+        hyde_idx = -1
+        if plan.hypothetical:
+            hyde_idx = len(embed_texts)
+            embed_texts.append(plan.hypothetical)
+        vecs = await self._embedder.embed(embed_texts)
 
         records: dict[str, MemoryRecord] = {}
-        for h in vec_hits:
-            records[h.record.id] = h.record
-        for h in kw_hits:
-            records.setdefault(h.record.id, h.record)
+        ranked_lists: list[list[str]] = []
+
+        def _absorb(hits) -> None:
+            ids: list[str] = []
+            for h in hits:
+                records.setdefault(h.record.id, h.record)
+                ids.append(h.record.id)
+            ranked_lists.append(ids)
+
+        _absorb(self._backend.vector_search(vecs[0], filters=filters, k=pool))
+        if cfg.use_keyword:
+            _absorb(self._backend.keyword_search(query_text, filters=filters, k=pool))
+        # 多查询：每条改写的向量各一路
+        for i in range(len(plan.variants)):
+            _absorb(self._backend.vector_search(vecs[1 + i], filters=filters, k=pool))
+        # HyDE：假设文档向量一路
+        if hyde_idx >= 0:
+            _absorb(self._backend.vector_search(vecs[hyde_idx], filters=filters, k=pool))
+        # 实体键：精确取该实体的记忆（需 kind；list_by_entity 返回裸记录，按 recency 排一路）
+        if plan.entity_keys and filters.kind:
+            for key in plan.entity_keys:
+                recs = sorted(self._backend.list_by_entity(filters.owner_id, filters.kind, key),
+                              key=lambda r: r.created_at, reverse=True)
+                ids = []
+                for r in recs:
+                    records.setdefault(r.id, r)
+                    ids.append(r.id)
+                ranked_lists.append(ids)
+
         if not records:
             return []
 
-        rel = rrf_fuse([[h.record.id for h in vec_hits],
-                        [h.record.id for h in kw_hits]], cfg.rrf_k)
+        rel = rrf_fuse(ranked_lists, cfg.rrf_k)
         rel_norm = _minmax(rel)
         now = self._now_fn()
         scored: dict[str, tuple[float, dict]] = {}

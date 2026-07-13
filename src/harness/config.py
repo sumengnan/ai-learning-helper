@@ -51,6 +51,13 @@ class HarnessConfig(BaseSettings):
     retrieval_use_mmr: bool = True
     retrieval_mmr_lambda: float = 0.7
     retrieval_rrf_k: int = 60
+    # 查询期召回增强（默认全关=零行为变更）；开启需 embedding 已配（有 memory）。
+    # 三路各加一路召回并入 RRF，共享一次查询期 LLM 规划（QueryPlanner），带超时降级。
+    retrieval_use_entity_recall: bool = False   # LLM 从 query 抽实体键 → list_by_entity 精确取
+    retrieval_use_multi_query: bool = False      # LLM 改写多条等价查询各跑向量召回
+    retrieval_use_hyde: bool = False             # LLM 生成假设答案文档 → 其向量召回
+    retrieval_multi_query_n: int = 3
+    retrieval_query_plan_timeout_s: float = 2.0  # 规划 LLM 超时（首字关键路径，超时即降级）
     # 精排（rerank）：默认关=维持现状（NoOpReranker）。开启且配了端点+模型才生效，
     # 全局作用于所有检索路径（知识库/题库/对话记忆/search_memory）。端点须为
     # OpenAI/Cohere/Jina 兼容的 POST {base}/rerank。失败自动降级为原序，不打断检索。

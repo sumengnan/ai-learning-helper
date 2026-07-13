@@ -107,8 +107,16 @@ def build_harness(config) -> Harness:
             use_keyword=config.retrieval_use_keyword,
             use_mmr=config.retrieval_use_mmr,
             mmr_lambda=config.retrieval_mmr_lambda,
-            rrf_k=config.retrieval_rrf_k)
-        _retriever = Retriever(mem_store, embedder, reranker, _rcfg)
+            rrf_k=config.retrieval_rrf_k,
+            use_entity_recall=config.retrieval_use_entity_recall,
+            use_multi_query=config.retrieval_use_multi_query,
+            use_hyde=config.retrieval_use_hyde,
+            multi_query_n=config.retrieval_multi_query_n,
+            query_plan_timeout_s=config.retrieval_query_plan_timeout_s)
+        from app.completion import build_completer
+        # 查询期召回增强的 LLM（三路默认关时不会被调用；开启才在检索时用）
+        _retriever = Retriever(mem_store, embedder, reranker, _rcfg,
+                               complete=build_completer(client, config.model))
         mem = Memory(mem_store, embedder, config.chunk_size, config.chunk_overlap,
                      retriever=_retriever)
         memory = mem

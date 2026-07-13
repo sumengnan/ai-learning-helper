@@ -112,3 +112,99 @@ async def test_k_larger_than_pool_not_truncated(mock_embedder):
     hits = await _retriever(b, emb, cfg).retrieve(
         "item number", MemoryFilter(owner_id="u1"), k=25)
     assert len(hits) == 25          # 不被 candidate_pool=20 截断
+
+
+# ---- 查询期召回增强：实体键 / 多查询 / HyDE ----
+
+class _Comp:
+    """假 LLM completer，返回预设的规划 JSON。"""
+    def __init__(self, resp):
+        self.resp = resp
+
+    async def __call__(self, system, user):
+        return self.resp
+
+
+async def test_entity_recall_surfaces_record_filtered_out_of_base(mock_embedder):
+    # b 是 episodic，被 mem_type=semantic 过滤挡在基础召回之外；实体键路（list_by_entity
+    # 不认 mem_type 过滤）应把它捞回来。
+    emb = mock_embedder(dimension=64)
+    backend = SqliteVecBackend(":memory:", dimension=64)
+    va = (await emb.embed(["语义A"]))[0]
+    vb = (await emb.embed(["情节B"]))[0]
+    backend.upsert([
+        MemoryRecord(owner_id="u1", kind="k", mem_type=MemType.SEMANTIC,
+                     text="语义A", embedding=va, id="a"),
+        MemoryRecord(owner_id="u1", kind="k", mem_type=MemType.EPISODIC,
+                     text="情节B", embedding=vb, id="b", entity_key="user.pref.x"),
+    ])
+    filt = MemoryFilter(owner_id="u1", kind="k", mem_type="semantic")
+    base = RetrievalConfig(use_keyword=False, use_mmr=False)
+    off = await _retriever(backend, emb, base).retrieve("q", filt, k=5)
+    assert "b" not in {h.record.id for h in off}          # 基础召回看不到 episodic 的 b
+
+    on_cfg = RetrievalConfig(use_keyword=False, use_mmr=False, use_entity_recall=True)
+    r_on = Retriever(backend, emb, NoOpReranker(), on_cfg,
+                     complete=_Comp('{"entity_keys":["user.pref.x"]}'), now_fn=lambda: _NOW)
+    on = await r_on.retrieve("q", filt, k=5)
+    assert "b" in {h.record.id for h in on}               # 实体键路把 b 召回
+
+
+async def test_multi_query_recalls_doc_missed_by_base(mock_embedder):
+    # candidate_pool=1：基础只召回离原查询最近的 a；改写命中 b。b importance 更高，k=1 时靠前。
+    emb = mock_embedder(dimension=64)
+    backend = SqliteVecBackend(":memory:", dimension=64)
+    va = (await emb.embed(["原始问题"]))[0]
+    vb = (await emb.embed(["改写命中"]))[0]
+    backend.upsert([
+        MemoryRecord(owner_id="u1", kind="k", mem_type=MemType.SEMANTIC,
+                     text="原始问题", embedding=va, id="a", importance=0.1),
+        MemoryRecord(owner_id="u1", kind="k", mem_type=MemType.SEMANTIC,
+                     text="改写命中", embedding=vb, id="b", importance=0.9),
+    ])
+    filt = MemoryFilter(owner_id="u1", kind="k")
+    base = RetrievalConfig(candidate_pool=1, use_keyword=False, use_mmr=False)
+    off = await _retriever(backend, emb, base).retrieve("原始问题", filt, k=1)
+    assert {h.record.id for h in off} == {"a"}            # 基础 pool=1 只召回 a
+
+    on_cfg = RetrievalConfig(candidate_pool=1, use_keyword=False, use_mmr=False,
+                             use_multi_query=True)
+    r_on = Retriever(backend, emb, NoOpReranker(), on_cfg,
+                     complete=_Comp('{"variants":["改写命中"]}'), now_fn=lambda: _NOW)
+    on = await r_on.retrieve("原始问题", filt, k=1)
+    assert "b" in {h.record.id for h in on}               # 改写把 b 召回并靠前
+
+
+async def test_hyde_recalls_doc_missed_by_base(mock_embedder):
+    emb = mock_embedder(dimension=64)
+    backend = SqliteVecBackend(":memory:", dimension=64)
+    va = (await emb.embed(["原始问题"]))[0]
+    vb = (await emb.embed(["假设答案"]))[0]
+    backend.upsert([
+        MemoryRecord(owner_id="u1", kind="k", mem_type=MemType.SEMANTIC,
+                     text="原始问题", embedding=va, id="a", importance=0.1),
+        MemoryRecord(owner_id="u1", kind="k", mem_type=MemType.SEMANTIC,
+                     text="假设答案", embedding=vb, id="b", importance=0.9),
+    ])
+    filt = MemoryFilter(owner_id="u1", kind="k")
+    on_cfg = RetrievalConfig(candidate_pool=1, use_keyword=False, use_mmr=False, use_hyde=True)
+    r_on = Retriever(backend, emb, NoOpReranker(), on_cfg,
+                     complete=_Comp('{"hypothetical":"假设答案"}'), now_fn=lambda: _NOW)
+    on = await r_on.retrieve("原始问题", filt, k=1)
+    assert "b" in {h.record.id for h in on}
+
+
+async def test_complete_none_degrades_to_base(mock_embedder):
+    # 开关全开但 complete=None → planner 不启用 → 与基础检索结果完全一致（零行为变更）
+    emb = mock_embedder(dimension=64)
+    backend = SqliteVecBackend(":memory:", dimension=64)
+    for rid, text in [("a", "cat"), ("b", "dog"), ("c", "fish")]:
+        v = (await emb.embed([text]))[0]
+        backend.upsert([_rec(text, v, rid)])
+    filt = MemoryFilter(owner_id="u1", kind="k")
+    enh = RetrievalConfig(use_mmr=False, use_entity_recall=True,
+                          use_multi_query=True, use_hyde=True)
+    base = RetrievalConfig(use_mmr=False)
+    got = [h.record.id for h in await _retriever(backend, emb, enh).retrieve("cat", filt, k=5)]
+    exp = [h.record.id for h in await _retriever(backend, emb, base).retrieve("cat", filt, k=5)]
+    assert got == exp
