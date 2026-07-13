@@ -160,3 +160,13 @@ async def test_generate_questions_quiz_error():
     tool = GenerateQuestionsTool(_StubQuiz(exc=QuizError("bad")), "u1")
     out = await tool.run(tool.Params(topic="x"))
     assert "失败" in out
+
+
+async def test_add_questions_dedups_against_bank():
+    qs = QuestionStore(":memory:")
+    qs.create("u1", {"type": "single", "stem": "重复题", "options": ["A", "B"], "answer": 0})
+    tool = AddQuestionsTool(qs, "u1")
+    dup = {"type": "single", "stem": "重复题", "options": ["A", "B"], "answer": 0}
+    fresh = {"type": "single", "stem": "新题", "options": ["A", "B"], "answer": 1}
+    out = await tool.run(tool.Params(questions=[dup, fresh]))
+    assert "1" in out and len(qs.list("u1")) == 2      # 只新增「新题」
