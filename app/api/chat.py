@@ -300,6 +300,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         "（本轮未能完成，请重试）" if collect["error"] else "（本轮未完成）")
                     errored = collect["final"] is None
                     delivered_sources = source_sink.snapshot()
+                    # 空产出兜底：模型既无文本、也无工具调用、又未抛错时，loop 只静默 yield 一个
+                    # 空 RunFinished，在途客户端收不到任何可见信号 → 前端误显示"…"+"已完成"。
+                    # 这里补发一条 RunError 让前端标红并说明本轮实际未成功；collect["error"] 非空
+                    # 时 RunError 已随直通转发过，无需重复。
+                    if errored and collect["error"] is None:
+                        yield RunError(error="模型未返回任何内容（可能触发内容策略或上游限流），请重试")
                 else:
                     # 交付门：缓冲 → 校验 → 不过则回灌重答，最多 answer_gate_max_retries 次
                     corrective = None
