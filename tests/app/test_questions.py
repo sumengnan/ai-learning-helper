@@ -48,3 +48,21 @@ def test_sample_count_and_type_filter():
     assert len(s.sample("u1", 3, None)) == 3
     only_tf = s.sample("u1", 10, ["truefalse"])
     assert len(only_tf) == 5 and all(q["type"] == "truefalse" for q in only_tf)
+
+
+def test_create_deduped_skips_same_type_and_stem():
+    s = QuestionStore(":memory:")
+    a = s.create_deduped("u1", _q(stem="1+1=?"))
+    dup = s.create_deduped("u1", _q(stem="  1+1=?  "))   # 首尾空白等价
+    assert a is not None and dup is None
+    assert len(s.list("u1")) == 1
+
+
+def test_create_deduped_allows_diff_type_or_user():
+    s = QuestionStore(":memory:")
+    s.create_deduped("u1", _q(type="single", stem="同题干"))
+    diff_type = s.create_deduped("u1", _q(type="short", options=None,
+                                          answer="x", stem="同题干"))
+    other_user = s.create_deduped("u2", _q(type="single", stem="同题干"))
+    assert diff_type is not None and other_user is not None
+    assert len(s.list("u1")) == 2 and len(s.list("u2")) == 1

@@ -36,6 +36,15 @@ class QuestionStore:
         self._db.commit()
         return qid
 
+    def create_deduped(self, user_id: str, q: dict) -> str | None:
+        """按 (type, TRIM(stem)) 判重：已存在同题型同题干则返回 None 不插入，否则新建返回 id。"""
+        row = self._db.execute(
+            "SELECT id FROM questions WHERE user_id=? AND type=? AND TRIM(stem)=TRIM(?)",
+            (user_id, q["type"], q["stem"])).fetchone()
+        if row is not None:
+            return None
+        return self.create(user_id, q)
+
     def _row(self, r) -> dict:
         return {"id": r[0], "type": r[1], "stem": r[2],
                 "options": json.loads(r[3]), "answer": json.loads(r[4]),
