@@ -356,10 +356,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     if not errored:
                         delivered = collect["final"]
                     elif collect["error"] is not None:
-                        # loop 抛错：在途已转发原始 RunError 供排查，但落库用干净提示，
-                        # 避免把原始错误文案泄漏进持久化消息（见
+                        # loop 抛错：保留已流式输出的部分（若有），把干净提示拼在其后——
+                        # 不丢用户已看到的内容，也不泄漏原始错误文案（见
                         # test_chat_run_error_persists_clean_message）。
-                        delivered = "（本轮未能完成，请重试）"
+                        partial = "".join(parts).strip()
+                        hint = "（本轮未能完成，请重试）"
+                        delivered = f"{partial}\n\n{hint}" if partial else hint
                     else:
                         # 空产出（无文本/无工具调用/未抛错）：loop 只静默 yield 一个空 RunFinished，
                         # 在途客户端收不到任何可见信号 → 前端误显示"…"+"已完成"。此处的错误文案是

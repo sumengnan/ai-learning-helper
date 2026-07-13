@@ -13,6 +13,7 @@ from harness.tools.base import ToolRegistry
 from harness.tools.builtins.calculator import CalculatorTool
 from harness.persistence.checkpoint import CheckpointStore
 from harness.persistence.trajectory import TrajectoryStore, TrajectorySink
+from harness.llm.base import StreamChunk
 
 
 @pytest.fixture(autouse=True)
@@ -301,3 +302,31 @@ def test_chat_run_error_persists_clean_message():
         types = [e["type"] for e in _sse_events(resp)]
     assert "RunError" in types
     assert [m.content for m in store.messages(cid)] == ["hi", "（本轮未能完成，请重试）"]
+
+
+class _PartialThenBoomClient:
+    """先流式输出一段文本，再抛错——模拟「输出到一半失败」。"""
+
+    async def stream(self, messages, tools):
+        yield StreamChunk(type="text", text="已经生成的部分答案")
+        raise RuntimeError("boom")
+
+
+def test_chat_run_error_keeps_partial_output():
+    # 出错时已流式输出的内容应保留，干净提示拼在其后（不只显示提示）
+    reg = ToolRegistry(); reg.register(CalculatorTool())
+    traj = TrajectoryStore(":memory:")
+    harness = Harness(client=_PartialThenBoomClient(), registry=reg,
+                      checkpoint_store=CheckpointStore(":memory:"),
+                      trajectory_store=traj, sink=TrajectorySink(traj), system_prompt="你是助手")
+    store = ConversationStore(":memory:")
+    app = create_app(config=_cfg(), harness=harness, store=store,
+                     doc_store=DocumentStore(":memory:"))
+    client = TestClient(app)
+    h = _auth_headers(client)
+    cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
+    with client.stream("POST", "/api/chat",
+                       json={"conversation_id": cid, "message": "hi"}, headers=h) as resp:
+        _sse_events(resp)
+    msgs = [m.content for m in store.messages(cid)]
+    assert msgs == ["hi", "已经生成的部分答案\n\n（本轮未能完成，请重试）"]
