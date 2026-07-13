@@ -128,7 +128,7 @@ function BrandPanel() {
       display: { xs: "none", md: "flex" }, position: "relative", overflow: "hidden",
       flex: "0 0 44%", flexDirection: "column", justifyContent: "space-between",
       p: 5, color: "#fff",
-      background: "linear-gradient(150deg, #4f46e5 0%, #7c3aed 55%, #9333ea 100%)",
+      background: "linear-gradient(150deg, #818cf8 0%, #a78bfa 55%, #c084fc 100%)",
     }}>
       {/* 装饰光斑 */}
       <Box sx={{

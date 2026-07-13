@@ -164,5 +164,19 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
             await mcp_manager.close()
 
     if os.path.isdir("web/dist"):  # prod：托管前端静态产物
-        app.mount("/", StaticFiles(directory="web/dist", html=True), name="static")
+        from fastapi.responses import FileResponse
+
+        # 静态资源（js/css/favicon 等）仍由 StaticFiles 提供。
+        app.mount("/assets", StaticFiles(directory="web/dist/assets"), name="assets")
+
+        # SPA 兜底：前端使用 BrowserRouter（history 模式），刷新 /login 等子路径时
+        # 需返回入口 index.html 交给前端路由，否则会命中 404（{"detail":"Not Found"}）。
+        # API 路由已在前面 include_router 注册，优先于此 catch-all 匹配。
+        @app.get("/{full_path:path}")
+        async def spa_fallback(full_path: str):  # noqa: ANN202
+            candidate = os.path.join("web/dist", full_path)
+            if full_path and os.path.isfile(candidate):
+                return FileResponse(candidate)
+            return FileResponse("web/dist/index.html")
+
     return app
