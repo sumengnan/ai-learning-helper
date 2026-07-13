@@ -27,6 +27,7 @@ from .conversations import ConversationStore
 from .db import migrate, open_db
 from .documents import DocumentStore
 from .knowledge import KnowledgeService
+from .question_import import QuestionImporter
 from .questions import QuestionStore
 from .quiz_service import QuizService
 from .wrong_answers import WrongAnswerStore
@@ -37,7 +38,7 @@ _DEFAULT_SECRET = "dev-insecure-secret-change-me"
 def create_app(config: AppConfig | None = None, harness=None, store=None, doc_store=None,
                question_store=None, exam_store=None, wrong_store=None,
                quiz_service=None, user_store=None, verifier=None,
-               attachment_store=None, stats_service=None) -> FastAPI:
+               attachment_store=None, stats_service=None, question_importer=None) -> FastAPI:
     # exam_store 参数保留仅为向后兼容（模拟考试已迁入聊天工具，不再有独立考试端点）
     config = config or AppConfig()
     harness = harness if harness is not None else build_harness(config)
@@ -66,6 +67,9 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
         quiz_service = QuizService(harness.memory, question_store, completer,
                                    retrieve_k=config.quiz_retrieve_k,
                                    short_pass_score=config.short_pass_score)
+    if question_importer is None:
+        question_importer = QuestionImporter(
+            build_completer(harness.client, config.model), question_store)
 
     user_store = user_store if user_store is not None else UserStore(conn=app_conn)
     secret = os.environ.get("AUTH_SECRET") or config.auth_secret
@@ -116,7 +120,7 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
     if dstore is not None:
         app.include_router(make_downloads_router(dstore))
 
-    app.include_router(make_questions_router(quiz_service, question_store, config))
+    app.include_router(make_questions_router(question_store, config, question_importer))
     app.include_router(make_wrong_answers_router(wrong_store))
 
     # 首页概览统计：聚合 harness 运行轨迹 + 应用业务数据。用独立只读连接（跨线程安全），

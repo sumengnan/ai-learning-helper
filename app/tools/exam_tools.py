@@ -84,14 +84,16 @@ class AddQuestionsTool(Tool):
 
     async def run(self, params: "AddQuestionsTool.Params") -> str:
         valid = [q for q in params.questions if _valid(q, ALL_TYPES)]
+        added = 0
         for q in valid:
             q.setdefault("source", "聊天整理")
             q["explanation"] = q.get("explanation", "")
-            self._store.create(self._uid, q)
-        skipped = len(params.questions) - len(valid)
-        if not valid:
-            return f"没有合法题目入库（跳过 {skipped} 道无效题）。请检查题目格式。"
-        return f"已入库 {len(valid)} 道，跳过 {skipped} 道无效。"
+            if self._store.create_deduped(self._uid, q) is not None:
+                added += 1
+        skipped = len(params.questions) - added
+        if added == 0:
+            return f"没有新题入库（跳过 {skipped} 道：无效或与题库重复）。"
+        return f"已入库 {added} 道，跳过 {skipped} 道（无效或重复）。"
 
 
 class GenerateQuestionsTool(Tool):
