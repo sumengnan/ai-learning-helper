@@ -45,6 +45,14 @@ def test_parse_facts_bad_memtype_defaults_semantic():
     assert facts[0].mem_type == MemType.SEMANTIC
 
 
+def test_extract_prompt_has_importance_rubric():
+    # importance 量表：给 LLM 明确的分档锚点，打分才一致（否则只有"0~1"凭感觉）
+    from harness.memory.writer import _EXTRACT_SYS
+    assert "量表" in _EXTRACT_SYS
+    for anchor in ("0.9~1.0", "0.6~0.8", "0.4~0.5", "0.1~0.3"):
+        assert anchor in _EXTRACT_SYS
+
+
 async def test_extract_calls_llm_and_parses(mock_embedder):
     comp = ScriptedCompleter(['[{"text":"用户在学 Python","mem_type":"semantic","importance":0.7}]'])
     w = MemoryWriter(backend=None, embedder=mock_embedder(dimension=64),
