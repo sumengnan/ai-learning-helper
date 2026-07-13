@@ -1,112 +1,203 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Box, Typography, Card, CardContent, TextField, ToggleButton, ToggleButtonGroup,
-  Button, Alert, List, ListItem, ListItemText, IconButton, Chip, Stack,
+  Box, Typography, Button, Card, CardContent, TextField, InputAdornment,
+  IconButton, Checkbox, Chip, Stack, Pagination, Alert, MenuItem, Select,
+  CircularProgress, FormControl, InputLabel,
 } from "@mui/material";
+import UploadFileIcon from "@mui/icons-material/UploadFile";
 import DeleteIcon from "@mui/icons-material/Delete";
+import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
+import SearchIcon from "@mui/icons-material/Search";
 import { AnimatePresence, motion } from "framer-motion";
-import { api } from "../api/client";
+import { api, type Question } from "../api/client";
 import { listItemVariants } from "../components/motion";
+import { QuestionDetailDrawer } from "./QuestionDetailDrawer";
 
-const TYPES: { key: string; label: string }[] = [
+const PAGE_SIZE = 10;
+const TYPES = [
   { key: "single", label: "单选" },
   { key: "multiple", label: "多选" },
   { key: "truefalse", label: "判断" },
   { key: "short", label: "简答" },
 ];
+const typeLabel = (t: string) => TYPES.find((x) => x.key === t)?.label ?? t;
 
-interface Question { id: string; type: string; stem: string; source: string; }
+function answerText(q: Question): string {
+  if (q.type === "truefalse") return q.answer ? "正确" : "错误";
+  if (q.type === "single" && q.options && typeof q.answer === "number")
+    return q.options[q.answer] ?? String(q.answer);
+  if (q.type === "multiple" && q.options && Array.isArray(q.answer))
+    return (q.answer as number[]).map((i) => q.options![i] ?? i).join("、");
+  return String(q.answer ?? "");
+}
+
+// 单行截断（题干/答案过长显示 …）
+const clampSx = {
+  display: "-webkit-box", WebkitLineClamp: 1, WebkitBoxOrient: "vertical" as const,
+  overflow: "hidden", wordBreak: "break-all" as const,
+};
 
 export default function QuestionBankView() {
-  const [questions, setQuestions] = useState<Question[]>([]);
-  const [topic, setTopic] = useState("");
-  const [count, setCount] = useState(5);
-  const [types, setTypes] = useState<string[]>(["single"]);
+  const [items, setItems] = useState<Question[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [q, setQ] = useState("");
+  const [type, setType] = useState("");
+  const [source, setSource] = useState("");
+  const [sources, setSources] = useState<string[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [preview, setPreview] = useState<Question | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
-  const refresh = () => api.questions.list().then(setQuestions);
-  useEffect(() => { refresh(); }, []);
+  const load = useCallback((p: number, filters: { q: string; type: string; source: string }) => {
+    return api.questions.list({ page: p, size: PAGE_SIZE, q: filters.q, type: filters.type, source: filters.source })
+      .then((r) => { setItems(r.items); setTotal(r.total); });
+  }, []);
 
-  const generate = async () => {
-    if (!topic.trim() || types.length === 0) return;
-    setBusy(true); setError("");
+  const refreshSources = useCallback(() => api.questions.sources().then(setSources), []);
+  useEffect(() => { refreshSources(); }, [refreshSources]);
+
+  // 筛选变化（含防抖搜索）→ 回第 1 页并加载
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setPage(1);
+      setError(null);
+      load(1, { q: q.trim(), type, source }).catch((e: any) => setError(String(e?.message || e)));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [q, type, source, load]);
+
+  // 翻页
+  useEffect(() => {
+    load(page, { q: q.trim(), type, source }).catch((e: any) => setError(String(e?.message || e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
+
+  const toggle = (id: string) => setSelected((s) => {
+    const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n;
+  });
+
+  async function reload() {
+    setSelected(new Set());
+    await Promise.all([load(page, { q: q.trim(), type, source }), refreshSources()]);
+  }
+
+  async function removeOne(id: string) { await api.questions.remove(id); await reload(); }
+
+  async function removeSelected() {
+    if (selected.size === 0) return;
+    await api.questions.removeMany([...selected]);
+    await reload();
+  }
+
+  async function upload(file: File) {
+    setBusy(true); setError(null); setNotice(null);
     try {
-      await api.questions.generate(topic.trim(), count, types);
-      await refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "出题失败");
-    } finally {
-      setBusy(false);
-    }
-  };
+      const r = await api.questions.import(file);
+      setNotice(`导入完成：新增 ${r.imported} 道，跳过重复 ${r.skipped_duplicate} 道，无效 ${r.skipped_invalid} 道。`);
+      setPage(1);
+      await reload();
+    } catch (e: any) { setError(String(e?.message || e)); }
+    finally { setBusy(false); if (fileRef.current) fileRef.current.value = ""; }
+  }
 
-  const remove = async (id: string) => { await api.questions.remove(id); await refresh(); };
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2 }}>
-      <Typography variant="h5" sx={{ fontWeight: 700 }}>题库</Typography>
-      <Card variant="outlined">
-        <CardContent>
-          <Stack spacing={2}>
-            <TextField
-              fullWidth size="small" label="出题主题（从知识库检索）"
-              value={topic} onChange={(e) => setTopic(e.target.value)}
-            />
-            <Stack direction="row" spacing={2} sx={{ alignItems: "center", flexWrap: "wrap" }}>
-              <TextField
-                type="number" size="small" label="题数" sx={{ width: 96 }}
-                slotProps={{ htmlInput: { min: 1, max: 20 } }}
-                value={count} onChange={(e) => setCount(Number(e.target.value))}
-              />
-              <ToggleButtonGroup
-                size="small" value={types}
-                onChange={(_, v: string[]) => setTypes(v)}
-              >
-                {TYPES.map((t) => (
-                  <ToggleButton key={t.key} value={t.key}>{t.label}</ToggleButton>
-                ))}
-              </ToggleButtonGroup>
-              <Button
-                variant="contained" onClick={generate}
-                disabled={busy || !topic.trim() || types.length === 0}
-              >
-                {busy ? "出题中…" : "出题"}
-              </Button>
-            </Stack>
-            {error && <Alert severity="error">{error}</Alert>}
-          </Stack>
-        </CardContent>
-      </Card>
+    <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2, maxWidth: 880, mx: "auto" }}>
+      {/* 头部：标题 + 计数 + 导入 */}
+      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 2 }}>
+        <Box>
+          <Typography variant="h5" sx={{ fontWeight: 700 }}>题库</Typography>
+          <Typography color="text.secondary" variant="body2">共 {total} 道题目</Typography>
+        </Box>
+        <Stack direction="row" spacing={1}>
+          <Button variant="outlined" color="error" startIcon={<DeleteSweepIcon />}
+            onClick={removeSelected} disabled={selected.size === 0}>
+            批量删除（{selected.size}）
+          </Button>
+          <Button component="label" variant="contained" startIcon={<UploadFileIcon />} disabled={busy}>
+            导入题库
+            <input ref={fileRef} hidden type="file" accept=".txt,.md,.pdf,.docx"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); }} />
+          </Button>
+        </Stack>
+      </Box>
 
-      {questions.length === 0 ? (
-        <Typography color="text.secondary">暂无题目，先出题吧。</Typography>
+      {/* 筛选工具条：题名 + 题型 + 来源 */}
+      <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+        <TextField fullWidth size="small" placeholder="搜索题名…"
+          value={q} onChange={(e) => setQ(e.target.value)}
+          slotProps={{ input: {
+            startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>,
+            endAdornment: busy ? <CircularProgress size={18} /> : undefined,
+          } }} />
+        <FormControl size="small" sx={{ minWidth: 120 }}>
+          <InputLabel>题型</InputLabel>
+          <Select label="题型" value={type} onChange={(e) => setType(e.target.value)}>
+            <MenuItem value="">全部题型</MenuItem>
+            {TYPES.map((t) => <MenuItem key={t.key} value={t.key}>{t.label}</MenuItem>)}
+          </Select>
+        </FormControl>
+        <FormControl size="small" sx={{ minWidth: 140 }}>
+          <InputLabel>来源</InputLabel>
+          <Select label="来源" value={source} onChange={(e) => setSource(e.target.value)}>
+            <MenuItem value="">全部来源</MenuItem>
+            {sources.map((s) => <MenuItem key={s} value={s}>{s}</MenuItem>)}
+          </Select>
+        </FormControl>
+      </Stack>
+
+      {notice && <Alert severity="success" onClose={() => setNotice(null)}>{notice}</Alert>}
+      {error && <Alert severity="error" onClose={() => setError(null)}>{error}</Alert>}
+
+      {items.length === 0 ? (
+        <Typography color="text.secondary" sx={{ py: 4, textAlign: "center" }}>暂无题目</Typography>
       ) : (
-        <List component="div" sx={{ display: "flex", flexDirection: "column", gap: 1, py: 0 }}>
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
           <AnimatePresence initial={false}>
-          {questions.map((q) => (
-            <motion.div key={q.id} layout variants={listItemVariants}
-              initial="initial" animate="animate" exit="exit">
-              <ListItem
-                component="div"
-                sx={{ border: 1, borderColor: "divider", borderRadius: 2 }}
-                secondaryAction={
-                  <IconButton edge="end" color="error" onClick={() => remove(q.id)} aria-label="删除题目">
-                    <DeleteIcon />
-                  </IconButton>
-                }
-              >
-                <Chip size="small" label={TYPES.find((t) => t.key === q.type)?.label ?? q.type} sx={{ mr: 1 }} />
-                <ListItemText
-                  primary={q.stem}
-                  secondary={q.source ? `· ${q.source}` : undefined}
-                />
-              </ListItem>
-            </motion.div>
-          ))}
+            {items.map((item) => (
+              <motion.div key={item.id} layout variants={listItemVariants}
+                initial="initial" animate="animate" exit="exit">
+                <Card variant="outlined"
+                  sx={{ "&:hover": { borderColor: "primary.main", boxShadow: 2 } }}>
+                  <CardContent sx={{ display: "flex", gap: 1, "&:last-child": { pb: 2 } }}>
+                    <Checkbox sx={{ p: 0, mt: 0.25 }} checked={selected.has(item.id)}
+                      onChange={() => toggle(item.id)} />
+                    <Box sx={{ minWidth: 0, flex: 1, cursor: "pointer" }} onClick={() => setPreview(item)}>
+                      <Stack direction="row" spacing={1} sx={{ alignItems: "center", minWidth: 0 }}>
+                        <Chip size="small" label={typeLabel(item.type)} />
+                        <Typography variant="body2" sx={{ fontWeight: 600, ...clampSx }}>{item.stem}</Typography>
+                      </Stack>
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, ...clampSx }}>
+                        答案：{answerText(item)}
+                      </Typography>
+                      {item.source && (
+                        <Typography variant="caption" color="text.secondary">· {item.source}</Typography>
+                      )}
+                    </Box>
+                    <IconButton size="small" color="error" aria-label="删除题目"
+                      onClick={() => removeOne(item.id)}>
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  </CardContent>
+                </Card>
+              </motion.div>
+            ))}
           </AnimatePresence>
-        </List>
+        </Box>
       )}
+
+      {pageCount > 1 && (
+        <Box sx={{ display: "flex", justifyContent: "center", mt: 1 }}>
+          <Pagination color="primary" count={pageCount} page={page} onChange={(_, p) => setPage(p)} />
+        </Box>
+      )}
+
+      <QuestionDetailDrawer question={preview} onClose={() => setPreview(null)} />
     </Box>
   );
 }
