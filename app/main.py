@@ -27,6 +27,7 @@ from .conversations import ConversationStore
 from .db import migrate, open_db
 from .documents import DocumentStore
 from .knowledge import KnowledgeService
+from .logging_setup import configure_logging
 from .question_import import QuestionImporter
 from .questions import QuestionStore
 from .quiz_service import QuizService
@@ -41,6 +42,7 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
                attachment_store=None, stats_service=None, question_importer=None) -> FastAPI:
     # exam_store 参数保留仅为向后兼容（模拟考试已迁入聊天工具，不再有独立考试端点）
     config = config or AppConfig()
+    configure_logging()   # 幂等：确保测试/嵌入式启动也有可见日志
     harness = harness if harness is not None else build_harness(config)
 
     # 应用领域各 Store 共享同一个数据库连接（单文件 app.db）；仅在需要时创建，
@@ -184,4 +186,14 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
                 return FileResponse(candidate)
             return FileResponse("web/dist/index.html")
 
+    # 启动摘要：一眼看清本次以什么配置起来的（模型/端口/各能力开关）
+    logging.getLogger("app").info(
+        "应用就绪 model=%s addr=%s:%s memory=%s rerank=%s answer_gate=%s sandbox=%s "
+        "recall(entity=%s multi_query=%s hyde=%s) context=%s",
+        config.model, config.app_host, config.app_port,
+        getattr(harness, "memory", None) is not None,
+        config.enable_rerank, config.enable_answer_gate,
+        getattr(harness, "sandbox", None) is not None,
+        config.retrieval_use_entity_recall, config.retrieval_use_multi_query,
+        config.retrieval_use_hyde, getattr(config, "context_strategy", "full"))
     return app

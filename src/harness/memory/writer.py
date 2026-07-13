@@ -206,4 +206,6 @@ class MemoryWriter:
             log.warning("memory gather candidates failed: %s", e)
             candidates = []
         ops = await self._reconcile(facts, candidates)
-        return await self._apply(owner_id, kind, ops)
+        new_ids = await self._apply(owner_id, kind, ops)
+        log.info("记忆写入 提炼=%d条 候选=%d 新增=%d", len(facts), len(candidates), len(new_ids))
+        return new_ids

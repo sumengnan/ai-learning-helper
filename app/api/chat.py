@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from uuid import uuid4
 
@@ -41,7 +42,10 @@ from ..tools.exam_tools import (
 )
 from ..tools.knowledge_tools import SaveToKnowledgeTool
 from ..tools.save_download import SaveDownloadTool
+from ..logging_setup import set_log_context
 from ..verify import Verdict
+
+log = logging.getLogger("app.chat")
 
 # 交付门缓冲后补发终稿时，把文本切成小片以保留打字机效果
 _DELIVER_CHUNK = 40
@@ -61,9 +65,11 @@ EXAM_GUIDE = (
     "逐题作答，全部答完后统一给出得分与逐题讲解；作答过程中不要提前公布答案。\n"
     "- 每次只问一道题，等用户作答后再继续。\n"
     "- 客观题（单选/多选/判断）依据题目答案判定对错；简答题结合参考答案判断。\n"
-    "- 若某题用户答错且 save_wrong_answer 工具可用，则调用它把该题存入错题集"
-    "（传 question_id 与用户作答 user_answer）；若该工具不可用，说明「答错自动保存错题集」"
-    "未开启，不要尝试保存。\n"
+    "- 若用户某题答错，且你的工具列表里有 save_wrong_answer，就调用它把该题存入错题集："
+    "直接传该题的 stem/type/answer（即席出题、题目不在题库时必须这样传，不要只传 question_id）"
+    "以及用户作答 user_answer；若该题来自 sample_questions 也可传其 question_id。"
+    "保存是后台动作，成功后简短带过即可；若工具列表里没有该工具，就直接跳过保存，"
+    "不要向用户解释开关是否开启、也不要反复提示「功能未开启」。\n"
     "\n题库管理：\n"
     "- 用户让你「把这些知识/资料整理成题存进题库」时，用 add_questions 直接把你整理好的"
     "题目写入题库；若用户希望「就某主题从我的知识库出题」，用 generate_questions（依赖知识库检索）。\n"
@@ -82,7 +88,7 @@ ATTACHMENT_GUIDE = (
 class _ChatRequest(BaseModel):
     conversation_id: str
     message: str
-    save_wrong: bool = False        # 「考试答错自动保存错题集」开关（默认关）
+    save_wrong: bool = True         # 「考试答错自动保存错题集」开关（默认开）
     attachment_ids: list[str] = []  # 本轮随消息发送的附件（已先经上传接口拿到 id）
 
 
@@ -261,11 +267,15 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         st = {"tool": tc.name, "args": tc.arguments}
                         collect["steps"].append(st)
                         step_by_id[tc.id] = st
+                        log.info("工具调用 %s", tc.name)
                     elif isinstance(ev, ToolFinished):
                         st = step_by_id.get(ev.result.tool_call_id)
                         if st is not None:
                             st["result"] = ev.result.content
                             st["is_error"] = ev.result.is_error
+                            log.info("工具完成 %s error=%s 输出%d字",
+                                     st["tool"], ev.result.is_error,
+                                     len(ev.result.content or ""))
                             if st["tool"] in ("search_memory", "run_python", "run_node", "run_java"):
                                 collect["grounding"].append(
                                     {"tool": st["tool"], "content": ev.result.content,
@@ -294,6 +304,10 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             steps: list[dict] = []       # 工具调用轨迹（落库供 UI 还原）
             progress: list[dict] = []    # 沙箱/子代理/校验进度（落库）
             turn_start = time.time()     # 本轮墙钟起点，用于落库耗时（刷新后仍可展示）
+            # 关联 id：本轮（后台任务）内每条日志都带 conv/run，便于把一次请求串起来看
+            set_log_context(conv_id=req.conversation_id, run_id=turn_run_id)
+            log.info("聊天开始 msg=%d字 附件=%d 交付门=%s",
+                     len(req.message or ""), len(attachment_metas), gate_on)
             question = req.message
             delivered = None
             delivered_sources: list[dict] = []   # 交付那次尝试的权威来源
@@ -404,11 +418,15 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 status = "error" if errored else "done"
                 final_content = delivered or "".join(parts) or "（本轮未完成）"
                 _usage = collect.get("usage") or {}
+                _elapsed = round((time.time() - turn_start) * 1000)
                 store.finish_turn(req.conversation_id, turn_run_id, final_content,
                                   steps=steps or None, progress=progress or None,
                                   status=status, sources=delivered_sources or None,
                                   tokens=_usage.get("tokens"), cost=_usage.get("cost"),
-                                  elapsed_ms=round((time.time() - turn_start) * 1000))
+                                  elapsed_ms=_elapsed)
+                log.info("聊天完成 status=%s 耗时%dms tokens=%s 工具%d次 来源%d条",
+                         status, _elapsed, _usage.get("tokens"), len(steps),
+                         len(delivered_sources))
                 # L3：把对话文本写入向量库供后续语义召回（best-effort，不阻断）
                 if _conv_memory is not None and not errored and final_content:
                     try:

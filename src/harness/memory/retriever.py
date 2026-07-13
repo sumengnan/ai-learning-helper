@@ -1,12 +1,15 @@
 # src/harness/memory/retriever.py
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from .query_planner import QueryPlanner
 from .record import MemoryFilter, MemoryRecord
+
+log = logging.getLogger("harness.memory.retriever")
 
 
 def rrf_fuse(ranked_lists: list[list[str]], rrf_k: int = 60) -> dict[str, float]:
@@ -183,4 +186,7 @@ class Retriever:
         hits = [ScoredHit(record=records[i], score=scored[i][0], components=scored[i][1])
                 for i in order]
         hits = await self._reranker.rerank(query_text, hits)
+        log.info("检索 query=%d字 路数=%d 候选=%d 返回=%d 增强(改写=%d hyde=%s 实体=%d)",
+                 len(query_text or ""), len(ranked_lists), len(records), min(k, len(hits)),
+                 len(plan.variants), bool(plan.hypothetical), len(plan.entity_keys))
         return hits[:k]
