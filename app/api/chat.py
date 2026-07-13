@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from harness.approval import reset_context, resolve, set_context
 from harness.events import (
     ModelUsage, Progress, RunError, RunFinished, TextDelta, ToolFinished, ToolStarted)
+from harness.llm.openai_compat import set_extra_body_override
 from harness.loop.agent_loop import AgentLoop
 from harness.persistence.serialize import event_to_dict
 from harness.progress import reset_emitter, set_emitter
@@ -89,6 +90,7 @@ class _ChatRequest(BaseModel):
     conversation_id: str
     message: str
     save_wrong: bool = True         # 「考试答错自动保存错题集」开关（默认开）
+    think: bool = False             # 「思考模式」开关（默认关=快）；透传 enable_thinking
     attachment_ids: list[str] = []  # 本轮随消息发送的附件（已先经上传接口拿到 id）
 
 
@@ -313,8 +315,10 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             turn_start = time.time()     # 本轮墙钟起点，用于落库耗时（刷新后仍可展示）
             # 关联 id：本轮（后台任务）内每条日志都带 conv/run，便于把一次请求串起来看
             set_log_context(conv_id=req.conversation_id, run_id=turn_run_id)
-            log.info("聊天开始 msg=%d字 附件=%d 交付门=%s",
-                     len(req.message or ""), len(attachment_metas), gate_on)
+            # 思考模式（按请求）：透传 enable_thinking 给 LLM 客户端；仅作用于本轮任务的模型调用
+            set_extra_body_override({"enable_thinking": req.think})
+            log.info("聊天开始 msg=%d字 附件=%d 交付门=%s 思考=%s",
+                     len(req.message or ""), len(attachment_metas), gate_on, req.think)
             question = req.message
             delivered = None
             delivered_sources: list[dict] = []   # 交付那次尝试的权威来源

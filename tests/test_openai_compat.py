@@ -117,6 +117,27 @@ async def test_extra_body_passed_when_configured(monkeypatch):
     [c async for c in client.stream([Message(role=Role.USER, content="hi")], [])]
 
 
+async def test_extra_body_override_merges_over_config(monkeypatch):
+    from harness.llm.openai_compat import (
+        reset_extra_body_override,
+        set_extra_body_override,
+    )
+    cfg = HarnessConfig(api_key="k", llm_extra_body={"a": 1})
+    client = OpenAICompatibleClient(cfg)
+    events = [_FakeEvent(_FakeDelta(content="hi"))]
+
+    async def fake_create(**kwargs):
+        assert kwargs["extra_body"] == {"a": 1, "enable_thinking": True}  # 覆盖叠加在全局上
+        return _fake_stream(events)
+
+    monkeypatch.setattr(client._client.chat.completions, "create", fake_create)
+    tok = set_extra_body_override({"enable_thinking": True})
+    try:
+        [c async for c in client.stream([Message(role=Role.USER, content="hi")], [])]
+    finally:
+        reset_extra_body_override(tok)
+
+
 async def test_extra_body_omitted_by_default(monkeypatch):
     cfg = HarnessConfig(api_key="k")            # 默认空 → 不加 extra_body（零行为变更）
     client = OpenAICompatibleClient(cfg)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from contextvars import ContextVar
 from typing import AsyncIterator
 
 from openai import AsyncOpenAI
@@ -11,6 +12,24 @@ from ..usage import Usage, estimate_usage
 from .base import StreamChunk, ToolCallDelta
 
 logger = logging.getLogger(__name__)
+
+# 本轮请求级的 extra_body 覆盖（叠加在全局 config.llm_extra_body 之上）。
+# 用 contextvar 传递，避免把参数穿过整条 AgentLoop；如聊天页「思考模式」开关按请求控制
+# {"enable_thinking": bool}。默认空=不覆盖。
+_extra_body_override: ContextVar[dict] = ContextVar("llm_extra_body_override", default={})
+
+
+def set_extra_body_override(d: dict):
+    """设置本轮 extra_body 覆盖，返回 token（用 reset_extra_body_override 还原）。"""
+    return _extra_body_override.set(dict(d or {}))
+
+
+def reset_extra_body_override(token) -> None:
+    _extra_body_override.reset(token)
+
+
+def get_extra_body_override() -> dict:
+    return _extra_body_override.get()
 
 
 class OpenAICompatibleClient:
@@ -41,8 +60,10 @@ class OpenAICompatibleClient:
             kwargs["stream_options"] = {"include_usage": True}
         if tools:
             kwargs["tools"] = tools
-        if self._config.llm_extra_body:
-            kwargs["extra_body"] = self._config.llm_extra_body
+        # 全局 extra_body（config）叠加本轮 override（contextvar，如聊天页的思考模式开关）
+        extra_body = {**self._config.llm_extra_body, **get_extra_body_override()}
+        if extra_body:
+            kwargs["extra_body"] = extra_body
 
         completion_parts: list[str] = []
         captured = None

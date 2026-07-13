@@ -134,6 +134,18 @@ describe("ChatView", () => {
     await waitFor(() => expect(vi.mocked(sendDecision)).toHaveBeenCalledWith("run-1", "a1", true));
   });
 
+  it("『思考模式』默认关并透传 think=false；开启后持久化为 1", async () => {
+    render(<ChatView conversationId="c1" initial={[]} />);
+    expect((screen.getByLabelText("思考模式") as HTMLInputElement).checked).toBe(false);
+    fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "hi" } });
+    fireEvent.click(screen.getByText("发送"));
+    await waitFor(() => expect(vi.mocked(streamChat)).toHaveBeenCalled());
+    const calls = vi.mocked(streamChat).mock.calls;
+    expect(calls[calls.length - 1][7]).toBe(false);   // think 为第 8 个参数
+    fireEvent.click(screen.getByLabelText("思考模式"));
+    expect(localStorage.getItem("chat_think")).toBe("1");
+  });
+
   it("『答错自动保存』默认开并透传 true；关闭后持久化为 0", async () => {
     render(<ChatView conversationId="c1" initial={[]} />);
     // 默认开：不点开关直接发送，saveWrong 应透传 true（第 5 个参数）

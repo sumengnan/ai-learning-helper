@@ -28,6 +28,7 @@ const MotionBox = motion(Box);
 const SHOW_TOOLS_KEY = "chat_show_tools";
 const SHOW_SOURCES_KEY = "chat_show_sources";
 const SAVE_WRONG_KEY = "chat_save_wrong";
+const THINK_KEY = "chat_think";
 const MAX_ATTACHMENTS = 10;
 const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;  // 100MB
 const readBool = (k: string, dflt: boolean) => {
@@ -63,6 +64,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled }:
   const [showTools, setShowTools] = useState(() => readBool(SHOW_TOOLS_KEY, true));
   const [showSources, setShowSources] = useState(() => readBool(SHOW_SOURCES_KEY, true));
   const [saveWrong, setSaveWrong] = useState(() => readBool(SAVE_WRONG_KEY, true));
+  const [think, setThink] = useState(() => readBool(THINK_KEY, false));
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
   // 区分「用户点停止」与「卸载/StrictMode 重挂载导致的 abort」：只有前者才落「已停止」终态，
@@ -81,6 +83,8 @@ export function ChatView({ conversationId, initial, autoSend, onTitled }:
   const stickRef = useRef(true);
   const saveWrongRef = useRef(saveWrong);
   saveWrongRef.current = saveWrong;
+  const thinkRef = useRef(think);
+  thinkRef.current = think;
   // 待发附件（发送前可增删）；含本地 File 供即时预览、上传状态。
   const [pending, setPending] = useState<AttachmentItem[]>([]);
   const pendingRef = useRef(pending);
@@ -157,6 +161,9 @@ export function ChatView({ conversationId, initial, autoSend, onTitled }:
   };
   const toggleSaveWrong = (v: boolean) => {
     setSaveWrong(v); localStorage.setItem(SAVE_WRONG_KEY, v ? "1" : "0");
+  };
+  const toggleThink = (v: boolean) => {
+    setThink(v); localStorage.setItem(THINK_KEY, v ? "1" : "0");
   };
 
   // 卸载（含 App 用 key={activeId} 切换对话触发 remount）时取消在途流。
@@ -237,7 +244,8 @@ export function ChatView({ conversationId, initial, autoSend, onTitled }:
     try {
       await streamChat(conversationId, msg, onEvent, controller.signal, saveWrongRef.current,
         attachments.map((a) => a.id),
-        (rid) => { turnRunIdRef.current = rid; upd((a) => { a.runId = rid; }); });
+        (rid) => { turnRunIdRef.current = rid; upd((a) => { a.runId = rid; }); },
+        thinkRef.current);
     } catch (err: any) {
       // 用户点停止 → 已停止；非用户 abort（卸载/重挂载）→ null：不落终态，保留 streaming 待重连
       if (err?.name === "AbortError") outcome = userStoppedRef.current ? "stopped" : null;
@@ -473,6 +481,11 @@ export function ChatView({ conversationId, initial, autoSend, onTitled }:
       </Box>
       <Box sx={{ px: 1.5, pt: 1, borderTop: 1, borderColor: "divider",
         display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+        <FormControlLabel
+          control={<Switch size="small" checked={think}
+            onChange={(e) => toggleThink(e.target.checked)} />}
+          label={<Typography variant="caption">思考模式</Typography>}
+        />
         <FormControlLabel
           control={<Switch size="small" checked={showTools}
             onChange={(e) => toggleShowTools(e.target.checked)} />}
