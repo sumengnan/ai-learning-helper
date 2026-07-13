@@ -90,7 +90,7 @@ class _ChatRequest(BaseModel):
     conversation_id: str
     message: str
     save_wrong: bool = True         # 「考试答错自动保存错题集」开关（默认开）
-    think: bool = False             # 「思考模式」开关（默认关=快）；透传 enable_thinking
+    think: bool = True              # 「思考模式」开关（默认开）；透传 enable_thinking，可手动关
     attachment_ids: list[str] = []  # 本轮随消息发送的附件（已先经上传接口拿到 id）
 
 
