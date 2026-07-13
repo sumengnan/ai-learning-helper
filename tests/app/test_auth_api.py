@@ -25,13 +25,13 @@ def _sqlite_allow_cross_thread(monkeypatch):
     monkeypatch.setattr(sqlite3, "connect", _patched)
 
 
-def _client():
+def _client(require_captcha=False):
     reg = ToolRegistry(); reg.register(CalculatorTool())
     traj = TrajectoryStore(":memory:")
     harness = Harness(client=None, registry=reg,
                       checkpoint_store=CheckpointStore(":memory:"),
                       trajectory_store=traj, sink=TrajectorySink(traj), system_prompt="s")
-    cfg = AppConfig(api_key="k", app_db_path=":memory:")
+    cfg = AppConfig(api_key="k", app_db_path=":memory:", require_captcha=require_captcha)
     app = create_app(config=cfg, harness=harness, store=ConversationStore(":memory:"),
                      doc_store=DocumentStore(":memory:"))
     return TestClient(app)
@@ -129,6 +129,64 @@ def test_rename_conversation():
     # 改别人的（不存在的）→ 404
     assert client.patch("/api/conversations/nope",
                         json={"title": "x"}, headers=_hdr(ta)).status_code == 404
+
+
+def _solve_captcha(client):
+    """从 app.state.auth 直接签一枚验证码，返回可直接提交的 (token, code)。"""
+    return client.app.state.auth.issue_captcha()
+
+
+def test_captcha_endpoint_returns_token_and_image():
+    client = _client(require_captcha=True)
+    r = client.get("/api/auth/captcha")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["token"].count(".") == 1
+    assert body["image"].startswith("data:image/svg+xml;base64,")
+
+
+def test_register_requires_valid_captcha_when_enabled():
+    client = _client(require_captcha=True)
+    # 缺验证码 → 400
+    r = client.post("/api/auth/register", json={"username": "cap1", "password": "pw1234"})
+    assert r.status_code == 400
+    # 错验证码 → 400
+    token, _code = _solve_captcha(client)
+    r = client.post("/api/auth/register", json={
+        "username": "cap1", "password": "pw1234",
+        "captcha_token": token, "captcha_text": "zzzz"})
+    assert r.status_code == 400
+    # 正确验证码 → 200
+    token, code = _solve_captcha(client)
+    r = client.post("/api/auth/register", json={
+        "username": "cap1", "password": "pw1234",
+        "captcha_token": token, "captcha_text": code})
+    assert r.status_code == 200, r.text
+    assert r.json()["user"]["username"] == "cap1"
+
+
+def test_login_requires_valid_captcha_when_enabled():
+    client = _client(require_captcha=True)
+    token, code = _solve_captcha(client)
+    client.post("/api/auth/register", json={
+        "username": "cap2", "password": "pw1234",
+        "captcha_token": token, "captcha_text": code})
+    # 密码对但验证码缺失 → 400（验证码先于凭据校验）
+    r = client.post("/api/auth/login", json={"username": "cap2", "password": "pw1234"})
+    assert r.status_code == 400
+    # 验证码对 → 200
+    token, code = _solve_captcha(client)
+    r = client.post("/api/auth/login", json={
+        "username": "cap2", "password": "pw1234",
+        "captcha_token": token, "captcha_text": code})
+    assert r.status_code == 200, r.text
+
+
+def test_captcha_ignored_when_disabled():
+    # 默认关：不带验证码也能注册/登录（保持既有行为）
+    client = _client()
+    assert client.post("/api/auth/register",
+                       json={"username": "nocap", "password": "pw1234"}).status_code == 200
 
 
 def test_refresh_header_on_near_expiry(monkeypatch):

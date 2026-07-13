@@ -9,8 +9,10 @@ const USER_KEY = "auth_user";
 
 type AuthState = {
   user: User | null;
-  login: (username: string, password: string) => Promise<void>;
-  register: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string,
+          captchaToken?: string, captchaText?: string) => Promise<void>;
+  register: (username: string, password: string,
+             captchaToken?: string, captchaText?: string) => Promise<void>;
   logout: () => void;
 };
 
@@ -61,12 +63,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const value: AuthState = {
     user,
-    login: async (username, password) => {
-      const { token, user: u } = await authApi.login(username, password);
+    login: async (username, password, captchaToken, captchaText) => {
+      const { token, user: u } = await authApi.login(username, password, captchaToken, captchaText);
       persist(token, u);
     },
-    register: async (username, password) => {
-      const { token, user: u } = await authApi.register(username, password);
+    register: async (username, password, captchaToken, captchaText) => {
+      const { token, user: u } = await authApi.register(username, password, captchaToken, captchaText);
       persist(token, u);
     },
     logout,
