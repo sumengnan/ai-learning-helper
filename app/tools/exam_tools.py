@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import json
+from typing import Annotated
 
-from pydantic import BaseModel
+from pydantic import BaseModel, BeforeValidator
 
 from harness.tools.base import Tool
 
@@ -11,6 +12,23 @@ from ..quiz_service import NoKnowledge, QuizError, _valid
 
 # 出题合法性校验允许的全部题型（供 add_questions 逐题校验用）
 ALL_TYPES = ["single", "multiple", "truefalse", "short"]
+
+
+def _coerce_json_list(v):
+    """模型有时把数组参数序列化成 JSON 字符串（可能带首尾空白/换行）再传，容错解析成列表；
+    解析不了就原样返回，交给后续类型校验报清晰错误。"""
+    if isinstance(v, str):
+        try:
+            return json.loads(v.strip())
+        except (ValueError, TypeError):
+            return v
+    return v
+
+
+# list 型工具参数：容忍模型传 JSON 字符串
+_QuestionList = Annotated[list[dict], BeforeValidator(_coerce_json_list)]
+_IdList = Annotated[list[str], BeforeValidator(_coerce_json_list)]
+_OptIdList = Annotated[list[str] | None, BeforeValidator(_coerce_json_list)]
 
 
 def _clamp(count: int) -> int:
@@ -25,7 +43,7 @@ class SampleQuestionsTool(Tool):
 
     class Params(BaseModel):
         count: int = 5
-        types: list[str] | None = None
+        types: _OptIdList = None
 
     def __init__(self, question_store, user_id: str) -> None:
         self._store = question_store
@@ -94,7 +112,7 @@ class AddQuestionsTool(Tool):
         "非法题目会被跳过。")
 
     class Params(BaseModel):
-        questions: list[dict]
+        questions: _QuestionList
 
     def __init__(self, question_store, user_id: str) -> None:
         self._store = question_store
@@ -125,7 +143,7 @@ class GenerateQuestionsTool(Tool):
     class Params(BaseModel):
         topic: str
         count: int = 5
-        types: list[str] | None = None
+        types: _OptIdList = None
 
     def __init__(self, quiz_service, user_id: str) -> None:
         self._quiz = quiz_service
@@ -151,7 +169,7 @@ class ListQuestionsTool(Tool):
         "用于向用户展示题库或在删除前确认要删哪些题。types 可选，限定题型。")
 
     class Params(BaseModel):
-        types: list[str] | None = None
+        types: _OptIdList = None
 
     def __init__(self, question_store, user_id: str) -> None:
         self._store = question_store
@@ -175,7 +193,7 @@ class DeleteQuestionsTool(Tool):
         "question_id 可先用 list_questions 获取。")
 
     class Params(BaseModel):
-        question_ids: list[str]
+        question_ids: _IdList
 
     def __init__(self, question_store, user_id: str) -> None:
         self._store = question_store
@@ -216,7 +234,7 @@ class DeleteWrongAnswersTool(Tool):
         "删除不可恢复，调用前必须先向用户复述将删除的题目并取得确认。")
 
     class Params(BaseModel):
-        wrong_answer_ids: list[str]
+        wrong_answer_ids: _IdList
 
     def __init__(self, wrong_store, user_id: str) -> None:
         self._store = wrong_store

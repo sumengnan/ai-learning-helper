@@ -90,6 +90,35 @@ async def test_add_questions_all_invalid():
     assert "0" in out or "无" in out
 
 
+async def test_add_questions_accepts_json_string_arg():
+    """模型常把 questions 传成 JSON 字符串（可能带首尾换行）→ 应容错解析、正常入库。"""
+    qs = QuestionStore(":memory:")
+    tool = AddQuestionsTool(qs, "u1")
+    raw = '\n[{"type": "single", "stem": "题", "options": ["A", "B"], "answer": 1}]\n'
+    params = tool.Params.model_validate({"questions": raw})   # 模拟工具执行时的参数校验
+    assert isinstance(params.questions, list)
+    out = await tool.run(params)
+    assert "1" in out and len(qs.list("u1")) == 1
+
+
+async def test_delete_questions_accepts_json_string_ids():
+    qs = QuestionStore(":memory:")
+    qid = qs.create("u1", {"type": "single", "stem": "题", "options": ["A", "B"], "answer": 1})
+    tool = DeleteQuestionsTool(qs, "u1")
+    params = tool.Params.model_validate({"question_ids": json.dumps([qid])})
+    assert params.question_ids == [qid]
+    await tool.run(params)
+    assert qs.list("u1") == []
+
+
+async def test_sample_questions_types_accepts_json_string_and_none():
+    """题型筛选 types 传 JSON 字符串→解析；省略(None)→原样通过。"""
+    P = SampleQuestionsTool(QuestionStore(":memory:"), "u1").Params
+    assert P.model_validate({"count": 5, "types": '["single","truefalse"]'}).types == \
+        ["single", "truefalse"]
+    assert P.model_validate({"count": 5}).types is None
+
+
 # ---- list_questions ----
 
 async def test_list_questions_returns_id_and_stem():
