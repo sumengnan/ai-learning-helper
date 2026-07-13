@@ -13,6 +13,9 @@ class AppConfig(HarnessConfig):
     app_host: str = "127.0.0.1"
     app_port: int = 8000
     auth_secret: str = "dev-insecure-secret-change-me"
+    # 登录/注册是否强制图形验证码（后端校验）。默认关，便于测试直连；
+    # 生产用 HARNESS_REQUIRE_CAPTCHA=true 打开。前端始终展示并回传验证码。
+    require_captcha: bool = False
     # 应用领域各表统一存于此单一数据库文件（可用 HARNESS_APP_DB_PATH 覆盖）
     app_db_path: str = "app.db"
     app_system_prompt: str = "你是一个 AI 学习助手，可用工具检索知识、联网、计算来帮助用户学习。"

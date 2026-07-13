@@ -9,7 +9,13 @@ function renderPage() {
 }
 
 describe("RegisterPage", () => {
-  beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+  beforeEach(() => {
+    localStorage.clear();
+    vi.restoreAllMocks();
+    vi.spyOn(client.auth, "captcha").mockResolvedValue({
+      token: "tok", image: "data:image/svg+xml;base64,AAAA",
+    });
+  });
   afterEach(() => cleanup());
 
   it("两次密码不一致时报错且不发注册请求", async () => {

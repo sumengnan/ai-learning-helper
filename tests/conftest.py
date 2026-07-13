@@ -9,6 +9,16 @@ from harness.llm.base import StreamChunk, ToolCallDelta
 from harness.usage import Usage
 
 
+@pytest.fixture(autouse=True)
+def _captcha_off_by_default(monkeypatch):
+    """默认关闭图形验证码，隔离 .env（HARNESS_REQUIRE_CAPTCHA 生产可能为 true）。
+
+    环境变量优先于 .env 文件；而显式传入 AppConfig(require_captcha=True) 的
+    构造参数优先级更高，故需要开验证码的测试仍可自行打开。
+    """
+    monkeypatch.setenv("HARNESS_REQUIRE_CAPTCHA", "false")
+
+
 class MockEmbeddingClient:
     """确定性 embedder：按空白分词哈希到固定维度并归一化。
     共享词的文本向量更接近，便于断言近邻。不打网络。

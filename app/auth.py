@@ -131,6 +131,20 @@ class AuthService:
     def renew_within(self) -> int:
         return self._renew_within
 
+    def issue_captcha(self, *, ttl: int = 300) -> tuple[str, str]:
+        """签发一枚图形验证码，返回 (无状态 token, 明文 code)。
+
+        code 仅用于渲染图片，不下发给前端；token 交由前端随登录/注册回传校验。
+        """
+        from . import captcha
+        code = captcha.random_code(4)
+        return captcha.sign(self._secret, code, ttl=ttl, now=self._now), code
+
+    def verify_captcha(self, token: str, text: str) -> bool:
+        """校验用户输入的验证码是否匹配 token（且未过期）。"""
+        from . import captcha
+        return captcha.verify(self._secret, token, text, now=self._now)
+
 
 async def current_user(request: Request, response: Response,
                        authorization: str = Header(default="")) -> str:

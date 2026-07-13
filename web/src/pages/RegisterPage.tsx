@@ -6,6 +6,7 @@ import {
 } from "@mui/material";
 import { useAuth } from "../auth/AuthProvider";
 import { AuthLayout } from "./LoginPage";
+import { Captcha } from "../components/Captcha";
 
 export function RegisterPage() {
   const { register } = useAuth();
@@ -13,8 +14,13 @@ export function RegisterPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [captchaToken, setCaptchaToken] = useState("");
+  const [captchaInput, setCaptchaInput] = useState("");
+  const [captchaNonce, setCaptchaNonce] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const refreshCaptcha = () => { setCaptchaInput(""); setCaptchaNonce((n) => n + 1); };
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -22,12 +28,14 @@ export function RegisterPage() {
     if (!username.trim()) { setError("请输入账号"); return; }
     if (password.length < 6) { setError("密码至少 6 位"); return; }
     if (password !== confirm) { setError("两次输入的密码不一致"); return; }
+    if (!captchaInput.trim()) { setError("请输入验证码"); return; }
     setBusy(true);
     try {
-      await register(username.trim(), password);
+      await register(username.trim(), password, captchaToken, captchaInput.trim());
       navigate("/", { replace: true });
     } catch (err: any) {
       setError(err?.message || "注册失败");
+      refreshCaptcha();
     } finally {
       setBusy(false);
     }
@@ -47,6 +55,13 @@ export function RegisterPage() {
             error={confirm.length > 0 && confirm !== password}
             helperText={confirm.length > 0 && confirm !== password ? "两次密码不一致" : " "}
             onChange={(e) => setConfirm(e.target.value)} />
+          <Stack direction="row" spacing={1.5} sx={{ alignItems: "flex-start" }}>
+            <TextField label="验证码" value={captchaInput} fullWidth
+              autoComplete="off"
+              slotProps={{ htmlInput: { maxLength: 6 } }}
+              onChange={(e) => setCaptchaInput(e.target.value)} />
+            <Captcha key={captchaNonce} onToken={setCaptchaToken} />
+          </Stack>
           <Button type="submit" variant="contained" size="large" disabled={busy}>
             注册
           </Button>

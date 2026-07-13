@@ -46,19 +46,40 @@ export async function fetchVersion(): Promise<VersionInfo> {
   return r.json();
 }
 
+export interface Captcha {
+  token: string;
+  image: string; // data URI（SVG）
+}
+
 export const auth = {
-  register: async (username: string, password: string): Promise<{ token: string; user: User }> => {
+  // 公开端点：取一枚验证码（token + 图片），token 随登录/注册回传后端校验
+  captcha: async (): Promise<Captcha> => {
+    const r = await fetch("/api/auth/captcha");
+    if (!r.ok) throw new Error("获取验证码失败");
+    return r.json();
+  },
+  register: async (
+    username: string, password: string,
+    captchaToken = "", captchaText = "",
+  ): Promise<{ token: string; user: User }> => {
     const r = await fetch("/api/auth/register", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({
+        username, password, captcha_token: captchaToken, captcha_text: captchaText,
+      }),
     });
     if (!r.ok) throw new Error(await detail(r, "注册失败"));
     return r.json();
   },
-  login: async (username: string, password: string): Promise<{ token: string; user: User }> => {
+  login: async (
+    username: string, password: string,
+    captchaToken = "", captchaText = "",
+  ): Promise<{ token: string; user: User }> => {
     const r = await fetch("/api/auth/login", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({
+        username, password, captcha_token: captchaToken, captcha_text: captchaText,
+      }),
     });
     if (!r.ok) throw new Error(await detail(r, "登录失败"));
     return r.json();
