@@ -327,16 +327,23 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     source_sink.reset()
                     async for s in _drain(_new_loop(run_id_a), run_id_a, model_message, True, collect):
                         yield _acc(s)
-                    delivered = collect["final"] or (
-                        "（本轮未能完成，请重试）" if collect["error"] else "（本轮未完成）")
                     errored = collect["final"] is None
+                    if not errored:
+                        delivered = collect["final"]
+                    elif collect["error"] is not None:
+                        # loop 抛错：在途已转发原始 RunError 供排查，但落库用干净提示，
+                        # 避免把原始错误文案泄漏进持久化消息（见
+                        # test_chat_run_error_persists_clean_message）。
+                        delivered = "（本轮未能完成，请重试）"
+                    else:
+                        # 空产出（无文本/无工具调用/未抛错）：loop 只静默 yield 一个空 RunFinished，
+                        # 在途客户端收不到任何可见信号 → 前端误显示"…"+"已完成"。此处的错误文案是
+                        # 我们自拟的安全提示，故落库同一文案（前端在途会把 RunError 以 "[出错] …"
+                        # 追加进气泡），使刷新后与在途所见一致，而非退化成泛化的「本轮未完成」。
+                        empty_text = "模型未返回任何内容（可能触发内容策略或上游限流），请重试"
+                        delivered = f"[出错] {empty_text}"
+                        yield RunError(error=empty_text)
                     delivered_sources = source_sink.snapshot()
-                    # 空产出兜底：模型既无文本、也无工具调用、又未抛错时，loop 只静默 yield 一个
-                    # 空 RunFinished，在途客户端收不到任何可见信号 → 前端误显示"…"+"已完成"。
-                    # 这里补发一条 RunError 让前端标红并说明本轮实际未成功；collect["error"] 非空
-                    # 时 RunError 已随直通转发过，无需重复。
-                    if errored and collect["error"] is None:
-                        yield RunError(error="模型未返回任何内容（可能触发内容策略或上游限流），请重试")
                 else:
                     # 交付门：缓冲 → 校验 → 不过则回灌重答，最多 answer_gate_max_retries 次
                     corrective = None

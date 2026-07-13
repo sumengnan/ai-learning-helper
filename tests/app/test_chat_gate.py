@@ -166,3 +166,23 @@ def test_gate_off_empty_completion_surfaces_error(make_mock):
     cid, events = _run_chat(client, h, "问")
     assert any(e["type"] == "RunError" for e in events), "空产出应补发 RunError 让前端标红"
     assert store.ui_messages(cid)[-1]["status"] == "error"   # 落库为 error 而非 done
+
+
+def test_gate_off_empty_completion_persists_error_text(make_mock):
+    """直通空产出：落库内容应带上真实错误文案（与在途 RunError 一致），刷新后仍能看到
+    「为何失败」，而不是退化成泛化的「本轮未完成」（刷新后消息内容错误的根因回归测试）。"""
+    from harness.llm.base import StreamChunk
+    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,
+                    enable_answer_gate=False)
+    store = ConversationStore(":memory:")
+    empty_turn = [StreamChunk(type="done")]
+    app = create_app(config=cfg, harness=_harness(make_mock, [empty_turn]),
+                     store=store, doc_store=DocumentStore(":memory:"))
+    client = TestClient(app)
+    h = _auth(client)
+    cid, events = _run_chat(client, h, "问")
+    err = next(e["data"]["error"] for e in events if e["type"] == "RunError")
+    last = store.ui_messages(cid)[-1]
+    assert last["status"] == "error"
+    assert last["content"] != "（本轮未完成）"        # 不应退化成泛化占位
+    assert err in last["content"]                     # 落库内容 == 在途所见错误文案
