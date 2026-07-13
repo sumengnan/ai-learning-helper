@@ -51,6 +51,15 @@ class HarnessConfig(BaseSettings):
     retrieval_use_mmr: bool = True
     retrieval_mmr_lambda: float = 0.7
     retrieval_rrf_k: int = 60
+    # 精排（rerank）：默认关=维持现状（NoOpReranker）。开启且配了端点+模型才生效，
+    # 全局作用于所有检索路径（知识库/题库/对话记忆/search_memory）。端点须为
+    # OpenAI/Cohere/Jina 兼容的 POST {base}/rerank。失败自动降级为原序，不打断检索。
+    enable_rerank: bool = False
+    rerank_base_url: str = ""             # 如 https://api.siliconflow.cn/v1
+    rerank_api_key: str = ""             # 空则回退 embedding_api_key → api_key
+    rerank_model: str = ""               # 如 BAAI/bge-reranker-v2-m3
+    rerank_timeout: float = 30.0
+    rerank_top_n: int = 0                # 0=送全部候选精排；>0 只精排前 N（省调用成本）
     # 容器沙箱
     sandbox_backend: str = "local"          # local | docker
     sandbox_docker_host: str = ""           # tcp://host:2376（Docker daemon 的 TLS 端口）

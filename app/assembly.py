@@ -87,8 +87,16 @@ def build_harness(config) -> Harness:
             config.embedding_base_url, config.embedding_api_key or config.api_key,
             config.embedding_model, config.embedding_dimension)
         mem_store = SqliteVecBackend(config.memory_db_path, config.embedding_dimension)
-        from harness.memory.reranker import NoOpReranker
+        from harness.memory.reranker import HttpReranker, NoOpReranker
         from harness.memory.retriever import RetrievalConfig, Retriever
+        # 精排：开关开且配了端点+模型才启用远程 rerank，否则维持 NoOp（零行为变更）。
+        reranker = NoOpReranker()
+        if config.enable_rerank and config.rerank_base_url and config.rerank_model:
+            reranker = HttpReranker(
+                config.rerank_base_url,
+                config.rerank_api_key or config.embedding_api_key or config.api_key,
+                config.rerank_model, timeout=config.rerank_timeout,
+                top_n=config.rerank_top_n or None)
         _rcfg = RetrievalConfig(
             candidate_pool=config.retrieval_candidate_pool,
             w_relevance=config.retrieval_w_relevance,
@@ -99,7 +107,7 @@ def build_harness(config) -> Harness:
             use_mmr=config.retrieval_use_mmr,
             mmr_lambda=config.retrieval_mmr_lambda,
             rrf_k=config.retrieval_rrf_k)
-        _retriever = Retriever(mem_store, embedder, NoOpReranker(), _rcfg)
+        _retriever = Retriever(mem_store, embedder, reranker, _rcfg)
         mem = Memory(mem_store, embedder, config.chunk_size, config.chunk_overlap,
                      retriever=_retriever)
         memory = mem

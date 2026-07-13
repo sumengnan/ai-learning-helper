@@ -1,5 +1,10 @@
 # tests/test_reranker.py
-from harness.memory.reranker import NoOpReranker, Reranker
+from types import SimpleNamespace
+
+import httpx
+import pytest
+
+from harness.memory.reranker import HttpReranker, NoOpReranker, Reranker
 
 
 async def test_noop_preserves_order():
@@ -10,3 +15,108 @@ async def test_noop_preserves_order():
 
 def test_protocol_has_rerank():
     assert hasattr(Reranker, "rerank")
+
+
+# ---- HttpReranker ----
+
+def _cand(text):
+    """模拟 retriever 传入的 ScoredHit：有 .record.text。"""
+    return SimpleNamespace(record=SimpleNamespace(text=text))
+
+
+def _texts(candidates):
+    return [c.record.text for c in candidates]
+
+
+class _FakeResp:
+    def __init__(self, data):
+        self._data = data
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._data
+
+
+class _FakeClient:
+    data: dict | None = None          # 端点返回体
+    exc: Exception | None = None      # 注入异常
+    calls: list = []                  # 记录请求
+
+    def __init__(self, *a, **k):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def post(self, url, json=None, headers=None):
+        _FakeClient.calls.append({"url": url, "json": json, "headers": headers})
+        if _FakeClient.exc is not None:
+            raise _FakeClient.exc
+        return _FakeResp(_FakeClient.data)
+
+
+@pytest.fixture
+def fake_httpx(monkeypatch):
+    _FakeClient.data = None
+    _FakeClient.exc = None
+    _FakeClient.calls = []
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+    return _FakeClient
+
+
+async def test_reorders_by_relevance_score(fake_httpx):
+    fake_httpx.data = {"results": [
+        {"index": 2, "relevance_score": 0.9},
+        {"index": 0, "relevance_score": 0.5},
+        {"index": 1, "relevance_score": 0.1}]}
+    r = HttpReranker("https://api.x.cn/v1", "sk-1", "bge-reranker")
+    out = await r.rerank("q", [_cand("a"), _cand("b"), _cand("c")])
+    assert _texts(out) == ["c", "a", "b"]
+
+
+async def test_hit_first_then_rest_in_original_order(fake_httpx):
+    # 端点只返回部分（如 top_n 截断）：命中在前，未命中按原序接尾，不丢候选
+    fake_httpx.data = {"results": [{"index": 1, "relevance_score": 0.9}]}
+    r = HttpReranker("https://api.x.cn/v1", "sk-1", "bge-reranker")
+    out = await r.rerank("q", [_cand("a"), _cand("b"), _cand("c")])
+    assert _texts(out) == ["b", "a", "c"]
+
+
+async def test_falls_back_to_original_on_error(fake_httpx):
+    fake_httpx.exc = httpx.ConnectError("boom")
+    r = HttpReranker("https://api.x.cn/v1", "sk-1", "bge-reranker")
+    cands = [_cand("a"), _cand("b"), _cand("c")]
+    out = await r.rerank("q", cands)
+    assert _texts(out) == ["a", "b", "c"]
+
+
+async def test_empty_results_keeps_order(fake_httpx):
+    fake_httpx.data = {"results": []}
+    r = HttpReranker("https://api.x.cn/v1", "sk-1", "bge-reranker")
+    out = await r.rerank("q", [_cand("a"), _cand("b")])
+    assert _texts(out) == ["a", "b"]
+
+
+async def test_single_candidate_skips_endpoint(fake_httpx):
+    r = HttpReranker("https://api.x.cn/v1", "sk-1", "bge-reranker")
+    out = await r.rerank("q", [_cand("a")])
+    assert _texts(out) == ["a"]
+    assert fake_httpx.calls == []          # 未发起请求
+
+
+async def test_request_payload_and_url(fake_httpx):
+    fake_httpx.data = {"results": [{"index": 0, "relevance_score": 1.0}]}
+    r = HttpReranker("https://api.x.cn/v1/", "sk-1", "bge-reranker", top_n=1)
+    await r.rerank("我的问题", [_cand("a"), _cand("b")])
+    call = fake_httpx.calls[-1]
+    assert call["url"] == "https://api.x.cn/v1/rerank"          # 去重尾斜杠
+    assert call["json"]["model"] == "bge-reranker"
+    assert call["json"]["query"] == "我的问题"
+    assert call["json"]["documents"] == ["a", "b"]
+    assert call["json"]["top_n"] == 1
+    assert call["headers"]["Authorization"] == "Bearer sk-1"
