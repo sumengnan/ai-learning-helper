@@ -65,9 +65,11 @@ EXAM_GUIDE = (
     "逐题作答，全部答完后统一给出得分与逐题讲解；作答过程中不要提前公布答案。\n"
     "- 每次只问一道题，等用户作答后再继续。\n"
     "- 客观题（单选/多选/判断）依据题目答案判定对错；简答题结合参考答案判断。\n"
-    "- 若某题用户答错且 save_wrong_answer 工具可用，则调用它把该题存入错题集"
-    "（传 question_id 与用户作答 user_answer）；若该工具不可用，说明「答错自动保存错题集」"
-    "未开启，不要尝试保存。\n"
+    "- 若用户某题答错，且你的工具列表里有 save_wrong_answer，就调用它把该题存入错题集："
+    "直接传该题的 stem/type/answer（即席出题、题目不在题库时必须这样传，不要只传 question_id）"
+    "以及用户作答 user_answer；若该题来自 sample_questions 也可传其 question_id。"
+    "保存是后台动作，成功后简短带过即可；若工具列表里没有该工具，就直接跳过保存，"
+    "不要向用户解释开关是否开启、也不要反复提示「功能未开启」。\n"
     "\n题库管理：\n"
     "- 用户让你「把这些知识/资料整理成题存进题库」时，用 add_questions 直接把你整理好的"
     "题目写入题库；若用户希望「就某主题从我的知识库出题」，用 generate_questions（依赖知识库检索）。\n"
@@ -86,7 +88,7 @@ ATTACHMENT_GUIDE = (
 class _ChatRequest(BaseModel):
     conversation_id: str
     message: str
-    save_wrong: bool = False        # 「考试答错自动保存错题集」开关（默认关）
+    save_wrong: bool = True         # 「考试答错自动保存错题集」开关（默认开）
     attachment_ids: list[str] = []  # 本轮随消息发送的附件（已先经上传接口拿到 id）
 
 

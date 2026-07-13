@@ -45,13 +45,28 @@ async def test_save_wrong_records_snapshot_and_survives_question_delete():
     assert len(still) == 1 and still[0]["snapshot"]["stem"] == "题干"
 
 
-async def test_save_wrong_respects_user_isolation():
+async def test_save_wrong_adhoc_question_without_bank_id():
+    # 即席出题（题目不在题库、无 question_id）：直接传题目内容也能存入错题集
+    ws = WrongAnswerStore(":memory:")
+    tool = SaveWrongAnswerTool(QuestionStore(":memory:"), ws, "u1")
+    out = await tool.run(tool.Params(
+        stem="1+1=?", type="single", options=["1", "2"], answer=1,
+        explanation="等于二", user_answer=0))
+    assert "已保存" in out
+    lst = ws.list("u1")
+    assert len(lst) == 1
+    assert lst[0]["snapshot"]["stem"] == "1+1=?" and lst[0]["snapshot"]["answer"] == 1
+    assert lst[0]["user_answer"] == 0
+
+
+async def test_save_wrong_needs_id_or_content():
+    # 既无有效 question_id、又没给题目内容 → 无法保存（不静默成功）
     qs = QuestionStore(":memory:")
     ws = WrongAnswerStore(":memory:")
     qid = qs.create("u1", _q())
-    tool = SaveWrongAnswerTool(qs, ws, "u2")    # u2 试图保存 u1 的题
-    assert "未找到" in await tool.run(tool.Params(question_id=qid, user_answer=0))
-    assert ws.list("u2") == []
+    tool = SaveWrongAnswerTool(qs, ws, "u2")    # u2 引用 u1 的 id 且没给内容
+    out = await tool.run(tool.Params(question_id=qid, user_answer=0))
+    assert "无法保存" in out and ws.list("u2") == []
 
 
 # ---- add_questions ----

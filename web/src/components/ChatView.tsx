@@ -62,7 +62,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled }:
   const [busy, setBusy] = useState(false);
   const [showTools, setShowTools] = useState(() => readBool(SHOW_TOOLS_KEY, true));
   const [showSources, setShowSources] = useState(() => readBool(SHOW_SOURCES_KEY, true));
-  const [saveWrong, setSaveWrong] = useState(() => readBool(SAVE_WRONG_KEY, false));
+  const [saveWrong, setSaveWrong] = useState(() => readBool(SAVE_WRONG_KEY, true));
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
   // 区分「用户点停止」与「卸载/StrictMode 重挂载导致的 abort」：只有前者才落「已停止」终态，

@@ -42,11 +42,20 @@ class SampleQuestionsTool(Tool):
 class SaveWrongAnswerTool(Tool):
     name = "save_wrong_answer"
     description = (
-        "把用户答错的题目保存到「错题集」。当用户某题作答错误时调用；"
-        "传入该题的 question_id 与用户的作答 user_answer。")
+        "把用户答错的题目保存到「错题集」。当用户某题作答错误时调用。"
+        "优先直接传该题内容：stem（题干）、type（single/multiple/truefalse/short）、"
+        "answer（正确答案）、options（选项，可空）、explanation（解析，可空），"
+        "以及用户的作答 user_answer。若该题来自题库（sample_questions 返回的），"
+        "也可只传其 question_id 让系统取快照。"
+        "即席出题（题目不在题库）时务必传题目内容，不能只靠 question_id。")
 
     class Params(BaseModel):
-        question_id: str
+        question_id: str = ""          # 题库题目 id；即席出题留空
+        stem: str = ""
+        type: str = ""
+        answer: object = None
+        options: object = None
+        explanation: str = ""
         user_answer: object = None
 
     def __init__(self, question_store, wrong_store, user_id: str) -> None:
@@ -55,12 +64,21 @@ class SaveWrongAnswerTool(Tool):
         self._uid = user_id
 
     async def run(self, params: "SaveWrongAnswerTool.Params") -> str:
-        q = self._qs.get(self._uid, params.question_id)
-        if q is None:
-            return "未找到该题目，无法保存到错题集。"
-        snapshot = {"type": q["type"], "stem": q["stem"], "options": q["options"],
-                    "answer": q["answer"], "explanation": q["explanation"]}
-        self._ws.create(self._uid, q["id"], "chat", snapshot, params.user_answer)
+        snapshot = None
+        if params.question_id:                       # 题库题：按 id 取快照
+            q = self._qs.get(self._uid, params.question_id)
+            if q is not None:
+                snapshot = {"type": q["type"], "stem": q["stem"], "options": q["options"],
+                            "answer": q["answer"], "explanation": q["explanation"]}
+        if snapshot is None and (params.stem or "").strip():   # 即席题：用传入内容
+            snapshot = {"type": params.type or "short", "stem": params.stem,
+                        "options": params.options, "answer": params.answer,
+                        "explanation": params.explanation or ""}
+        if snapshot is None:
+            return ("无法保存到错题集：请直接提供题目内容（至少 stem 与 answer）；"
+                    "即席出题时不能只靠 question_id。")
+        self._ws.create(self._uid, params.question_id or "", "chat", snapshot,
+                        params.user_answer)
         return "已保存到错题集。"
 
 
