@@ -37,13 +37,24 @@ class WrongAnswerStore:
         self._db.commit()
         return wid
 
+    _COLS = "id,question_id,exam_id,snapshot,user_answer,created_at"
+
+    def _row(self, r) -> dict:
+        return {"id": r[0], "question_id": r[1], "exam_id": r[2],
+                "snapshot": json.loads(r[3]), "user_answer": json.loads(r[4]),
+                "created_at": r[5]}
+
     def list(self, user_id: str) -> list[dict]:
         rows = self._db.execute(
-            "SELECT id,question_id,exam_id,snapshot,user_answer,created_at "
-            "FROM wrong_answers WHERE user_id=? ORDER BY seq DESC", (user_id,)).fetchall()
-        return [{"id": r[0], "question_id": r[1], "exam_id": r[2],
-                 "snapshot": json.loads(r[3]), "user_answer": json.loads(r[4]),
-                 "created_at": r[5]} for r in rows]
+            f"SELECT {self._COLS} FROM wrong_answers WHERE user_id=? ORDER BY seq DESC",
+            (user_id,)).fetchall()
+        return [self._row(r) for r in rows]
+
+    def sample(self, user_id: str, count: int) -> list[dict]:
+        rows = self._db.execute(
+            f"SELECT {self._COLS} FROM wrong_answers WHERE user_id=? "
+            "ORDER BY RANDOM() LIMIT ?", (user_id, count)).fetchall()
+        return [self._row(r) for r in rows]
 
     def delete(self, user_id: str, wid: str) -> None:
         self._db.execute("DELETE FROM wrong_answers WHERE id=? AND user_id=?", (wid, user_id))

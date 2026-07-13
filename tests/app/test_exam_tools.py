@@ -1,7 +1,16 @@
 import json
 
 from app.questions import QuestionStore
-from app.tools.exam_tools import SampleQuestionsTool, SaveWrongAnswerTool
+from app.tools.exam_tools import (
+    AddQuestionsTool,
+    DeleteQuestionsTool,
+    DeleteWrongAnswersTool,
+    GenerateQuestionsTool,
+    ListQuestionsTool,
+    SampleQuestionsTool,
+    SampleWrongAnswersTool,
+    SaveWrongAnswerTool,
+)
 from app.wrong_answers import WrongAnswerStore
 
 
@@ -43,3 +52,111 @@ async def test_save_wrong_respects_user_isolation():
     tool = SaveWrongAnswerTool(qs, ws, "u2")    # u2 试图保存 u1 的题
     assert "未找到" in await tool.run(tool.Params(question_id=qid, user_answer=0))
     assert ws.list("u2") == []
+
+
+# ---- add_questions ----
+
+async def test_add_questions_saves_valid_and_skips_invalid():
+    qs = QuestionStore(":memory:")
+    tool = AddQuestionsTool(qs, "u1")
+    good = {"type": "single", "stem": "题", "options": ["A", "B"], "answer": 1}
+    bad = {"type": "single", "stem": "题", "options": ["A", "B"], "answer": 9}  # 越界
+    out = await tool.run(tool.Params(questions=[good, bad]))
+    assert "1" in out                            # 入库 1 道
+    saved = qs.list("u1")
+    assert len(saved) == 1 and saved[0]["stem"] == "题"
+
+
+async def test_add_questions_all_invalid():
+    qs = QuestionStore(":memory:")
+    tool = AddQuestionsTool(qs, "u1")
+    out = await tool.run(tool.Params(questions=[{"type": "x", "stem": ""}]))
+    assert qs.list("u1") == []
+    assert "0" in out or "无" in out
+
+
+# ---- list_questions ----
+
+async def test_list_questions_returns_id_and_stem():
+    qs = QuestionStore(":memory:")
+    qid = qs.create("u1", _q())
+    qs.create("u2", _q())                        # 他人题目不出现
+    data = json.loads(await ListQuestionsTool(qs, "u1").run(ListQuestionsTool.Params()))
+    assert len(data) == 1 and data[0]["id"] == qid and "stem" in data[0]
+
+
+async def test_list_questions_empty():
+    out = await ListQuestionsTool(QuestionStore(":memory:"), "u1").run(
+        ListQuestionsTool.Params())
+    assert "题库为空" in out
+
+
+# ---- delete_questions ----
+
+async def test_delete_questions_removes_and_isolates():
+    qs = QuestionStore(":memory:")
+    a = qs.create("u1", _q())
+    b = qs.create("u2", _q())
+    out = await DeleteQuestionsTool(qs, "u1").run(
+        DeleteQuestionsTool.Params(question_ids=[a, b]))  # b 属于 u2，删不到
+    assert "1" in out
+    assert qs.list("u1") == [] and len(qs.list("u2")) == 1
+
+
+# ---- sample_wrong_answers ----
+
+async def test_sample_wrong_answers_returns_snapshot_with_answer():
+    ws = WrongAnswerStore(":memory:")
+    ws.create("u1", "q1", "chat", {"type": "single", "stem": "题", "options": ["A", "B"],
+                                   "answer": 1, "explanation": "解析"}, 0)
+    data = json.loads(await SampleWrongAnswersTool(ws, "u1").run(
+        SampleWrongAnswersTool.Params(count=5)))
+    assert len(data) == 1 and data[0]["snapshot"]["answer"] == 1 and "id" in data[0]
+
+
+async def test_sample_wrong_answers_empty():
+    out = await SampleWrongAnswersTool(WrongAnswerStore(":memory:"), "u1").run(
+        SampleWrongAnswersTool.Params(count=5))
+    assert "错题集为空" in out
+
+
+# ---- delete_wrong_answers ----
+
+async def test_delete_wrong_answers_removes():
+    ws = WrongAnswerStore(":memory:")
+    wid = ws.create("u1", "q1", "chat", _q(), 0)
+    out = await DeleteWrongAnswersTool(ws, "u1").run(
+        DeleteWrongAnswersTool.Params(wrong_answer_ids=[wid]))
+    assert "1" in out and ws.list("u1") == []
+
+
+# ---- generate_questions（stub quiz_service，不触真实 embedding）----
+
+class _StubQuiz:
+    def __init__(self, result=None, exc=None):
+        self._result, self._exc = result, exc
+
+    async def generate(self, user_id, topic, count, types):
+        if self._exc:
+            raise self._exc
+        return self._result
+
+
+async def test_generate_questions_success():
+    tool = GenerateQuestionsTool(_StubQuiz(result=[_q(), _q()]), "u1")
+    out = await tool.run(tool.Params(topic="光合作用", count=2))
+    assert "2" in out
+
+
+async def test_generate_questions_no_knowledge():
+    from app.quiz_service import NoKnowledge
+    tool = GenerateQuestionsTool(_StubQuiz(exc=NoKnowledge("光合作用")), "u1")
+    out = await tool.run(tool.Params(topic="光合作用"))
+    assert "知识库" in out
+
+
+async def test_generate_questions_quiz_error():
+    from app.quiz_service import QuizError
+    tool = GenerateQuestionsTool(_StubQuiz(exc=QuizError("bad")), "u1")
+    out = await tool.run(tool.Params(topic="x"))
+    assert "失败" in out

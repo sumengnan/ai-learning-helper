@@ -29,7 +29,16 @@ from ..summaries import SummaryStore
 from ..summarizer import RollingSummarizer
 from ..sources import SOURCE_GUIDE, SourceSink, wrap_tool
 from ..tools.attachment_tools import ListAttachmentsTool, ReadAttachmentTool
-from ..tools.exam_tools import SampleQuestionsTool, SaveWrongAnswerTool
+from ..tools.exam_tools import (
+    AddQuestionsTool,
+    DeleteQuestionsTool,
+    DeleteWrongAnswersTool,
+    GenerateQuestionsTool,
+    ListQuestionsTool,
+    SampleQuestionsTool,
+    SampleWrongAnswersTool,
+    SaveWrongAnswerTool,
+)
 from ..tools.knowledge_tools import SaveToKnowledgeTool
 from ..tools.save_download import SaveDownloadTool
 from ..verify import Verdict
@@ -43,8 +52,9 @@ def _chunks(text: str, size: int = _DELIVER_CHUNK):
         yield text[i:i + size]
 
 EXAM_GUIDE = (
-    "\n\n你具备「模拟考试」能力：\n"
-    "- 当用户想模拟考试/刷题时，用 sample_questions 工具从其题库抽题。\n"
+    "\n\n你具备「题库 / 错题集 / 模拟考试」能力：\n"
+    "- 当用户想模拟考试/刷题时，用 sample_questions 从题库抽题；"
+    "想「用错题重考/复习错题」时用 sample_wrong_answers 从错题集抽题。\n"
     "- 默认采用「即时式」，无需询问模式，直接开始：每答一题立即给出正确答案与解析，"
     "不计分，直到用户说「结束」。\n"
     "- 仅当用户明确要求「打分」「计分」「打分式」等时才改用「打分式」："
@@ -53,7 +63,13 @@ EXAM_GUIDE = (
     "- 客观题（单选/多选/判断）依据题目答案判定对错；简答题结合参考答案判断。\n"
     "- 若某题用户答错且 save_wrong_answer 工具可用，则调用它把该题存入错题集"
     "（传 question_id 与用户作答 user_answer）；若该工具不可用，说明「答错自动保存错题集」"
-    "未开启，不要尝试保存。\n")
+    "未开启，不要尝试保存。\n"
+    "\n题库管理：\n"
+    "- 用户让你「把这些知识/资料整理成题存进题库」时，用 add_questions 直接把你整理好的"
+    "题目写入题库；若用户希望「就某主题从我的知识库出题」，用 generate_questions（依赖知识库检索）。\n"
+    "- 用 list_questions 查看题库（含 id），用 sample_wrong_answers 查看错题（含 id）。\n"
+    "- delete_questions（删题库题）和 delete_wrong_answers（删错题）会永久删除，"
+    "调用前必须先向用户复述将删除的具体题目并等待用户确认，切勿在未确认时直接删除。\n")
 
 ATTACHMENT_GUIDE = (
     "\n\n用户可能在消息中上传附件（文件内容默认不在上下文里，需要时再取）：\n"
@@ -77,7 +93,7 @@ class _Decision(BaseModel):
 
 def make_chat_router(harness, store, config, question_store=None, wrong_store=None,
                      verifier=None, attachment_store=None, run_manager=None,
-                     knowledge_service=None) -> APIRouter:
+                     knowledge_service=None, quiz_service=None) -> APIRouter:
     router = APIRouter()
     # 断点续传：一轮生成跑成脱离请求的后台任务，事件走 RunManager 内存总线（见 app/run_manager.py）。
     # 未注入时退化为每路由独立实例（测试/无续传场景），行为仍正确、只是跨请求接不上。
@@ -124,8 +140,17 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             _reg(SaveToKnowledgeTool(knowledge_service, user_id))
         if question_store is not None:
             _reg(SampleQuestionsTool(question_store, user_id))
+            _reg(AddQuestionsTool(question_store, user_id))
+            _reg(ListQuestionsTool(question_store, user_id))
+            _reg(DeleteQuestionsTool(question_store, user_id))
+            if quiz_service is not None:
+                _reg(GenerateQuestionsTool(quiz_service, user_id))
             if save_wrong and wrong_store is not None:
                 _reg(SaveWrongAnswerTool(question_store, wrong_store, user_id))
+        # 错题集捞题/删题是独立能力，不受「答错自动保存」开关限制
+        if wrong_store is not None:
+            _reg(SampleWrongAnswersTool(wrong_store, user_id))
+            _reg(DeleteWrongAnswersTool(wrong_store, user_id))
         # 附件工具：本会话有过附件才暴露（按需取内容，图片走视觉）
         if attachment_store is not None and has_attachments:
             _reg(ListAttachmentsTool(attachment_store, user_id, conv_id))

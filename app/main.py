@@ -107,7 +107,8 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
     app.include_router(make_chat_router(harness, store, config,
                                         question_store=question_store, wrong_store=wrong_store,
                                         verifier=verifier, attachment_store=attachment_store,
-                                        run_manager=run_manager, knowledge_service=service))
+                                        run_manager=run_manager, knowledge_service=service,
+                                        quiz_service=quiz_service))
     app.include_router(make_documents_router(service, doc_store, config))
     app.include_router(make_attachments_router(attachment_store, store, config))
 

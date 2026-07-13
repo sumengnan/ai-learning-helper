@@ -88,6 +88,20 @@ def _b_sample_questions(args: dict, result: str) -> dict | None:
     return {"type": "question", "label": label}
 
 
+def _b_sample_wrong_answers(args: dict, result: str) -> dict | None:
+    if not result or result.startswith("错题集为空"):
+        return None
+    count = None
+    try:
+        data = json.loads(result)
+        if isinstance(data, list):
+            count = len(data)
+    except (ValueError, TypeError):
+        count = args.get("count")
+    label = f"错题集抽题 {count} 道" if count else "错题集抽题"
+    return {"type": "question", "label": label}
+
+
 def _b_read_attachment(args: dict, result: str) -> dict | None:
     if not result or result.startswith("未找到该附件"):
         return None
@@ -122,6 +136,7 @@ _BUILDERS = {
     "browse": _b_browse,
     "http_request": _b_http,
     "sample_questions": _b_sample_questions,
+    "sample_wrong_answers": _b_sample_wrong_answers,
     "read_attachment": _b_read_attachment,
     "recall_episodes": _b_recall_episodes,
     "run_python": _b_code("run_python"),

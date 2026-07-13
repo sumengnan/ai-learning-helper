@@ -29,3 +29,23 @@ def test_delete_one():
     a = s.create("u1", "q", "e", _snap(), 0)
     s.delete("u1", a)
     assert s.list("u1") == []
+
+
+def test_sample_returns_snapshots_within_count():
+    s = WrongAnswerStore(":memory:")
+    for _ in range(3):
+        s.create("u1", "q", "e", _snap(), 0)
+    got = s.sample("u1", 2)
+    assert len(got) == 2 and all(r["snapshot"] == _snap() for r in got)
+
+
+def test_sample_respects_user_isolation():
+    s = WrongAnswerStore(":memory:")
+    s.create("u1", "q", "e", _snap(), 0)
+    s.create("u2", "q", "e", _snap(), 0)          # 他人错题不应被抽到
+    got = s.sample("u1", 10)
+    assert len(got) == 1
+
+
+def test_sample_empty_returns_empty_list():
+    assert WrongAnswerStore(":memory:").sample("u1", 5) == []
