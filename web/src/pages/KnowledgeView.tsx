@@ -11,7 +11,7 @@ import DescriptionIcon from "@mui/icons-material/Description";
 import { AnimatePresence, motion } from "framer-motion";
 import { api } from "../api/client";
 import { listItemVariants } from "../components/motion";
-import { categoryColor, fmtDate } from "./knowledgeUtils";
+import { categoryColor, fmtDate, relevanceColor } from "./knowledgeUtils";
 import { KnowledgeDetailDrawer } from "./KnowledgeDetailDrawer";
 
 const PAGE_SIZE = 8;
@@ -158,8 +158,13 @@ export function KnowledgeView() {
                         </Stack>
                         <Stack direction="row" spacing={0.5} sx={{ alignItems: "center", flexShrink: 0 }}>
                           {searching && d.relevance !== undefined && (
-                            <Chip size="small" color="primary" variant="outlined"
-                              label={`相关度 ${d.relevance}%`} />
+                            <Chip size="small" variant="outlined"
+                              label={`相关度 ${d.relevance}%`}
+                              sx={(theme) => ({
+                                color: relevanceColor(d.relevance ?? 0, theme.palette.mode),
+                                borderColor: relevanceColor(d.relevance ?? 0, theme.palette.mode),
+                                fontWeight: 600,
+                              })} />
                           )}
                           <IconButton size="small" color="error" aria-label="删除片段"
                             onClick={(e) => { e.stopPropagation(); remove(d.id); }}>
