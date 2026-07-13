@@ -199,9 +199,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 f"或在沙箱 /workspace/uploads/ 下访问）")
 
         # 分层上下文：窗口/摘要/检索的重活在此按会话级预算一次，_new_loop 内只做同步拼装。
+        _ctx_t0 = time.time()
         base_ctx = await _assembler.build_manager(
             harness.system_prompt + EXAM_GUIDE + ATTACHMENT_GUIDE + SOURCE_GUIDE, history,
             req.message, req.conversation_id)
+        log.info("上下文组装 conv=%s 历史%d条 耗时%dms",
+                 req.conversation_id, len(history), round((time.time() - _ctx_t0) * 1000))
 
         def _new_loop(run_id_a: str) -> AgentLoop:
             ctx = base_ctx
@@ -224,6 +227,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             queue: asyncio.Queue = asyncio.Queue()
             sentinel = object()
             step_by_id: dict[str, dict] = {}
+            tool_t0: dict[str, float] = {}   # tool_call_id -> 开始时刻，用于算单个工具耗时
 
             async def pump():
                 token = set_emitter(queue.put_nowait)
@@ -267,14 +271,17 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         st = {"tool": tc.name, "args": tc.arguments}
                         collect["steps"].append(st)
                         step_by_id[tc.id] = st
+                        tool_t0[tc.id] = time.time()
                         log.info("工具调用 %s", tc.name)
                     elif isinstance(ev, ToolFinished):
                         st = step_by_id.get(ev.result.tool_call_id)
                         if st is not None:
                             st["result"] = ev.result.content
                             st["is_error"] = ev.result.is_error
-                            log.info("工具完成 %s error=%s 输出%d字",
-                                     st["tool"], ev.result.is_error,
+                            _t0 = tool_t0.pop(ev.result.tool_call_id, None)
+                            _dur = round((time.time() - _t0) * 1000) if _t0 else -1
+                            log.info("工具完成 %s 耗时%dms error=%s 输出%d字",
+                                     st["tool"], _dur, ev.result.is_error,
                                      len(ev.result.content or ""))
                             if st["tool"] in ("search_memory", "run_python", "run_node", "run_java"):
                                 collect["grounding"].append(
@@ -313,9 +320,13 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             delivered_sources: list[dict] = []   # 交付那次尝试的权威来源
             errored = False
             parts: list[str] = []        # 累积客户端面 TextDelta，供 stop/重启保留已生成部分
+            first_token_at: list[float] = []   # 首个 TextDelta 时刻（记一次），用于算首字延迟
 
             def _acc(ev):
                 if isinstance(ev, TextDelta):
+                    if not first_token_at:
+                        first_token_at.append(time.time())
+                        log.info("首字延迟 %dms", round((first_token_at[0] - turn_start) * 1000))
                     parts.append(ev.text)
                     if len(parts) % 25 == 0:   # 去抖 flush：仅为服务重启后能看到断点前部分
                         store.flush_partial(req.conversation_id, turn_run_id, "".join(parts))

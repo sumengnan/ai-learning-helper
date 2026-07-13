@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -116,6 +117,7 @@ class Retriever:
                        *, config: RetrievalConfig | None = None) -> list[ScoredHit]:
         cfg = config or self._config
         pool = max(k, cfg.candidate_pool)
+        _t0 = time.time()
 
         # 查询规划：一次 LLM 得多查询改写/HyDE 假设文档/实体键（未启用或失败→空规划降级）
         planner = QueryPlanner(
@@ -186,7 +188,8 @@ class Retriever:
         hits = [ScoredHit(record=records[i], score=scored[i][0], components=scored[i][1])
                 for i in order]
         hits = await self._reranker.rerank(query_text, hits)
-        log.info("检索 query=%d字 路数=%d 候选=%d 返回=%d 增强(改写=%d hyde=%s 实体=%d)",
+        log.info("检索 query=%d字 路数=%d 候选=%d 返回=%d 增强(改写=%d hyde=%s 实体=%d) 耗时%dms",
                  len(query_text or ""), len(ranked_lists), len(records), min(k, len(hits)),
-                 len(plan.variants), bool(plan.hypothetical), len(plan.entity_keys))
+                 len(plan.variants), bool(plan.hypothetical), len(plan.entity_keys),
+                 round((time.time() - _t0) * 1000))
         return hits[:k]
