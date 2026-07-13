@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Box, Typography, Button, Card, CardContent, TextField, InputAdornment,
   IconButton, Checkbox, Chip, Stack, Pagination, Alert, MenuItem, Select,
-  CircularProgress, FormControl, InputLabel,
+  CircularProgress, FormControl, InputLabel, type ChipProps,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import DeleteIcon from "@mui/icons-material/Delete";
 import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
 import SearchIcon from "@mui/icons-material/Search";
+import SourceIcon from "@mui/icons-material/Source";
 import { AnimatePresence, motion } from "framer-motion";
 import { api, type Question } from "../api/client";
 import { listItemVariants } from "../components/motion";
@@ -21,6 +23,16 @@ const TYPES = [
   { key: "short", label: "简答" },
 ];
 const typeLabel = (t: string) => TYPES.find((x) => x.key === t)?.label ?? t;
+// 题型配色：各题型一色，一眼区分
+const typeColor = (t: string): ChipProps["color"] => {
+  switch (t) {
+    case "single": return "primary";      // 单选 蓝
+    case "multiple": return "secondary";  // 多选 紫
+    case "truefalse": return "success";   // 判断 绿
+    case "short": return "warning";       // 简答 橙
+    default: return "default";
+  }
+};
 
 function answerText(q: Question): string {
   if (q.type === "truefalse") return q.answer ? "正确" : "错误";
@@ -168,16 +180,32 @@ export default function QuestionBankView() {
                     <Checkbox sx={{ p: 0, mt: 0.25 }} checked={selected.has(item.id)}
                       onChange={() => toggle(item.id)} />
                     <Box sx={{ minWidth: 0, flex: 1, cursor: "pointer" }} onClick={() => setPreview(item)}>
-                      <Stack direction="row" spacing={1} sx={{ alignItems: "center", minWidth: 0 }}>
-                        <Chip size="small" label={typeLabel(item.type)} />
-                        <Typography variant="body2" sx={{ fontWeight: 600, ...clampSx }}>{item.stem}</Typography>
-                      </Stack>
-                      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, ...clampSx }}>
-                        答案：{answerText(item)}
+                      {/* 题目：正文色加粗，作为主内容突出 */}
+                      <Typography variant="body1" sx={{ fontWeight: 700, color: "text.primary", ...clampSx }}>
+                        {item.stem}
                       </Typography>
-                      {item.source && (
-                        <Typography variant="caption" color="text.secondary">· {item.source}</Typography>
-                      )}
+                      {/* 答案：浅色块 + 左侧彩条 + 「答案」彩色标签，与题目拉开区分度 */}
+                      <Box sx={{
+                        mt: 0.75, px: 1, py: 0.5, borderRadius: 1,
+                        borderLeft: "3px solid", borderColor: "primary.main",
+                        bgcolor: (t) => alpha(t.palette.primary.main, 0.07),
+                      }}>
+                        <Typography variant="body2" sx={{ color: "text.secondary", ...clampSx }}>
+                          <Box component="span" sx={{ color: "primary.main", fontWeight: 600 }}>答案：</Box>
+                          {answerText(item)}
+                        </Typography>
+                      </Box>
+                      {/* 底部：题型 + 来源，用分隔线与题目/答案隔开；题型在来源前 */}
+                      <Stack direction="row" spacing={1} sx={{
+                        mt: 1, pt: 1, alignItems: "center", flexWrap: "wrap",
+                        borderTop: "1px dashed", borderColor: "divider",
+                      }}>
+                        <Chip size="small" label={typeLabel(item.type)} color={typeColor(item.type)} />
+                        {item.source && (
+                          <Chip size="small" variant="outlined" color="info"
+                            icon={<SourceIcon />} label={item.source} />
+                        )}
+                      </Stack>
                     </Box>
                     <IconButton size="small" color="error" aria-label="删除题目"
                       onClick={() => removeOne(item.id)}>
