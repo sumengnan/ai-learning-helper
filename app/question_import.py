@@ -1,7 +1,6 @@
 # app/question_import.py
 from __future__ import annotations
 
-from .parsing import parse_file  # noqa: F401  (端点侧解析用；此模块只处理文本)
 from .quiz_service import QuizError, _parse_questions, _valid
 
 ALL_TYPES = ["single", "multiple", "truefalse", "short"]
