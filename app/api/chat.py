@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from uuid import uuid4
 
@@ -41,7 +42,10 @@ from ..tools.exam_tools import (
 )
 from ..tools.knowledge_tools import SaveToKnowledgeTool
 from ..tools.save_download import SaveDownloadTool
+from ..logging_setup import set_log_context
 from ..verify import Verdict
+
+log = logging.getLogger("app.chat")
 
 # 交付门缓冲后补发终稿时，把文本切成小片以保留打字机效果
 _DELIVER_CHUNK = 40
@@ -261,11 +265,15 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         st = {"tool": tc.name, "args": tc.arguments}
                         collect["steps"].append(st)
                         step_by_id[tc.id] = st
+                        log.info("工具调用 %s", tc.name)
                     elif isinstance(ev, ToolFinished):
                         st = step_by_id.get(ev.result.tool_call_id)
                         if st is not None:
                             st["result"] = ev.result.content
                             st["is_error"] = ev.result.is_error
+                            log.info("工具完成 %s error=%s 输出%d字",
+                                     st["tool"], ev.result.is_error,
+                                     len(ev.result.content or ""))
                             if st["tool"] in ("search_memory", "run_python", "run_node", "run_java"):
                                 collect["grounding"].append(
                                     {"tool": st["tool"], "content": ev.result.content,
@@ -294,6 +302,10 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             steps: list[dict] = []       # 工具调用轨迹（落库供 UI 还原）
             progress: list[dict] = []    # 沙箱/子代理/校验进度（落库）
             turn_start = time.time()     # 本轮墙钟起点，用于落库耗时（刷新后仍可展示）
+            # 关联 id：本轮（后台任务）内每条日志都带 conv/run，便于把一次请求串起来看
+            set_log_context(conv_id=req.conversation_id, run_id=turn_run_id)
+            log.info("聊天开始 msg=%d字 附件=%d 交付门=%s",
+                     len(req.message or ""), len(attachment_metas), gate_on)
             question = req.message
             delivered = None
             delivered_sources: list[dict] = []   # 交付那次尝试的权威来源
@@ -404,11 +416,15 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 status = "error" if errored else "done"
                 final_content = delivered or "".join(parts) or "（本轮未完成）"
                 _usage = collect.get("usage") or {}
+                _elapsed = round((time.time() - turn_start) * 1000)
                 store.finish_turn(req.conversation_id, turn_run_id, final_content,
                                   steps=steps or None, progress=progress or None,
                                   status=status, sources=delivered_sources or None,
                                   tokens=_usage.get("tokens"), cost=_usage.get("cost"),
-                                  elapsed_ms=round((time.time() - turn_start) * 1000))
+                                  elapsed_ms=_elapsed)
+                log.info("聊天完成 status=%s 耗时%dms tokens=%s 工具%d次 来源%d条",
+                         status, _elapsed, _usage.get("tokens"), len(steps),
+                         len(delivered_sources))
                 # L3：把对话文本写入向量库供后续语义召回（best-effort，不阻断）
                 if _conv_memory is not None and not errored and final_content:
                     try:
