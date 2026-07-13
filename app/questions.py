@@ -56,11 +56,36 @@ class QuestionStore:
             (qid, user_id)).fetchone()
         return self._row(r) if r else None
 
-    def list(self, user_id: str) -> list[dict]:
+    def _filter(self, user_id: str, type, source, q):
+        clauses = ["user_id=?"]
+        params: list = [user_id]
+        if type:
+            clauses.append("type=?"); params.append(type)
+        if source:
+            clauses.append("source=?"); params.append(source)
+        if q:
+            clauses.append("stem LIKE ?"); params.append(f"%{q}%")
+        return " AND ".join(clauses), params
+
+    def list(self, user_id: str, *, type: str | None = None, source: str | None = None,
+             q: str | None = None, limit: int | None = None, offset: int = 0) -> list[dict]:
+        where, params = self._filter(user_id, type, source, q)
+        sql = f"SELECT {self._COLS} FROM questions WHERE {where} ORDER BY created_at DESC"
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"; params += [limit, offset]
+        return [self._row(r) for r in self._db.execute(sql, params).fetchall()]
+
+    def count(self, user_id: str, *, type: str | None = None, source: str | None = None,
+              q: str | None = None) -> int:
+        where, params = self._filter(user_id, type, source, q)
+        return self._db.execute(
+            f"SELECT COUNT(*) FROM questions WHERE {where}", params).fetchone()[0]
+
+    def sources(self, user_id: str) -> list[str]:
         rows = self._db.execute(
-            f"SELECT {self._COLS} FROM questions WHERE user_id=? ORDER BY created_at",
-            (user_id,)).fetchall()
-        return [self._row(r) for r in rows]
+            "SELECT DISTINCT source FROM questions WHERE user_id=? AND source<>'' "
+            "ORDER BY source", (user_id,)).fetchall()
+        return [r[0] for r in rows]
 
     def sample(self, user_id: str, count: int, types: list[str] | None) -> list[dict]:
         if types:

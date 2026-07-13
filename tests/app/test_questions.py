@@ -66,3 +66,29 @@ def test_create_deduped_allows_diff_type_or_user():
     other_user = s.create_deduped("u2", _q(type="single", stem="同题干"))
     assert diff_type is not None and other_user is not None
     assert len(s.list("u1")) == 2 and len(s.list("u2")) == 1
+
+
+def test_list_filter_and_pagination():
+    s = QuestionStore(":memory:")
+    for i in range(3):
+        s.create("u1", _q(type="single", stem=f"单选{i}", options=["1", "2"], answer=1))
+    s.create("u1", _q(type="truefalse", stem="判断题", options=None, answer=True))
+    s.create("u1", _q(type="single", stem="含关键词KW", options=["1", "2"], answer=0))
+    assert s.count("u1") == 5
+    assert s.count("u1", type="single") == 4
+    assert {q["stem"] for q in s.list("u1", type="truefalse")} == {"判断题"}
+    assert s.count("u1", q="KW") == 1 and s.list("u1", q="KW")[0]["stem"] == "含关键词KW"
+    page1 = s.list("u1", limit=2, offset=0)
+    page2 = s.list("u1", limit=2, offset=2)
+    assert len(page1) == 2 and len(page2) == 2
+    assert {x["id"] for x in page1}.isdisjoint({x["id"] for x in page2})   # 不重叠
+
+
+def test_sources_distinct_nonempty_isolated():
+    s = QuestionStore(":memory:")
+    s.create("u1", _q(stem="a")); s.create("u1", _q(stem="b"))          # source="算术"
+    s.create("u1", {"type": "single", "stem": "c", "options": ["1", "2"],
+                    "answer": 0, "source": ""})                          # 空 source 排除
+    s.create("u2", {"type": "single", "stem": "d", "options": ["1", "2"],
+                    "answer": 0, "source": "他人"})                      # 他用户不出现
+    assert s.sources("u1") == ["算术"]
