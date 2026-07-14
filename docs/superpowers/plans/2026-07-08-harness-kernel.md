@@ -4,7 +4,7 @@
 
 **目标：** 用纯 Python + 全异步，构建一个最小可跑的 Agent 运行时——对话闭环 + 工具调用 + 结果回填 + 事件流对外，自带 `calculator` 玩具工具。
 
-**架构：** 四个职责单一的单元（`llm` 模型抽象 / `tools` 工具系统 / `context` 上下文 / `loop` 编排内核），依赖单向 `loop → {llm, tools, context}`，共享 `types`/`events`/`state`。`AgentLoop.run()` 是 async generator，逐条 yield 结构化事件。用 `MockModelClient` 做不打真实 API 的确定性测试。
+**架构：** 四个职责单一的单元（`llm` 模型抽象 / `tools` 工具系统 / `context` 上下文 / `loop` 编排内核），依赖单向 `loop → {llm, tools, context}`，共享 `types`/`events`/`state`。`AgentLoop.run()` 是 async generator，逐条 yield 结构化事件。用 `MockModelClient` 做不打真实 API 的确定性测试。（注：这是本计划落地的**最初内核**；后续 `reliability`/`telemetry`/`approval` 等 spec 又为 `loop` 引入了横切依赖，方向仍单向向下、无环，现状见下方「依赖方向」。）
 
 **技术栈：** Python 3.11+ · `uv` · `openai`(async) · `pydantic` v2 · `pydantic-settings` · `pytest` + `pytest-asyncio`。
 
@@ -30,7 +30,9 @@
 | `tests/test_*.py` | 各单元测试 |
 | `examples/demo.py` | 订阅事件流逐条打印 |
 
-依赖方向：`loop` 依赖 `llm`/`tools`/`context`；三者互不依赖，只共享 `types`/`events`/`state`。
+依赖方向（最初内核）：`loop` 依赖 `llm`/`tools`/`context`；三者互不依赖，只共享 `types`/`events`/`state`。
+
+> **现状更新：** 后续 spec 已为 `loop` 引入横切依赖——`reliability`（预算/重试）、`telemetry`（tracing）、`approval`（工具审批），当前实际为 `loop → {llm, tools, context, reliability, telemetry, approval}`，另共享 `types`/`events`/`state`/`usage`。这些新增依赖方向仍全部单向向下、无环，未破坏分层不变量（`src/harness` 亦不反向依赖 `app`）。
 
 ---
 
