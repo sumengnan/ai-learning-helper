@@ -52,8 +52,9 @@ class RoutingSandbox:
             await box.close()
         self._boxes.clear()
 
-    async def exec(self, command: list[str], timeout: float) -> ExecResult:
-        return await self._boxes[self._default].exec(command, timeout)
+    async def exec(self, command: list[str], timeout: float,
+                   *, quiet: bool = False) -> ExecResult:
+        return await self._boxes[self._default].exec(command, timeout, quiet=quiet)
 
     async def write_file(self, path: str, content: str) -> None:
         await self._boxes[self._default].write_file(path, content)

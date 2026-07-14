@@ -15,7 +15,7 @@ class _FakeSandbox:
         self._ip_map = ip_map
         self.hosts = []
 
-    async def exec(self, cmd, timeout):
+    async def exec(self, cmd, timeout, *, quiet=False):
         host = cmd[-1]                       # ["python3","-c",script,host]
         self.hosts.append(host)
         return SimpleNamespace(

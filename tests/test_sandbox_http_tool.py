@@ -13,7 +13,7 @@ class FakeSandbox:
         self.outputs = list(outputs)
         self.calls = []
 
-    async def exec(self, cmd, timeout):
+    async def exec(self, cmd, timeout, *, quiet=False):
         self.calls.append(cmd)
         return SimpleNamespace(stdout=self.outputs.pop(0), stderr="",
                                exit_code=0, timed_out=False)

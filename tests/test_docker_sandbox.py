@@ -154,3 +154,22 @@ async def test_docker_exec_roundtrip():
         assert "42" in r.stdout
     finally:
         await sb.close()
+
+
+async def test_exec_quiet_suppresses_sandbox_progress():
+    # quiet=True（如 DNS getent 解析）不应产出「执行 …」沙箱活动进度；普通 exec 仍产出
+    from harness.events import Progress
+    from harness.progress import reset_emitter, set_emitter
+    sb, _ = _mock_docker_sandbox()
+    events: list = []
+    tok = set_emitter(events.append)
+    try:
+        await sb.exec(["getent", "ahosts", "example.com"], 5, quiet=True)
+        exec_progress = [e for e in events
+                         if isinstance(e, Progress) and e.text.startswith("执行")]
+        assert exec_progress == []                       # 静默：无「执行」进度
+        await sb.exec(["echo", "hi"], 5)                 # 普通 exec
+        assert any(e.text.startswith("执行") for e in events
+                   if isinstance(e, Progress))           # 仍上报
+    finally:
+        reset_emitter(tok)

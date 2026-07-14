@@ -159,7 +159,11 @@ class DockerSandbox:
                           (err or b"").decode(errors="replace"),
                           res.exit_code, timed_out=(res.exit_code == 124))
 
-    async def exec(self, command: list[str], timeout: float) -> ExecResult:
+    async def exec(self, command: list[str], timeout: float,
+                   *, quiet: bool = False) -> ExecResult:
+        # quiet=True：内部基础设施命令（如 DNS 解析 getent ahosts），走静默路径不刷沙箱活动日志
+        if quiet:
+            return await self._exec_raw(command, timeout)
         await self.start()   # 幂等；确保容器启动进度先于本次“执行”进度
         # 容器复用时 start() 不再产出进度；每次执行仍上报，让沙箱活动可见
         desc = " ".join(command).replace("\n", " ")
