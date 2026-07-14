@@ -57,11 +57,18 @@ def answer_text(q: dict) -> str:
     return str(ans if ans is not None else "")
 
 
+# 英文正/负向作答：词边界匹配，容忍前后缀与标点（如「我回答true。」「false!」）
+_TF_FALSE_WORD = re.compile(r"(?<![a-zA-Z])(false|no)(?![a-zA-Z])", re.I)
+_TF_TRUE_WORD = re.compile(r"(?<![a-zA-Z])(true|yes)(?![a-zA-Z])", re.I)
+
+
 def _parse_tf(text: str) -> bool | None:
     low = text.strip().lower()
-    if any(k in text for k in _TF_FALSE) or low in ("false", "f", "no", "n", "x"):
+    # 中文措辞用 substring；英文 true/false/yes/no 用词边界（不必整串精确）；
+    # 单字母 t/f/y/n/x 仍需整串精确，避免匹配到含该字母的普通词
+    if any(k in text for k in _TF_FALSE) or _TF_FALSE_WORD.search(text) or low in ("f", "n", "x"):
         return False
-    if any(k in text for k in _TF_TRUE) or low in ("true", "t", "yes", "y"):
+    if any(k in text for k in _TF_TRUE) or _TF_TRUE_WORD.search(text) or low in ("t", "y"):
         return True
     return None
 

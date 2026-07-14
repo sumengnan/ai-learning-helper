@@ -43,6 +43,10 @@ def test_parse_multiple_choice(text, expect):
 @pytest.mark.parametrize("text,expect", [
     ("对", True), ("正确", True), ("是的", True), ("√", True),
     ("错", False), ("错误", False), ("不对", False), ("×", False), ("否", False),
+    # 英文作答（含标点/中文前缀也要识别，回归：曾因整串精确匹配而漏判为 None）
+    ("true", True), ("True", True), ("true。", True), ("我回答true", True),
+    ("false", False), ("false!", False), ("我选false", False),
+    ("construe this", None),   # 词内的 true 不应误判
 ])
 def test_parse_truefalse(text, expect):
     assert parse_choice(text, _tf()) is expect
