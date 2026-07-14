@@ -50,7 +50,7 @@ export default function HomeView() {
       <Stack direction="row" spacing={1.5}
         sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1, mb: 2 }}>
         <Typography sx={{ fontSize: 22, fontWeight: 700, letterSpacing: "-.02em" }}>
-          {tab === "ops" ? "AI 运行统计" : "概览"}
+          {tab === "ops" ? "AI 运行统计(全局)" : "概览"}
         </Typography>
         <Box sx={{ flex: 1 }} />
         <ToggleButtonGroup exclusive size="small" value={tab} color="primary"
