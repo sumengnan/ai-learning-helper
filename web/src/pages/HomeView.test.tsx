@@ -97,7 +97,7 @@ describe("HomeView", () => {
     ]);
     renderHome();
     await waitFor(() => expect(screen.getByText("二叉树遍历")).toBeTruthy());
-    fireEvent.click(screen.getByText("🧠 AI 记的偏好"));
+    fireEvent.click(screen.getByText("AI 记的偏好"));
     await waitFor(() => expect(screen.getByText("AI 记住的偏好")).toBeTruthy());  // 抽屉标题
     expect(await screen.findByText("用户偏好用中文")).toBeTruthy();
     expect(statsApi.memory).toHaveBeenCalled();

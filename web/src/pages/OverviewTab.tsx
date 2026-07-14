@@ -5,6 +5,8 @@ import { useNavigate } from "react-router-dom";
 import {
   Box, Card, CardContent, Typography, Stack, Button, IconButton, Tooltip, useTheme,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
+import { useAuth } from "../auth/AuthProvider";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import AddCommentIcon from "@mui/icons-material/AddComment";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
@@ -19,9 +21,23 @@ import { previewKind } from "./downloadsUtils";
 import { MemoryDrawer } from "./MemoryDrawer";
 import { rangeLabel, fmtTokens, fmtPct, cardSx, Eyebrow, Sparkline, fromNow } from "./statsShared";
 
+// 按当前时段给出问候语与配图
+function greetingOf(hour: number): { text: string; emoji: string } {
+  if (hour < 6) return { text: "夜深了", emoji: "🌙" };
+  if (hour < 12) return { text: "早上好", emoji: "🌅" };
+  if (hour < 14) return { text: "中午好", emoji: "🌤️" };
+  if (hour < 18) return { text: "下午好", emoji: "☀️" };
+  return { text: "晚上好", emoji: "🌆" };
+}
+
+// 我的积累四张卡的主题色（各一色，打破清一色白卡的单调）
+type Hue = "info" | "primary" | "warning" | "secondary";
+
 export function OverviewTab({ data, days }: { data: StatsOverview; days: number }) {
   const nav = useNavigate();
   const theme = useTheme();
+  const { user } = useAuth();
+  const greet = greetingOf(new Date().getHours());
   const [preview, setPreview] = useState<PreviewFile | null>(null);
   const [memoryOpen, setMemoryOpen] = useState(false);
 
@@ -38,25 +54,58 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
   const { learn } = data;
   const abilityMax = Math.max(1, ...learn.abilities.map((a) => a.count));
 
+  const assetCards: { icon: string; lbl: string; v: number; sub: string; hue: Hue; act?: boolean; onClick: () => void }[] = [
+    { icon: "📚", lbl: "学习资料", v: learn.assets.documents, sub: "已建索引 · 查看 →", hue: "info", onClick: () => nav("/knowledge") },
+    { icon: "✏️", lbl: "题库", v: learn.assets.questions, sub: learn.assets.questions ? "去练习 →" : "生成一套 →", hue: "primary", act: true, onClick: () => nav("/questions") },
+    { icon: "❌", lbl: "错题本", v: learn.assets.wrong_answers, sub: learn.assets.wrong_answers ? "去复习 →" : "目前全对 👍", hue: "warning", onClick: () => nav("/wrong") },
+    { icon: "🧠", lbl: "AI 记的偏好", v: learn.assets.memory, sub: "点击查看它记住了什么 →", hue: "secondary", onClick: () => setMemoryOpen(true) },
+  ];
+
   return (
     <>
+      {/* 问候横幅：按时段问候 + 用户名，柔和渐变，给页面一个有温度的开场 */}
+      <Box sx={(t) => ({
+        position: "relative", overflow: "hidden", borderRadius: 3,
+        px: { xs: 2.5, md: 3.5 }, py: { xs: 2.25, md: 2.75 },
+        border: 1, borderColor: "divider",
+        background: `linear-gradient(120deg, ${alpha(t.palette.primary.main, t.palette.mode === "light" ? 0.12 : 0.22)}, ${alpha(t.palette.secondary.main, t.palette.mode === "light" ? 0.08 : 0.16)})`,
+      })}>
+        <Typography sx={{ fontSize: { xs: 20, md: 24 }, fontWeight: 750, letterSpacing: "-.02em" }}>
+          {greet.emoji} {greet.text}{user?.username ? `，${user.username}` : ""}
+        </Typography>
+        <Typography sx={{ fontSize: 13.5, color: "text.secondary", mt: 0.5 }}>
+          已积累 {learn.assets.documents} 份资料 · {learn.assets.questions} 道题 · AI 记住你 {learn.assets.memory} 条偏好，继续加油 ✨
+        </Typography>
+        {/* 右侧装饰光斑 */}
+        <Box aria-hidden sx={(t) => ({
+          position: "absolute", right: -40, top: -40, width: 160, height: 160, borderRadius: "50%",
+          background: `radial-gradient(circle, ${alpha(t.palette.primary.main, 0.18)}, transparent 70%)`,
+          pointerEvents: "none",
+        })} />
+      </Box>
+
       {/* 我的积累 */}
       <Eyebrow>我的积累</Eyebrow>
       <Box sx={{ display: "grid", gap: 1.75, gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4,1fr)" } }}>
-        {[
-          { lbl: "📚 学习资料", v: learn.assets.documents, sub: "已建索引 · 查看 →", onClick: () => nav("/knowledge") },
-          { lbl: "✏️ 题库", v: learn.assets.questions, sub: learn.assets.questions ? "去练习 →" : "生成一套 →", act: true, onClick: () => nav("/questions") },
-          { lbl: "❌ 错题本", v: learn.assets.wrong_answers, sub: learn.assets.wrong_answers ? "去复习 →" : "目前全对 👍", onClick: () => nav("/wrong") },
-          { lbl: "🧠 AI 记的偏好", v: learn.assets.memory, sub: "点击查看它记住了什么 →", onClick: () => setMemoryOpen(true) },
-        ].map((a) => (
-          <Card key={a.lbl} onClick={a.onClick} sx={(t) => ({ ...cardSx(t), cursor: "pointer",
-            transition: ".15s", "&:hover": { borderColor: "primary.main", transform: "translateY(-1px)" } })}>
+        {assetCards.map((a) => (
+          <Card key={a.lbl} onClick={a.onClick} sx={(t) => ({ ...cardSx(t),
+            position: "relative", overflow: "hidden", cursor: "pointer", transition: ".18s",
+            "&:hover": { borderColor: t.palette[a.hue].main, transform: "translateY(-2px)",
+              boxShadow: `0 12px 26px -16px ${alpha(t.palette[a.hue].main, 0.6)}` } })}>
+            {/* 顶部主题色细条 */}
+            <Box sx={(t) => ({ position: "absolute", left: 0, top: 0, right: 0, height: 3, bgcolor: t.palette[a.hue].main })} />
             <CardContent>
-              <Typography sx={{ fontSize: 12.5, color: "text.secondary" }}>{a.lbl}</Typography>
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                <Box sx={(t) => ({ width: 32, height: 32, flex: "none", borderRadius: 2,
+                  display: "grid", placeItems: "center", fontSize: 17,
+                  bgcolor: alpha(t.palette[a.hue].main, 0.12) })}>{a.icon}</Box>
+                <Typography sx={{ fontSize: 12.5, color: "text.secondary", fontWeight: 600 }}>{a.lbl}</Typography>
+              </Stack>
               <Typography sx={{ fontSize: 29, fontWeight: 700, letterSpacing: "-.025em",
-                fontVariantNumeric: "tabular-nums", mt: 0.3 }}>{a.v}</Typography>
-              <Typography sx={{ fontSize: 12, color: a.act ? "primary.main" : "text.disabled",
-                fontWeight: a.act ? 600 : 400 }}>{a.sub}</Typography>
+                fontVariantNumeric: "tabular-nums", mt: 0.6 }}>{a.v}</Typography>
+              <Typography sx={(t) => ({ fontSize: 12, mt: 0.1,
+                color: a.act ? t.palette[a.hue].main : "text.disabled",
+                fontWeight: a.act ? 600 : 400 })}>{a.sub}</Typography>
             </CardContent>
           </Card>
         ))}
