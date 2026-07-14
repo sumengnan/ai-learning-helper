@@ -59,26 +59,10 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
 
   return (
     <>
-      {/* 问候横幅：按时段问候 + 用户名，柔和渐变，给页面一个有温度的开场 */}
-      <Box sx={(t) => ({
-        position: "relative", overflow: "hidden", borderRadius: 3,
-        px: { xs: 2.5, md: 3.5 }, py: { xs: 2.25, md: 2.75 },
-        border: 1, borderColor: "divider",
-        background: `linear-gradient(120deg, ${alpha(t.palette.primary.main, t.palette.mode === "light" ? 0.12 : 0.22)}, ${alpha(t.palette.secondary.main, t.palette.mode === "light" ? 0.08 : 0.16)})`,
-      })}>
-        <Typography sx={{ fontSize: { xs: 20, md: 24 }, fontWeight: 750, letterSpacing: "-.02em" }}>
-          {greet.emoji} {greet.text}{user?.username ? `，${user.username}` : ""}
-        </Typography>
-        <Typography sx={{ fontSize: 13.5, color: "text.secondary", mt: 0.5 }}>
-          已积累 {learn.assets.documents} 份资料 · {learn.assets.questions} 道题 · AI 记住你 {learn.assets.memory} 条偏好，继续加油 ✨
-        </Typography>
-        {/* 右侧装饰光斑 */}
-        <Box aria-hidden sx={(t) => ({
-          position: "absolute", right: -40, top: -40, width: 160, height: 160, borderRadius: "50%",
-          background: `radial-gradient(circle, ${alpha(t.palette.primary.main, 0.18)}, transparent 70%)`,
-          pointerEvents: "none",
-        })} />
-      </Box>
+      {/* 问候语：按时段问候 + 用户名 */}
+      <Typography sx={{ fontSize: { xs: 20, md: 24 }, fontWeight: 750, letterSpacing: "-.02em" }}>
+        {greet.emoji} {greet.text}{user?.username ? `，${user.username}` : ""}
+      </Typography>
 
       {/* 我的积累 */}
       <Eyebrow>我的积累</Eyebrow>
