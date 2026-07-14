@@ -300,8 +300,30 @@ class StatsService:
                 self._app,
                 "SELECT COUNT(*) FROM conversation_messages WHERE conv_id IN "
                 "(SELECT id FROM conversations WHERE user_id=?)", (user_id,)),
-            "memory": self._scalar(self._mem, "SELECT COUNT(*) FROM memory_items"),
+            "memory": self._count_user_memories(user_id),
         }
+
+    def _user_conv_ids(self, user_id: str | None) -> list[str]:
+        """该用户的全部会话 id（对话记忆按 conv_id 归属，用它做用户隔离）。"""
+        if self._app is None or not user_id:
+            return []
+        try:
+            rows = self._app.execute(
+                "SELECT id FROM conversations WHERE user_id=?", (user_id,)).fetchall()
+        except sqlite3.Error:
+            return []
+        return [r[0] for r in rows]
+
+    def _count_user_memories(self, user_id: str | None) -> int:
+        conv_ids = self._user_conv_ids(user_id)
+        if self._mem is None or not conv_ids:
+            return 0
+        ph = ",".join("?" * len(conv_ids))
+        return self._scalar(
+            self._mem,
+            f"SELECT COUNT(*) FROM memory_records "
+            f"WHERE kind='conversation' AND superseded=0 AND owner_id IN ({ph})",
+            tuple(conv_ids))
 
     def _recent_downloads(self, user_id: str | None) -> list[dict]:
         if self._app is None:
@@ -315,15 +337,24 @@ class StatsService:
         return [{"id": r[0], "filename": r[1], "content_type": r[2], "size": r[3],
                  "created_at": r[4]} for r in rows]
 
-    def memory_items(self, limit: int = 50) -> list[dict]:
-        """列出最近的记忆条目（供首页「AI 记住的偏好」查看）。记忆库缺失时返回空。"""
-        if self._mem is None:
+    def memory_items(self, user_id: str | None, limit: int = 50) -> list[dict]:
+        """列出当前用户从对话中沉淀的长期记忆（供首页「AI 记住的偏好」查看）。
+
+        按会话归属做用户隔离：对话记忆以 conv_id 为 owner_id，只返回属于该用户
+        会话的 conversation 记忆（排除已被取代的 superseded 记录）。记忆库缺失或
+        用户无会话时返回空。
+        """
+        conv_ids = self._user_conv_ids(user_id)
+        if self._mem is None or not conv_ids:
             return []
         limit = max(1, min(limit, 200))
+        ph = ",".join("?" * len(conv_ids))
         try:
             rows = self._mem.execute(
-                "SELECT text, collection, created_at FROM memory_items "
-                "ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+                f"SELECT text, kind, created_at FROM memory_records "
+                f"WHERE kind='conversation' AND superseded=0 AND owner_id IN ({ph}) "
+                f"ORDER BY created_at DESC LIMIT ?",
+                (*conv_ids, limit)).fetchall()
         except sqlite3.Error:
             return []
         return [{"text": r[0], "collection": r[1], "created_at": r[2]} for r in rows]

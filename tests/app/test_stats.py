@@ -69,12 +69,22 @@ def _app_conn():
 
 def _mem_conn():
     conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE memory_items(id INTEGER PRIMARY KEY, collection TEXT, "
-                 "text TEXT, metadata TEXT, created_at TEXT)")
+    conn.execute("CREATE TABLE memory_records(rowid INTEGER PRIMARY KEY, id TEXT, "
+                 "owner_id TEXT, kind TEXT, mem_type TEXT, text TEXT, "
+                 "superseded INTEGER DEFAULT 0, created_at TEXT)")
+    # cv1 属于用户 'u'（见 _app_conn）；这三条是 u 的对话记忆
     conn.executemany(
-        "INSERT INTO memory_items(collection, text, created_at) VALUES ('semantic', ?, ?)",
-        [("a", "2026-07-11T01:00:00+00:00"), ("b", "2026-07-11T02:00:00+00:00"),
-         ("c", "2026-07-11T03:00:00+00:00")])
+        "INSERT INTO memory_records(id, owner_id, kind, mem_type, text, created_at) "
+        "VALUES (?, 'cv1', 'conversation', 'semantic', ?, ?)",
+        [("m1", "a", "2026-07-11T01:00:00+00:00"), ("m2", "b", "2026-07-11T02:00:00+00:00"),
+         ("m3", "c", "2026-07-11T03:00:00+00:00")])
+    # 干扰项：别的会话(别的用户)的记忆、已取代记忆、知识块——都不应计入 u 的偏好
+    conn.execute("INSERT INTO memory_records(id, owner_id, kind, mem_type, text, created_at) "
+                 "VALUES ('m4', 'cvX', 'conversation', 'semantic', '别人的', '2026-07-11T04:00:00+00:00')")
+    conn.execute("INSERT INTO memory_records(id, owner_id, kind, mem_type, text, superseded, created_at) "
+                 "VALUES ('m5', 'cv1', 'conversation', 'semantic', '旧的', 1, '2026-07-11T05:00:00+00:00')")
+    conn.execute("INSERT INTO memory_records(id, owner_id, kind, mem_type, text, created_at) "
+                 "VALUES ('m6', 'u', 'knowledge', 'semantic', '文档块', '2026-07-11T06:00:00+00:00')")
     conn.commit()
     return conn
 
@@ -167,15 +177,23 @@ def test_learn_last_conversation_and_downloads():
 
 
 def test_memory_items_listing():
-    items = _svc().memory_items(limit=10)
+    items = _svc().memory_items("u", limit=10)
+    # 只返回本用户会话(cv1)的对话记忆：排除别人的(cvX)、已取代(superseded)、知识块
     assert len(items) == 3
     assert {i["text"] for i in items} == {"a", "b", "c"}
     assert all("created_at" in i for i in items)
-    # 无记忆库降级为空
+
+
+def test_memory_items_isolated_by_user():
+    # 别的用户看不到 u 的记忆；无会话则返回空
+    assert _svc().memory_items("someone-else") == []
+
+
+def test_memory_items_no_mem_db():
     from app.stats import StatsService
     svc = StatsService(trajectory_conn=_traj_conn(), app_conn=_app_conn(), memory_conn=None,
                        now=lambda: FIXED_NOW)
-    assert svc.memory_items() == []
+    assert svc.memory_items("u") == []
 
 
 def test_activity_series_length_and_shape():

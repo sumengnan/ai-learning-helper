@@ -17,6 +17,6 @@ def make_stats_router(stats_service) -> APIRouter:
     @router.get("/api/stats/memory")
     async def memory(limit: int = Query(50, ge=1, le=200),
                      user_id: str = Depends(current_user)):
-        return stats_service.memory_items(limit)
+        return stats_service.memory_items(user_id, limit)
 
     return router
