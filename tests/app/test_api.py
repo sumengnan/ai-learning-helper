@@ -330,3 +330,56 @@ def test_chat_run_error_keeps_partial_output():
         _sse_events(resp)
     msgs = [m.content for m in store.messages(cid)]
     assert msgs == ["hi", "已经生成的部分答案\n\n（本轮未能完成，请重试）"]
+
+
+def test_delete_question_cascades_related_wrong_answers(make_mock):
+    # 删题时若错题集有对应错题：未确认(force)先不删并回报数量；确认后连带删掉错题。
+    from app.questions import QuestionStore
+    from app.wrong_answers import WrongAnswerStore
+    qs = QuestionStore(":memory:")
+    ws = WrongAnswerStore(":memory:")
+    app = create_app(config=_cfg(), harness=_fake_harness(make_mock, []),
+                     store=ConversationStore(":memory:"), doc_store=DocumentStore(":memory:"),
+                     question_store=qs, wrong_store=ws)
+    client = TestClient(app)
+    r = client.post("/api/auth/register", json={"username": "u", "password": "pw1234"})
+    uid = r.json()["user"]["id"]
+    h = {"Authorization": f"Bearer {r.json()['token']}"}
+
+    qid = qs.create(uid, {"type": "single", "stem": "1+1=?", "options": ["1", "2"],
+                          "answer": 1, "explanation": "", "source": "x"})
+    ws.create(uid, question_id=qid, exam_id="e",
+              snapshot={"type": "single", "stem": "1+1=?", "options": ["1", "2"],
+                        "answer": 1, "explanation": ""}, user_answer=0)
+
+    # 未确认：不删，回报 related_wrong=1
+    resp = client.delete(f"/api/questions/{qid}", headers=h).json()
+    assert resp == {"deleted": False, "related_wrong": 1}
+    assert qs.get(uid, qid) is not None
+    assert len(ws.list(uid)) == 1
+
+    # 确认(force=true)：题目与对应错题一并删除
+    resp2 = client.delete(f"/api/questions/{qid}?force=true", headers=h).json()
+    assert resp2 == {"deleted": True, "related_wrong": 1}
+    assert qs.get(uid, qid) is None
+    assert ws.list(uid) == []
+
+
+def test_delete_question_without_related_deletes_directly(make_mock):
+    from app.questions import QuestionStore
+    from app.wrong_answers import WrongAnswerStore
+    qs = QuestionStore(":memory:")
+    ws = WrongAnswerStore(":memory:")
+    app = create_app(config=_cfg(), harness=_fake_harness(make_mock, []),
+                     store=ConversationStore(":memory:"), doc_store=DocumentStore(":memory:"),
+                     question_store=qs, wrong_store=ws)
+    client = TestClient(app)
+    r = client.post("/api/auth/register", json={"username": "u", "password": "pw1234"})
+    uid = r.json()["user"]["id"]
+    h = {"Authorization": f"Bearer {r.json()['token']}"}
+    qid = qs.create(uid, {"type": "short", "stem": "无错题的题", "options": None,
+                          "answer": "x", "explanation": "", "source": ""})
+    # 无对应错题 → 直接删除
+    resp = client.delete(f"/api/questions/{qid}", headers=h).json()
+    assert resp == {"deleted": True, "related_wrong": 0}
+    assert qs.get(uid, qid) is None

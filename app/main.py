@@ -122,7 +122,8 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
     if dstore is not None:
         app.include_router(make_downloads_router(dstore))
 
-    app.include_router(make_questions_router(question_store, config, question_importer))
+    app.include_router(make_questions_router(question_store, config, question_importer,
+                                             wrong_store=wrong_store))
     app.include_router(make_wrong_answers_router(wrong_store))
 
     # 首页概览统计：聚合 harness 运行轨迹 + 应用业务数据。用独立只读连接（跨线程安全），

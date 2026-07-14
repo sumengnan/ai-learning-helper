@@ -251,8 +251,11 @@ export const api = {
         return r.json();
       });
     },
-    remove: (id: string): Promise<void> =>
-      authFetch(`/api/questions/${id}`, { method: "DELETE" }).then(() => undefined),
+    // 删题：force=false 时若有对应错题则不删，返回 {deleted:false, related_wrong:N} 供前端确认；
+    // force=true 则连带删除对应错题。
+    remove: (id: string, force = false): Promise<{ deleted: boolean; related_wrong: number }> =>
+      authFetch(`/api/questions/${id}${force ? "?force=true" : ""}`, { method: "DELETE" })
+        .then((r) => r.json()),
     removeMany: (ids: string[]): Promise<void> =>
       authFetch("/api/questions/delete", {
         method: "POST", headers: { "Content-Type": "application/json" },

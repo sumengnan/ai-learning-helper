@@ -56,6 +56,26 @@ class WrongAnswerStore:
             "ORDER BY RANDOM() LIMIT ?", (user_id, count)).fetchall()
         return [self._row(r) for r in rows]
 
+    def count_by_question(self, user_id: str, question_ids: list[str]) -> int:
+        """统计属于给定题目的错题数（用于删题前提示会连带删掉多少条错题）。"""
+        if not question_ids:
+            return 0
+        ph = ",".join("?" * len(question_ids))
+        return self._db.execute(
+            f"SELECT COUNT(*) FROM wrong_answers WHERE user_id=? AND question_id IN ({ph})",
+            (user_id, *question_ids)).fetchone()[0]
+
+    def delete_by_question(self, user_id: str, question_ids: list[str]) -> int:
+        """删除属于给定题目的错题，返回删除条数。"""
+        if not question_ids:
+            return 0
+        ph = ",".join("?" * len(question_ids))
+        cur = self._db.execute(
+            f"DELETE FROM wrong_answers WHERE user_id=? AND question_id IN ({ph})",
+            (user_id, *question_ids))
+        self._db.commit()
+        return cur.rowcount
+
     def delete(self, user_id: str, wid: str) -> None:
         self._db.execute("DELETE FROM wrong_answers WHERE id=? AND user_id=?", (wid, user_id))
         self._db.commit()

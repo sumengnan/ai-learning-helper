@@ -12,7 +12,8 @@ class IdsBody(BaseModel):
     ids: list[str]
 
 
-def make_questions_router(question_store, config, question_importer=None) -> APIRouter:
+def make_questions_router(question_store, config, question_importer=None,
+                          wrong_store=None) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/questions")
@@ -51,9 +52,15 @@ def make_questions_router(question_store, config, question_importer=None) -> API
         return await question_importer.import_text(user_id, file.filename, text)
 
     @router.delete("/api/questions/{qid}")
-    async def delete_question(qid: str, user_id: str = Depends(current_user)):
+    async def delete_question(qid: str, force: bool = False,
+                              user_id: str = Depends(current_user)):
+        # 该题在错题集里有对应错题且未确认（force=False）时，先不删，回报数量供前端弹窗确认。
+        related = wrong_store.count_by_question(user_id, [qid]) if wrong_store else 0
+        if related and not force:
+            return {"deleted": False, "related_wrong": related}
         question_store.delete(user_id, qid)
-        return {"ok": True}
+        removed = wrong_store.delete_by_question(user_id, [qid]) if (force and wrong_store) else 0
+        return {"deleted": True, "related_wrong": removed}
 
     @router.post("/api/questions/delete")
     async def delete_questions(body: IdsBody, user_id: str = Depends(current_user)):

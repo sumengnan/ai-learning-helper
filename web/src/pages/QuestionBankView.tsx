@@ -3,6 +3,7 @@ import {
   Box, Typography, Button, Card, CardContent, TextField, InputAdornment,
   IconButton, Chip, Stack, Pagination, Alert, MenuItem, Select,
   CircularProgress, FormControl, InputLabel, type ChipProps,
+  Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
@@ -62,6 +63,7 @@ export default function QuestionBankView() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [confirmDel, setConfirmDel] = useState<{ id: string; count: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback((p: number, filters: { q: string; type: string; source: string }) => {
@@ -92,7 +94,19 @@ export default function QuestionBankView() {
     await Promise.all([load(page, { q: q.trim(), type, source }), refreshSources()]);
   }
 
-  async function removeOne(id: string) { await api.questions.remove(id); await reload(); }
+  async function removeOne(id: string) {
+    const r = await api.questions.remove(id);
+    // 有对应错题：先不删，弹窗确认是否连带删除
+    if (!r.deleted && r.related_wrong > 0) { setConfirmDel({ id, count: r.related_wrong }); return; }
+    await reload();
+  }
+
+  async function confirmCascadeDelete() {
+    if (!confirmDel) return;
+    await api.questions.remove(confirmDel.id, true);   // force：连带删除对应错题
+    setConfirmDel(null);
+    await reload();
+  }
 
   async function upload(file: File) {
     setBusy(true); setError(null); setNotice(null);
@@ -217,6 +231,20 @@ export default function QuestionBankView() {
       )}
 
       <QuestionDetailDrawer question={preview} onClose={() => setPreview(null)} />
+
+      {/* 删题确认：该题在错题集里有对应错题时，确认后连带删除 */}
+      <Dialog open={confirmDel !== null} onClose={() => setConfirmDel(null)}>
+        <DialogTitle>删除题目并清理错题？</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            该题目在错题集中有 <b>{confirmDel?.count}</b> 条对应错题。删除题目会一并删除这些错题，且无法恢复。是否继续？
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmDel(null)}>取消</Button>
+          <Button color="error" variant="contained" onClick={confirmCascadeDelete}>删除题目和错题</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
