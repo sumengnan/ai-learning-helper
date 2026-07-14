@@ -267,3 +267,27 @@ async def test_judge_receives_tool_summary():
     assert verdict.ok is True
     # judge 的输入里带上了工具执行摘要，才能公正评价「简短确认」
     assert "add_questions" in captured["user"] and "已入库5道题" in captured["user"]
+
+
+# ---- consistency：声称完成动作但零工具调用 ----
+
+async def test_consistency_claim_without_toolcall_fails():
+    v = AnswerVerifier(_pass_complete(), _cfg())
+    verdict = await v.verify("答题", "回答正确！这道题已存入错题集。", [], None, steps=[])
+    assert verdict.ok is False and "consistency" in verdict.failed
+    assert "consistency" in verdict.hard_failed
+
+
+async def test_consistency_ok_when_tool_called():
+    v = AnswerVerifier(_pass_complete(),
+                       _cfg(gate_check_grounding=False, gate_check_code=False, gate_check_judge=False))
+    steps = [{"tool": "save_wrong_answer", "result": "已保存", "is_error": False}]
+    verdict = await v.verify("答题", "这道题已存入错题集。", [], None, steps=steps)
+    assert verdict.ok is True   # 确实调了工具，不拦
+
+
+async def test_consistency_ok_when_no_claim():
+    v = AnswerVerifier(_pass_complete(),
+                       _cfg(gate_check_grounding=False, gate_check_code=False, gate_check_judge=False))
+    verdict = await v.verify("问", "光合作用是把光能转化为化学能的过程。", [], None, steps=[])
+    assert verdict.ok is True   # 无完成性措辞，不拦
