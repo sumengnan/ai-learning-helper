@@ -32,6 +32,17 @@ _log = logging.getLogger("app.verify")
 # 硬门：失败不允许降级交付（必须重答或明确拦截）
 _HARD_CHECKS = frozenset({"format", "code", "empty"})
 
+# 校验层名 → 中文，供前端展示「未通过的是哪一层」
+_LAYER_ZH = {
+    "format": "格式/完整性", "grounding": "知识库依据", "code": "代码可运行",
+    "judge": "质量评分", "facts": "引用链接", "trajectory": "整体质量", "empty": "未产出答案",
+}
+
+
+def failed_layers_zh(failed: list[str]) -> str:
+    """把未通过的校验层名翻成中文（如 judge→质量评分），供前端展示哪层没过。"""
+    return "、".join(_LAYER_ZH.get(f, f) for f in failed)
+
 GROUNDING_SYSTEM = (
     "你是事实核查员。给你「知识库检索到的资料」和「待核查回答」。"
     "逐条检查回答中的事实性论断是否都能被资料支撑（常识性/推理性内容不算臆造）。"

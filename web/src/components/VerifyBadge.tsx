@@ -24,19 +24,20 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
   if (verify.length === 0 && checks.length === 0 && !quality) return null;
 
   const vLast = verify[verify.length - 1];
-  const vRunning = vLast?.status === "running";
-  // 取「最后一个终态事件」判定：多轮重答时以最终结果为准，中途某轮未通过不应盖过最终通过
-  const vTerminal = [...verify].reverse().find((p) => p.status === "ok" || p.status === "error");
   // 校验历史：每一轮的终态（通过/未通过），失败轮保留原因；重答后新增新记录、通过后亦不清除
   const rounds = verify.filter((p) => p.status === "ok" || p.status === "error");
   // 仅当有多轮或出现过失败时展示历史（单轮直接通过无「过程」可留，主行已足够）
   const showHistory = rounds.length > 1 || rounds.some((p) => p.status === "error");
+  const checkErr = checks.some((c) => c.status === "error");
 
-  // 状态机：以最后终态为准；仍在进行则 running；无终态且非 live 视为通过
+  // 状态以「最后一个 verify 事件」为准：running 显示当前过程（校验中…/重答中…，故未通过→重答中→
+  // 通过是连续过渡），ok/error 为终态。无 verify 事件时不谎称「验证中」，按每步校验有无失败定 ok/error。
   const state: "running" | "ok" | "error" =
-    vTerminal?.status === "error" ? "error"
-      : vTerminal?.status === "ok" ? "ok"
-        : (live || vRunning) ? "running" : "ok";
+    vLast?.status === "running" ? "running"
+      : vLast?.status === "error" ? "error"
+        : vLast?.status === "ok" ? "ok"
+          : checkErr ? "error" : "ok";
+  void live;
 
   const stateIcon =
     state === "running" ? <CircularProgress size={14} />
@@ -61,8 +62,8 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
           · 质量 {qFinal}
         </Typography>
       )}
-      {state === "error" && vTerminal?.text && (
-        <EllipsisText text={vTerminal.text} sx={{ ml: 0.5, color: "text.secondary" }} maxChars={28} />
+      {state === "error" && vLast?.text && (
+        <EllipsisText text={vLast.text} sx={{ ml: 0.5, color: "text.secondary" }} maxChars={28} />
       )}
     </Box>
   );
@@ -71,9 +72,22 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
     <Box>
       <CollapsibleBlock icon={<FactCheckIcon sx={{ fontSize: 15 }} color="action" />}
         title="校验" status={state} summary={summary}>
-        {/* 校验历史：多轮或有失败时保留每轮结果与原因（含重答前的失败轮），通过后亦不清除 */}
+        {/* 每步校验（检索命中/代码执行）——发生时间靠前，列在最上 */}
+        {checks.length > 0 && (
+          <Box sx={{ mb: (showHistory || quality) ? 1 : 0 }}>
+            {checks.map((c, i) => (
+              <Box key={c.tool + i} sx={{ display: "flex", alignItems: "center", gap: 0.75, py: 0.15 }}>
+                {c.status === "error"
+                  ? <CancelIcon sx={{ fontSize: 14 }} color="error" />
+                  : <CheckCircleIcon sx={{ fontSize: 14 }} color="success" />}
+                <Typography variant="caption" color="text.secondary">{c.text}</Typography>
+              </Box>
+            ))}
+          </Box>
+        )}
+        {/* 最终交付门校验历史（较晚发生）：失败轮保留「哪层没过 + 原因」，通过后亦不清除 */}
         {showHistory && (
-          <Box sx={{ mb: (checks.length || quality) ? 1 : 0 }}>
+          <Box sx={{ mb: quality ? 1 : 0 }}>
             {rounds.map((p, idx) => (
               <Box key={idx} sx={{ display: "flex", alignItems: "flex-start", gap: 0.75, py: 0.15 }}>
                 {p.status === "error"
@@ -83,18 +97,6 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
                   {rounds.length > 1 ? `第 ${idx + 1} 次：` : ""}
                   {p.status === "error" ? `未通过 — ${p.text}` : "校验通过"}
                 </Typography>
-              </Box>
-            ))}
-          </Box>
-        )}
-        {checks.length > 0 && (
-          <Box sx={{ mb: quality ? 1 : 0 }}>
-            {checks.map((c, i) => (
-              <Box key={c.tool + i} sx={{ display: "flex", alignItems: "center", gap: 0.75, py: 0.15 }}>
-                {c.status === "error"
-                  ? <CancelIcon sx={{ fontSize: 14 }} color="error" />
-                  : <CheckCircleIcon sx={{ fontSize: 14 }} color="success" />}
-                <Typography variant="caption" color="text.secondary">{c.text}</Typography>
               </Box>
             ))}
           </Box>

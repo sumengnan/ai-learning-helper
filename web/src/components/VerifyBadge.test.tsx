@@ -25,12 +25,13 @@ describe("VerifyBadge 状态机", () => {
     expect(screen.getByText("重答中…")).toBeTruthy();
   });
 
-  it("live 但尚无 verify 文案 → 回退「验证中…」", () => {
+  it("live 但只有每步校验、无最终校验 → 不谎称「验证中」（按每步定通过）", () => {
     render(<VerifyBadge live message={msg({
       status: "streaming",
       checks: [{ tool: "search_memory", status: "ok", text: "检索命中" }],
     })} />);
-    expect(screen.getByText("验证中…")).toBeTruthy();
+    expect(screen.queryByText("验证中…")).toBeNull();
+    expect(screen.getByText("校验通过")).toBeTruthy();
   });
 
   it("verify ok → 「校验通过」，有 quality.final 则并显示「质量 N」", () => {

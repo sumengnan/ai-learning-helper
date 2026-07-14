@@ -46,7 +46,7 @@ from ..tools.exam_tools import (
 from ..tools.knowledge_tools import SaveToKnowledgeTool
 from ..tools.save_download import SaveDownloadTool
 from ..logging_setup import set_log_context
-from ..verify import Verdict, _tool_exec_summary
+from ..verify import Verdict, _tool_exec_summary, failed_layers_zh
 
 log = logging.getLogger("app.chat")
 
@@ -458,7 +458,10 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             delivered_sources = source_sink.snapshot()
                             break
                         # error 事件的 text 携带完整原因（critique），供前端展开显示
-                        reason = verdict.critique or verdict.summary or "未通过自动校验"
+                        # error 事件 text：中文层名 + 完整原因，供前端展示「哪层没过 + 为什么」
+                        layers = failed_layers_zh(verdict.failed) or "校验"
+                        reason = (f"{layers}未通过"
+                                  + (f"：{verdict.critique}" if verdict.critique else ""))
                         yield _emit_verify(reason, status="error", key=ekey)
                         if attempt == max_attempts - 1:      # 用尽次数 → 降级交付
                             delivered = draft or "（本轮未完成）"
