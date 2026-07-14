@@ -304,3 +304,11 @@ async def test_judge_call_forces_json_response_format():
     v = AnswerVerifier(cap, _cfg(gate_check_grounding=False, gate_check_code=False))
     await v.verify("问", "答", [], None)
     assert seen["rf"] == {"type": "json_object"}   # judge 调用期间强制了 JSON 输出
+
+
+def test_judge_prompt_allows_multiturn_clarification():
+    # 回归护栏：judge 提示词须允许「针对无效/歧义输入的澄清、追问」，
+    # 否则考试等多轮场景里 AI 对无效作答的正常提示会被误判为「未达成目标」。
+    from app.verify import JUDGE_SYSTEM
+    for kw in ("多轮", "无效", "澄清", "追问"):
+        assert kw in JUDGE_SYSTEM, f"judge 提示词缺少多轮语境词：{kw}"
