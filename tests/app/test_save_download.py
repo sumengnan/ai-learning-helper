@@ -17,6 +17,7 @@ async def test_save_text(tmp_path):
     lst = store.list("u1")
     assert len(lst) == 1 and lst[0]["filename"] == "note.md"
     assert lst[0]["content_type"] == "text/markdown"
+    assert f"〔下载ID:{lst[0]['id']}〕" in out          # 结果带机读下载 id，供聊天页渲染下载按钮
 
 
 @pytest.mark.asyncio

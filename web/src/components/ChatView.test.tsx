@@ -15,7 +15,11 @@ vi.mock("../api/client", () => ({
   attachChat: vi.fn(async () => undefined),
   stopRun: vi.fn(async () => undefined),
   sendDecision: vi.fn(async () => undefined),
-  api: { messages: vi.fn(async () => []), autotitle: vi.fn(async () => ({ title: null })) },
+  api: {
+    messages: vi.fn(async () => []),
+    autotitle: vi.fn(async () => ({ title: null })),
+    downloads: { save: vi.fn(async () => undefined) },
+  },
 }));
 
 describe("ChatView", () => {
@@ -293,5 +297,36 @@ describe("ChatView", () => {
     // 关闭开关 → 隐藏
     fireEvent.click(screen.getByLabelText("展示数据来源和引用"));
     await waitFor(() => expect(screen.queryByText(/参考来源/)).toBeNull());
+  });
+
+  it("思考模式：ReasoningDelta → 展示思考过程与「思考中」提示", async () => {
+    vi.mocked(streamChat).mockImplementationOnce(
+      async (_cid, _msg, onEvent: (e: any) => void) => {
+        onEvent({ type: "ReasoningDelta", data: { text: "让我先分析一下" } });
+        onEvent({ type: "TextDelta", data: { text: "答案" } });
+        onEvent({ type: "RunFinished", data: {} });
+      });
+    render(<MemoryRouter><ChatView conversationId="c1" initial={[]} /></MemoryRouter>);
+    fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "hi" } });
+    fireEvent.click(screen.getByText("发送"));
+    await waitFor(() => expect(screen.getByText(/让我先分析一下/)).toBeTruthy());
+    // 完成后头部为「思考过程」（生成中为「思考中…」）——不与「思考模式」开关标签冲突
+    expect(screen.getByText(/思考过程/)).toBeTruthy();
+  });
+
+  it("生成文件：save_download step → 渲染下载按钮，点击调用 downloads.save", async () => {
+    const { api } = await import("../api/client");
+    render(<MemoryRouter><ChatView conversationId="c1" initial={[
+      { role: "user", content: "导出报告" },
+      { role: "assistant", content: "已导出。", status: "done", steps: [
+        { tool: "save_download", args: { filename: "报告.md" },
+          result: "已保存到下载区：报告.md（10 字节）。〔下载ID:abc123〕" },
+      ] },
+    ]} /></MemoryRouter>);
+    const btn = screen.getByRole("button", { name: /报告\.md/ });
+    expect(btn).toBeTruthy();
+    fireEvent.click(btn);
+    await waitFor(() => expect((api as any).downloads.save)
+      .toHaveBeenCalledWith("abc123", "报告.md"));
   });
 });

@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from ..events import (
-    ApprovalRequired, ApprovalResolved, ModelUsage, Progress, RunError, RunFinished,
-    RunStarted, StepFinished, StepStarted, TextDelta, ToolCallRequested, ToolFinished,
-    ToolStarted,
+    ApprovalRequired, ApprovalResolved, ModelUsage, Progress, ReasoningDelta, RunError,
+    RunFinished, RunStarted, StepFinished, StepStarted, TextDelta, ToolCallRequested,
+    ToolFinished, ToolStarted,
 )
 from ..state import RunState
 from ..types import Message, Role, ToolCall
@@ -54,6 +54,8 @@ def event_to_dict(ev) -> dict:
         data = {"run_id": ev.run_id}
     elif isinstance(ev, (StepStarted, StepFinished)):
         data = {"step": ev.step}
+    elif isinstance(ev, ReasoningDelta):
+        data = {"text": ev.text}
     elif isinstance(ev, TextDelta):
         data = {"text": ev.text}
     elif isinstance(ev, ToolCallRequested):

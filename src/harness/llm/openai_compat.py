@@ -79,6 +79,11 @@ class OpenAICompatibleClient:
             if getattr(choice, "finish_reason", None):
                 finish_reason = choice.finish_reason
             delta = choice.delta
+            # 思考模式（Qwen3/DeepSeek 等）：推理内容走 reasoning_content，先于正文产出。
+            # 不计入 completion_parts（不是正文），单独作为 reasoning chunk 让前端展示「思考中」。
+            reasoning = getattr(delta, "reasoning_content", None)
+            if reasoning:
+                yield StreamChunk(type="reasoning", text=reasoning)
             if getattr(delta, "content", None):
                 produced = True
                 completion_parts.append(delta.content)

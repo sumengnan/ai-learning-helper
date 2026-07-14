@@ -11,7 +11,7 @@ from opentelemetry.trace import Status, StatusCode
 
 from ..context.manager import ContextManager
 from ..events import (
-    Event, RunStarted, StepStarted, TextDelta, ToolCallRequested,
+    Event, RunStarted, StepStarted, TextDelta, ReasoningDelta, ToolCallRequested,
     ToolStarted, ToolFinished, StepFinished, RunFinished, RunError, ModelUsage,
 )
 from ..llm.base import ModelClient, ToolCallDelta
@@ -152,6 +152,8 @@ class AgentLoop:
                                 if chunk.type == "text" and chunk.text:
                                     content_parts.append(chunk.text)
                                     yield TextDelta(text=chunk.text)
+                                elif chunk.type == "reasoning" and chunk.text:
+                                    yield ReasoningDelta(text=chunk.text)
                                 elif chunk.type == "tool_call" and chunk.tool_call_delta:
                                     _accumulate(tool_acc, chunk.tool_call_delta)
                                 elif chunk.type == "done":

@@ -58,13 +58,7 @@ export default function DownloadsView() {
   }
 
   async function download(d: Download) {
-    // 下载需带 Bearer，故取鉴权 blob 再触发保存
-    const blob = await api.downloads.blob(d.id);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = d.filename;
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
+    await api.downloads.save(d.id, d.filename);   // 鉴权 blob → 触发保存（与聊天页共用）
   }
 
   async function confirmDelete() {
