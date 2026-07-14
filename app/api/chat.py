@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -87,6 +88,17 @@ ATTACHMENT_GUIDE = (
     "- 用 read_attachment(attachment_id) 读取具体内容：txt/pdf/word 返回文本，图片作为视觉加载。\n"
     "- 所有附件也已放入沙箱 /workspace/uploads/，可用 run_python/run_shell 直接读取或执行。\n"
     "- 只在确有需要时才读取附件，不要无谓地逐个打开。\n")
+
+# 北京时间（东八区）：本应用面向中文用户，用它作为「今天」的基准
+_CN_TZ = timezone(timedelta(hours=8))
+
+
+def _today_guide() -> str:
+    """每请求注入当前日期，避免模型沿用训练数据里的年份做时间推算（如把「未来3年」从旧年份起算）。"""
+    now = datetime.now(_CN_TZ)
+    return (f"\n\n【当前日期】今天是 {now:%Y 年 %m 月 %d 日}（北京时间）。"
+            "凡涉及「今年/去年/未来 N 年/最近/最新」等与时间相关的推算或表述，"
+            "一律以此日期为当前时间基准，不要沿用训练数据中的年份。")
 
 
 class _ChatRequest(BaseModel):
@@ -243,7 +255,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         if profile_store is not None:
             profile_block = render_profile_block(profile_store.get(user_id))
         base_ctx = await _assembler.build_manager(
-            harness.system_prompt + profile_block + EXAM_GUIDE + ATTACHMENT_GUIDE + SOURCE_GUIDE,
+            harness.system_prompt + profile_block + EXAM_GUIDE + ATTACHMENT_GUIDE
+            + SOURCE_GUIDE + _today_guide(),
             history, req.message, req.conversation_id)
         log.info("上下文组装 conv=%s 历史%d条 耗时%dms",
                  req.conversation_id, len(history), round((time.time() - _ctx_t0) * 1000))
