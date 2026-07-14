@@ -17,7 +17,9 @@ const fmtScore = (n?: number | null) => (n === null || n === undefined ? "—" :
 // 仅当本轮有 verify/check/quality 任一信号时渲染，否则返回 null。
 export function VerifyBadge({ message, live = false }: { message: ChatMessage; live?: boolean }) {
   const verify = (message.progress || []).filter((p) => p.scope === "verify");
-  const checks = message.checks || [];
+  // 检索命中是正常情形，不作为校验状态展示（仅保留失败/未命中等有意义的每步校验）
+  const checks = (message.checks || []).filter(
+    (c) => !(c.tool === "search_memory" && c.status === "ok"));
   const quality = message.quality || null;
 
   // 无任何校验信号 → 不渲染徽章

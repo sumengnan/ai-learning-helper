@@ -28,7 +28,7 @@ describe("VerifyBadge 状态机", () => {
   it("live 但只有每步校验、无最终校验 → 不谎称「验证中」（按每步定通过）", () => {
     render(<VerifyBadge live message={msg({
       status: "streaming",
-      checks: [{ tool: "search_memory", status: "ok", text: "检索命中" }],
+      checks: [{ tool: "run_python", status: "ok", text: "run_python 执行通过" }],
     })} />);
     expect(screen.queryByText("验证中…")).toBeNull();
     expect(screen.getByText("校验通过")).toBeTruthy();
@@ -46,9 +46,17 @@ describe("VerifyBadge 状态机", () => {
   it("流结束且无 verify error（非 live）→ 视为通过", () => {
     render(<VerifyBadge message={msg({
       status: "done",
-      checks: [{ tool: "search_memory", status: "ok", text: "检索命中" }],
+      checks: [{ tool: "run_python", status: "ok", text: "run_python 执行通过" }],
     })} />);
     expect(screen.getByText("校验通过")).toBeTruthy();
+  });
+
+  it("检索命中（成功）不作为校验状态展示；无其它信号则不渲染", () => {
+    const { container } = render(<VerifyBadge message={msg({
+      status: "done",
+      checks: [{ tool: "search_memory", status: "ok", text: "检索命中" }],
+    })} />);
+    expect(container.firstChild).toBeNull();   // 唯一信号是检索命中 ok → 被过滤 → 不渲染
   });
 
   it("verify error → 红色「未通过」+ 末条 verify 文案", () => {
@@ -97,14 +105,12 @@ describe("VerifyBadge 常驻性与展开明细", () => {
       status: "done",
       progress: [{ scope: "verify", text: "通过", status: "ok" }],
       checks: [
-        { tool: "search_memory", status: "ok", text: "检索命中" },
         { tool: "run_python", status: "error", text: "run_python 执行未通过" },
       ],
       quality: { plan: 80, steps: 65, final: 90, feedback: "步骤可再精简" },
     })} />);
-    // 点击展开 Accordion
+    // 点击展开 Accordion（有 verify ok → 主行「校验通过」）
     fireEvent.click(screen.getByText("校验通过"));
-    expect(screen.getByText("检索命中")).toBeTruthy();
     expect(screen.getByText("run_python 执行未通过")).toBeTruthy();
     expect(screen.getByText("拆分 80")).toBeTruthy();
     expect(screen.getByText("关键步 65")).toBeTruthy();
@@ -131,11 +137,11 @@ describe("VerifyBadge 容错", () => {
     render(<VerifyBadge message={msg({
       status: "done",
       quality: null,
-      checks: [{ tool: "search_memory", status: "ok", text: "检索命中" }],
+      checks: [{ tool: "run_python", status: "ok", text: "run_python 执行通过" }],
     })} />);
     expect(screen.getByText("校验通过")).toBeTruthy();
     fireEvent.click(screen.getByText("校验通过"));
-    expect(screen.getByText("检索命中")).toBeTruthy();
+    expect(screen.getByText("run_python 执行通过")).toBeTruthy();
     // 无 quality 段：不应出现三层分标签
     expect(screen.queryByText(/拆分/)).toBeNull();
   });

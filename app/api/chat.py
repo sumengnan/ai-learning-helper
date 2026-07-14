@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from uuid import uuid4
 
@@ -99,6 +100,18 @@ class _ChatRequest(BaseModel):
 class _Decision(BaseModel):
     approval_id: str
     approved: bool
+
+
+_DL_ID_RE = re.compile(r"〔下载ID:([0-9a-fA-F]+)〕")
+
+
+def _download_ids(steps: list[dict]) -> list[str]:
+    """从 save_download 成功结果里提取下载 id（工具返回带机读标记〔下载ID:...〕）。"""
+    ids: list[str] = []
+    for s in steps or []:
+        if s.get("tool") == "save_download" and not s.get("is_error"):
+            ids += _DL_ID_RE.findall(s.get("result") or "")
+    return ids
 
 
 def _plan_text(progress: list[dict]) -> str:
@@ -409,6 +422,17 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     # 交付门：缓冲 → 校验 → 不过则回灌重答，最多 answer_gate_max_retries 次
                     corrective = None
                     max_attempts = config.answer_gate_max_retries + 1
+                    stale_dl_ids: list[str] = []   # 未通过轮生成的下载文件，交付时清理掉
+
+                    def _purge_downloads(ids):
+                        _dl = getattr(harness, "download_store", None)
+                        for _did in ids:
+                            try:
+                                if _dl is not None:
+                                    _dl.delete(user_id, _did)
+                            except Exception:   # 清理失败不阻断交付
+                                pass
+
                     for attempt in range(max_attempts):
                         msg = model_message if corrective is None else corrective
                         collect = {"final": None, "error": None, "steps": [],
@@ -421,6 +445,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             yield s
                         steps.extend(collect["steps"])
                         draft = (collect["final"] or "").strip()
+                        cur_dl_ids = _download_ids(collect["steps"])   # 本轮生成的下载文件
 
                         ekey = uuid4().hex
                         yield _emit_verify("校验中…", status="running", key=ekey)
@@ -456,6 +481,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             yield _emit_verify("校验通过", status="ok", key=ekey)
                             delivered = draft
                             delivered_sources = source_sink.snapshot()
+                            _purge_downloads(stale_dl_ids)   # 交付本轮，删掉之前失败轮的下载文件
                             break
                         # error 事件的 text 携带完整原因（critique），供前端展开显示
                         # error 事件 text：中文层名 + 完整原因，供前端展示「哪层没过 + 为什么」
@@ -470,7 +496,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             if verdict.summary:
                                 delivered = (f"⚠️ 此回答未通过自动校验（{verdict.summary}），"
                                              f"请谨慎参考。\n\n" + delivered)
+                            _purge_downloads(stale_dl_ids)   # 降级交付本轮，清理之前失败轮的下载文件
                             break
+                        stale_dl_ids += cur_dl_ids   # 本轮未通过、将重答，其下载文件作废待清理
                         yield _emit_verify("重答中…", status="running")
                         corrective = (f"你上一版回答未通过自动校验。问题：{verdict.critique}。"
                                       f"请针对性修正后，重新完整回答原问题：{question}")

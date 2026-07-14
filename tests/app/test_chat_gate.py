@@ -27,6 +27,16 @@ def _sqlite_allow_cross_thread(monkeypatch):
     monkeypatch.setattr(sqlite3, "connect", _patched)
 
 
+def test_download_ids_extracts_only_successful_save_download():
+    from app.api.chat import _download_ids
+    steps = [
+        {"tool": "save_download", "result": "已保存〔下载ID:aaa〕", "is_error": False},
+        {"tool": "save_download", "result": "保存失败", "is_error": True},          # 失败轮不算
+        {"tool": "search_memory", "result": "〔下载ID:bbb〕", "is_error": False},   # 非 save_download 不算
+    ]
+    assert _download_ids(steps) == ["aaa"]
+
+
 class _StubVerifier:
     """按序返回预设 Verdict；记录调用次数与看到的答案。"""
     def __init__(self, verdicts):
