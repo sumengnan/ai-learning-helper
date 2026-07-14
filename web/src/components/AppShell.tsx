@@ -63,6 +63,12 @@ export function AppShell({ children }: { children: ReactNode }) {
           width,
           flexShrink: 0,
           whiteSpace: "nowrap",
+          // 根节点也要动画 width：它占据布局宽度，主内容区（含折叠图标）跟着一点点移，
+          // 否则根宽度瞬间跳变、只有抽屉纸面在滑动，图标会「蹦过去」。
+          transition: (t) => t.transitions.create("width", {
+            easing: t.transitions.easing.sharp,
+            duration: t.transitions.duration.standard,
+          }),
           "& .MuiDrawer-paper": {
             width,
             boxSizing: "border-box",
