@@ -18,29 +18,31 @@ import { pageVariants } from "./components/motion";
 function ShellRoutes() {
   const location = useLocation();
   return (
-    <AppShell>
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={location.pathname}
-          variants={pageVariants}
-          initial="initial"
-          animate="animate"
-          exit="exit"
-          style={{ height: "100%" }}
-        >
-          <Routes location={location}>
-            <Route path="/" element={<HomeView />} />
-            <Route path="/chat" element={<ChatPage />} />
-            <Route path="/knowledge" element={<KnowledgeView />} />
-            <Route path="/questions" element={<QuestionBankView />} />
-            <Route path="/wrong" element={<WrongAnswersView />} />
-            <Route path="/downloads" element={<DownloadsView />} />
-            {/* AI 运行统计：与首页「概览」同一组件，靠路径切页签 */}
-            <Route path="/monitor" element={<HomeView />} />
-          </Routes>
-        </motion.div>
-      </AnimatePresence>
-    </AppShell>
+    <ProfileDrawerProvider>
+      <AppShell>
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={location.pathname}
+            variants={pageVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            style={{ height: "100%" }}
+          >
+            <Routes location={location}>
+              <Route path="/" element={<HomeView />} />
+              <Route path="/chat" element={<ChatPage />} />
+              <Route path="/knowledge" element={<KnowledgeView />} />
+              <Route path="/questions" element={<QuestionBankView />} />
+              <Route path="/wrong" element={<WrongAnswersView />} />
+              <Route path="/downloads" element={<DownloadsView />} />
+              {/* AI 运行统计：与首页「概览」同一组件，靠路径切页签 */}
+              <Route path="/monitor" element={<HomeView />} />
+            </Routes>
+          </motion.div>
+        </AnimatePresence>
+      </AppShell>
+    </ProfileDrawerProvider>
   );
 }
 
