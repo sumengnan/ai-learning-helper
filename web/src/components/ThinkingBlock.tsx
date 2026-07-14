@@ -1,15 +1,11 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Box, Typography, Collapse, IconButton } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 
-// 思考模式（reasoning_content）的展示：生成中默认展开、实时填充，让用户看到模型正在思考——
-// 这也直接说明了「首字慢是因为开了思考模式」。完成后自动折叠（用户可手动展开/收起）。
+// 思考模式（reasoning_content）的展示：默认折叠，仅头部提示「思考中…（已开启思考模式，回复较慢）」，
+// 说明首字为何慢；用户点击可展开查看实时思考过程。
 export function ThinkingBlock({ reasoning, live }: { reasoning: string; live: boolean }) {
-  const [open, setOpen] = useState(live);
-  const [touched, setTouched] = useState(false);
-  useEffect(() => {
-    if (!touched) setOpen(live);   // 未手动操作时跟随 live：思考中展开、结束折叠
-  }, [live, touched]);
+  const [open, setOpen] = useState(false);   // 默认折叠，点击展开
 
   return (
     <Box sx={{
@@ -17,7 +13,7 @@ export function ThinkingBlock({ reasoning, live }: { reasoning: string; live: bo
       px: 1.25, py: 0.5, bgcolor: "action.hover",
     }}>
       <Box sx={{ display: "flex", alignItems: "center", cursor: "pointer" }}
-        onClick={() => { setTouched(true); setOpen((o) => !o); }}>
+        onClick={() => setOpen((o) => !o)}>
         <Typography variant="caption" sx={{ flex: 1, fontWeight: 600, color: "text.secondary" }}>
           {live ? "🧠 思考中…（已开启思考模式，回复较慢）" : "🧠 思考过程"}
         </Typography>
