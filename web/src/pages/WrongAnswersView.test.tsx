@@ -36,8 +36,10 @@ describe("WrongAnswersView", () => {
     await waitFor(() => expect(screen.getByText(/光合作用在哪/)).toBeTruthy());
     expect(screen.getByText(/我的答案/)).toBeTruthy();
     expect(screen.getByText(/正确答案/)).toBeTruthy();
-    expect(screen.getByText(/线粒体/)).toBeTruthy();   // 我的（错误）作答按选项文本
-    expect(screen.getByText(/叶绿体/)).toBeTruthy();   // 正确答案按选项文本
+    // 「我的答案：」在 span、字母在文本节点，跨元素——用 textContent 精确匹配
+    const exact = (t: string) => (_: string, el: Element | null) => el?.textContent === t;
+    expect(screen.getAllByText(exact("我的答案：A")).length).toBeGreaterThan(0);   // 我的作答用字母 A
+    expect(screen.getAllByText(exact("正确答案：B")).length).toBeGreaterThan(0);   // 正确答案用字母 B
   });
 
   it("没有批量删除按钮", async () => {

@@ -32,12 +32,17 @@ export const typeColor = (t: string): ChipProps["color"] => {
   }
 };
 
-// 把答案值（选项下标/数组/布尔/文本）渲染成人类可读文本
-export function answerText(type: string, options: string[] | null | undefined, value: unknown): string {
+// 选项下标 → 字母（0→A、1→B…）
+const optionLetter = (i: number) => String.fromCharCode(65 + i);
+
+// 把答案值（选项下标/数组/布尔/文本）渲染成人类可读文本。
+// 选择题的正确/作答用字母（A/B/C…）而非选项内容——详情弹框另有完整选项列表可对照。
+export function answerText(type: string, _options: string[] | null | undefined, value: unknown): string {
   if (type === "truefalse") return value ? "正确" : "错误";
-  if (type === "single" && options && typeof value === "number") return options[value] ?? String(value);
-  if (type === "multiple" && options && Array.isArray(value))
-    return (value as number[]).map((i) => options[i] ?? i).join("、");
+  if (type === "single" && typeof value === "number") return optionLetter(value);
+  if (type === "multiple" && Array.isArray(value))
+    return (value as unknown[])
+      .map((i) => (typeof i === "number" ? optionLetter(i) : String(i))).join("、");
   if (value == null || value === "") return "（未作答）";
   return String(value);
 }
