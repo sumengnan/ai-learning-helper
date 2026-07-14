@@ -194,8 +194,8 @@ class SandboxProxy:
         # 生命周期归 manager；单容器的销毁走 destroy/close_all，这里不动。
         return None
 
-    async def exec(self, command: list, timeout: float):
-        return await (await self._box()).exec(command, timeout)
+    async def exec(self, command: list, timeout: float, *, quiet: bool = False):
+        return await (await self._box()).exec(command, timeout, quiet=quiet)
 
     async def write_file(self, path: str, content: str) -> None:
         await (await self._box()).write_file(path, content)

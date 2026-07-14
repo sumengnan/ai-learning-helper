@@ -78,6 +78,20 @@ async def test_proxy_delegates_to_current_conversation():
     await m.close_all()
 
 
+async def test_proxy_exec_forwards_quiet_kwarg():
+    # DNS 解析等内部动作用 quiet=True 走静默路径；代理必须转发该 kwarg，
+    # 否则有沙箱时 sandbox_dns.resolve_host 会因 SandboxProxy.exec() 不认 quiet 而报错。
+    m = SandboxManager(_cfg())
+    proxy = SandboxProxy(m)
+    t = set_sandbox_conv("conv-a")
+    try:
+        res = await proxy.exec(["echo", "ok"], 10, quiet=True)
+        assert "ok" in res.stdout
+    finally:
+        reset_sandbox_conv(t)
+    await m.close_all()
+
+
 async def test_proxy_without_context_raises():
     proxy = SandboxProxy(SandboxManager(_cfg()))
     with pytest.raises(SandboxError):
