@@ -1,6 +1,7 @@
 # app/knowledge.py
 from __future__ import annotations
 
+import re
 from uuid import uuid4
 
 from harness.memory.chunker import kind_for_filename
@@ -11,6 +12,36 @@ from .parsing import parse_file
 
 def _clip(text: str, n: int = 300) -> str:
     return " ".join(text.split())[:n]
+
+
+def _table_row(m: re.Match) -> str:
+    return "  ".join(c.strip() for c in m.group(1).split("|") if c.strip())
+
+
+def strip_markdown(md: str) -> str:
+    """去掉 markdown 排版标记，只留可读文字内容（供聊天保存到知识库用）。
+
+    标题/加粗/斜体/内联代码/链接/图片/列表/引用/分隔线/代码围栏的标记都去掉，
+    保留其文字（代码块保留代码正文、表格转为空格分隔的文本）；不改动纯文字内容。
+    """
+    t = md or ""
+    t = re.sub(r"^```[^\n]*$", "", t, flags=re.M)            # 代码围栏行（保留代码正文）
+    t = re.sub(r"^\s{0,3}#{1,6}\s+", "", t, flags=re.M)       # 标题 #
+    t = re.sub(r"^\s{0,3}>\s?", "", t, flags=re.M)            # 引用 >
+    t = re.sub(r"^\s*([-*_])(?:\s*\1){2,}\s*$", "", t, flags=re.M)  # 分隔线 ---
+    t = re.sub(r"^\s*[-*+]\s+", "", t, flags=re.M)            # 无序列表 -
+    t = re.sub(r"^\s*\d+\.\s+", "", t, flags=re.M)            # 有序列表 1.
+    t = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", t)           # 图片 → alt
+    t = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", t)            # 链接 → 文字
+    t = re.sub(r"\*\*([^*]+)\*\*|__([^_]+)__", lambda m: m.group(1) or m.group(2), t)  # 加粗
+    t = re.sub(r"\*([^*\n]+)\*", r"\1", t)                    # 斜体 *
+    t = re.sub(r"(?<!\w)_([^_\n]+)_(?!\w)", r"\1", t)         # 斜体 _
+    t = re.sub(r"`([^`]+)`", r"\1", t)                       # 内联代码
+    # 表格：用 [ \t] 而非 \s，避免行尾空白匹配吞掉换行导致相邻行粘连
+    t = re.sub(r"^[ \t]*\|[ \t:|-]+\|[ \t]*$", "", t, flags=re.M)     # 分隔行 |---|
+    t = re.sub(r"^[ \t]*\|(.+)\|[ \t]*$", _table_row, t, flags=re.M)  # 表格行 → 空格分隔
+    t = re.sub(r"\n{3,}", "\n\n", t)                          # 压缩多余空行
+    return t.strip()
 
 
 class EmptyDocument(Exception):

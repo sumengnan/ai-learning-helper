@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from harness.tools.base import Tool
 
-from ..knowledge import EmptyDocument
+from ..knowledge import EmptyDocument, strip_markdown
 
 
 class SaveToKnowledgeTool(Tool):
@@ -25,8 +25,10 @@ class SaveToKnowledgeTool(Tool):
         self._uid = user_id
 
     async def run(self, params: "SaveToKnowledgeTool.Params") -> str:
+        # 只存纯文字内容：去掉 markdown 排版标记（##、**、列表、表格等），减少检索噪声
+        text = strip_markdown(params.text)
         try:
-            res = await self._knowledge.ingest_text(self._uid, params.title, params.text)
+            res = await self._knowledge.ingest_text(self._uid, params.title, text)
         except EmptyDocument:
             return "保存失败：内容为空。"
         return f"已保存到知识库：《{res['filename']}》（{res['num_chunks']} 块），可在知识库菜单查看。"
