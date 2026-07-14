@@ -23,6 +23,12 @@ def test_guides_no_tool_then_skip_silently():
     assert "跳过保存" in EXAM_GUIDE
 
 
+def test_guide_requires_explicit_saved_notice_to_user():
+    # 保存成功后须明确告知用户已入错题集（不再「简短带过」）
+    assert "明确告诉用户" in EXAM_GUIDE and "错题集" in EXAM_GUIDE
+    assert "简短带过" not in EXAM_GUIDE
+
+
 def test_adhoc_must_pass_content_not_only_id():
     # 保留：即席题必须传内容，不能只传 question_id
     assert "question_id" in EXAM_GUIDE and "stem/type/answer" in EXAM_GUIDE

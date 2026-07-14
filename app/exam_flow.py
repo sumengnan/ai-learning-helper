@@ -61,7 +61,8 @@ def _build_note(mode: str, q: dict, idx: int, n: int, is_correct: bool,
     if q["type"] == "short" and jfb:
         parts.append(f"判分参考：{jfb}")
     if saved:
-        parts.append("（该题已由系统自动存入错题集。）")
+        parts.append("★本题答错，已由系统自动存入用户的「错题集」。请在给用户的讲解里"
+                     "【明确告诉用户】「这道题已加入你的错题集，方便以后复习」，让用户清楚知道，不要略过。")
     if finished:
         parts.append("这是最后一题，考试到此结束。请据以上向用户讲解本题，再做简短总结。")
     else:

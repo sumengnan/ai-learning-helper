@@ -30,6 +30,8 @@ async def test_wrong_objective_saved_deterministically_no_model():
     assert ws.list("u1")[0]["snapshot"]["stem"] == "光合作用在哪?"
     assert ws.list("u1")[0]["user_answer"] == 0          # 存的是解析后的下标
     assert "答错" in note and "叶绿体" in note            # 注入提示含判定+正确答案
+    # 开关开+答错 → 注入提示要求模型明确告诉用户已入错题集
+    assert "错题集" in note and ("明确告诉用户" in note or "加入你的错题集" in note)
     assert active is True                                 # 还有下一题
 
 
