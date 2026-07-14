@@ -17,7 +17,7 @@ import DownloadIcon from "@mui/icons-material/Download";
 import Brightness4Icon from "@mui/icons-material/Brightness4";
 import Brightness7Icon from "@mui/icons-material/Brightness7";
 import LogoutIcon from "@mui/icons-material/Logout";
-import MenuIcon from "@mui/icons-material/Menu";
+import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import FaceRetouchingNaturalIcon from "@mui/icons-material/FaceRetouchingNatural";
 import { useColorMode } from "../ThemeModeProvider";
 import { useAuth } from "../auth/AuthProvider";
@@ -138,34 +138,27 @@ export function AppShell({ children }: { children: ReactNode }) {
           ))}
         </List>
         <Divider />
-        {/* 折叠/展开开关：置于菜单栏底部，与导航项同款样式，随宽度动画 */}
+        {/* 折叠/展开开关：仅一个方向图标，随状态旋转，无文字 */}
         <List sx={{ px: navOpen ? 1 : 0.5, py: 0.5 }}>
-          <Tooltip title={navOpen ? "" : "展开菜单"} placement="right">
+          <Tooltip title={navOpen ? "折叠菜单" : "展开菜单"} placement="right">
             <ListItemButton
               onClick={() => setNavOpen((o) => !o)}
               aria-label={navOpen ? "折叠菜单" : "展开菜单"}
               sx={{
                 borderRadius: 1.5,
-                justifyContent: navOpen ? "initial" : "center",
-                px: navOpen ? 2 : 1.5,
+                justifyContent: "center",
               }}
             >
-              <ListItemIcon sx={{ minWidth: 0, mr: navOpen ? 2 : 0, justifyContent: "center" }}>
-                <MenuIcon />
+              <ListItemIcon sx={{ minWidth: 0, justifyContent: "center" }}>
+                <MenuOpenIcon
+                  sx={{
+                    transition: (t) => t.transitions.create("transform", {
+                      duration: t.transitions.duration.shorter,
+                    }),
+                    transform: navOpen ? "none" : "rotate(180deg)",
+                  }}
+                />
               </ListItemIcon>
-              <AnimatePresence initial={false}>
-                {navOpen && (
-                  <motion.div
-                    initial={{ opacity: 0, width: 0 }}
-                    animate={{ opacity: 1, width: "auto" }}
-                    exit={{ opacity: 0, width: 0 }}
-                    transition={{ duration: 0.2 }}
-                    style={{ overflow: "hidden" }}
-                  >
-                    <ListItemText primary="折叠菜单" sx={{ m: 0, whiteSpace: "nowrap" }} />
-                  </motion.div>
-                )}
-              </AnimatePresence>
             </ListItemButton>
           </Tooltip>
         </List>
