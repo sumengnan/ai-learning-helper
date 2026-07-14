@@ -27,6 +27,10 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
   const vRunning = vLast?.status === "running";
   // 取「最后一个终态事件」判定：多轮重答时以最终结果为准，中途某轮未通过不应盖过最终通过
   const vTerminal = [...verify].reverse().find((p) => p.status === "ok" || p.status === "error");
+  // 校验历史：每一轮的终态（通过/未通过），失败轮保留原因；重答后新增新记录、通过后亦不清除
+  const rounds = verify.filter((p) => p.status === "ok" || p.status === "error");
+  // 仅当有多轮或出现过失败时展示历史（单轮直接通过无「过程」可留，主行已足够）
+  const showHistory = rounds.length > 1 || rounds.some((p) => p.status === "error");
 
   // 状态机：以最后终态为准；仍在进行则 running；无终态且非 live 视为通过
   const state: "running" | "ok" | "error" =
@@ -67,6 +71,22 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
     <Box>
       <CollapsibleBlock icon={<FactCheckIcon sx={{ fontSize: 15 }} color="action" />}
         title="校验" status={state} summary={summary}>
+        {/* 校验历史：多轮或有失败时保留每轮结果与原因（含重答前的失败轮），通过后亦不清除 */}
+        {showHistory && (
+          <Box sx={{ mb: (checks.length || quality) ? 1 : 0 }}>
+            {rounds.map((p, idx) => (
+              <Box key={idx} sx={{ display: "flex", alignItems: "flex-start", gap: 0.75, py: 0.15 }}>
+                {p.status === "error"
+                  ? <CancelIcon sx={{ fontSize: 14, mt: 0.15 }} color="error" />
+                  : <CheckCircleIcon sx={{ fontSize: 14, mt: 0.15 }} color="success" />}
+                <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "pre-wrap" }}>
+                  {rounds.length > 1 ? `第 ${idx + 1} 次：` : ""}
+                  {p.status === "error" ? `未通过 — ${p.text}` : "校验通过"}
+                </Typography>
+              </Box>
+            ))}
+          </Box>
+        )}
         {checks.length > 0 && (
           <Box sx={{ mb: quality ? 1 : 0 }}>
             {checks.map((c, i) => (
@@ -92,15 +112,6 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
                 {quality.feedback}
               </Typography>
             )}
-          </Box>
-        )}
-        {/* 未通过：展开显示完整原因（后端把 critique 放进 error 事件 text），不堆过程日志 */}
-        {state === "error" && vTerminal?.text && (
-          <Box sx={{ display: "flex", alignItems: "flex-start", gap: 0.75, py: 0.15 }}>
-            <CancelIcon sx={{ fontSize: 14, mt: 0.15 }} color="error" />
-            <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "pre-wrap" }}>
-              未通过原因：{vTerminal.text}
-            </Typography>
           </Box>
         )}
       </CollapsibleBlock>

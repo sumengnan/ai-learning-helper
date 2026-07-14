@@ -53,3 +53,26 @@ def test_judge_config_does_not_mutate_main():
 def test_build_judge_completer_returns_callable_both_branches():
     assert callable(build_judge_completer(object(), _jcfg()))                  # 回退主 client
     assert callable(build_judge_completer(object(), _jcfg(judge_model="jm")))  # 起独立 client
+
+
+@pytest.mark.asyncio
+async def test_judge_completer_forces_thinking_off(make_mock, text_turn):
+    # 外层即使开了思考，judge 调用也应强制 enable_thinking=False
+    from harness.llm.openai_compat import (
+        get_extra_body_override, set_extra_body_override, reset_extra_body_override)
+    seen = {}
+    inner = make_mock([text_turn("ok")])
+    orig = inner.stream
+
+    async def wrapped(messages, tools):
+        seen["thinking"] = get_extra_body_override().get("enable_thinking")
+        async for c in orig(messages, tools):
+            yield c
+    inner.stream = wrapped
+
+    tok = set_extra_body_override({"enable_thinking": True})
+    try:
+        await build_judge_completer(inner, _jcfg())("s", "u")   # judge_model 空 → 回退 inner
+    finally:
+        reset_extra_body_override(tok)
+    assert seen["thinking"] is False

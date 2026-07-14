@@ -57,7 +57,22 @@ describe("VerifyBadge 状态机", () => {
     })} />);
     expect(screen.getByText("未通过")).toBeTruthy();
     // summary 预览 + 展开明细行两处均含该文案
-    expect(screen.getAllByText("grounding 未通过").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/grounding 未通过/).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("多轮：失败轮记录与原因保留，最终通过后仍可展开查看历史", () => {
+    render(<VerifyBadge message={msg({
+      status: "done",
+      progress: [
+        { scope: "verify", text: "校验中…", status: "running", key: "k1" },
+        { scope: "verify", text: "judge 分数过低", status: "error", key: "k1" },
+        { scope: "verify", text: "重答中…", status: "running" },
+        { scope: "verify", text: "校验中…", status: "running", key: "k2" },
+        { scope: "verify", text: "校验通过", status: "ok", key: "k2" },
+      ],
+    })} />);
+    expect(screen.getByText("校验通过")).toBeTruthy();            // 主行：最终通过
+    expect(screen.getByText(/judge 分数过低/)).toBeTruthy();      // 历史：失败轮原因仍在
   });
 
   it("无 verify/check/quality 任一信号 → 不渲染（返回 null）", () => {
