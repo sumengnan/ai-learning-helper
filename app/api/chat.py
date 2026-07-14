@@ -540,8 +540,11 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
 
                         # 轨迹 judge：仅当其它校验项已通过时才花一次独立模型调用，
                         # 回看整轨迹（拆分/关键步/最终）分层打分；final 偏低则并入软门重答。
+                        # 按复杂度自动开启：仅当本轮工具步骤 > 1（多步任务）才跑——单步/无工具的
+                        # 简单任务无「拆分/多步」可评，跳过省 token 与延迟（前提仍是 config 开了开关）。
                         if (verdict.ok and trajectory_judge is not None
-                                and config.enable_trajectory_judge and draft):
+                                and config.enable_trajectory_judge and draft
+                                and len(collect["steps"]) > 1):
                             tscore = await trajectory_judge.score(
                                 question, _plan_text(progress),
                                 _tool_exec_summary(collect["steps"]), draft)
