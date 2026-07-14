@@ -9,9 +9,11 @@ import UploadFileIcon from "@mui/icons-material/UploadFile";
 import DeleteIcon from "@mui/icons-material/Delete";
 import SearchIcon from "@mui/icons-material/Search";
 import SourceIcon from "@mui/icons-material/Source";
+import QuizOutlinedIcon from "@mui/icons-material/QuizOutlined";
 import { AnimatePresence, motion } from "framer-motion";
 import { api, type Question } from "../api/client";
 import { listItemVariants } from "../components/motion";
+import { EmptyState } from "../components/EmptyState";
 import { QuestionDetailDrawer } from "./QuestionDetailDrawer";
 
 const PAGE_SIZE = 10;
@@ -149,7 +151,11 @@ export default function QuestionBankView() {
       {error && <Alert severity="error" onClose={() => setError(null)}>{error}</Alert>}
 
       {items.length === 0 ? (
-        <Typography color="text.secondary" sx={{ py: 4, textAlign: "center" }}>暂无题目</Typography>
+        (q || type || source)
+          ? <EmptyState icon={<QuizOutlinedIcon />} title="未找到符合条件的题目"
+              hint="试试调整搜索词或筛选条件" />
+          : <EmptyState icon={<QuizOutlinedIcon />} title="题库还是空的"
+              hint="上传文件导入，或在聊天中让助手把题目保存到题库" />
       ) : (
         <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
           <AnimatePresence initial={false}>

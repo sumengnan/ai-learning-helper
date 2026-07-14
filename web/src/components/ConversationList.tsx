@@ -8,8 +8,10 @@ import {
 import { AnimatePresence, motion } from "framer-motion";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
+import ForumOutlinedIcon from "@mui/icons-material/ForumOutlined";
 import { chromeBg } from "./AppShell";
 import { listItemVariants } from "./motion";
+import { EmptyState } from "./EmptyState";
 
 // 依据创建时间与今天的自然日差，归入「今天 / 昨天 / 3天前 / …」分组
 function dayDiff(iso: string): number {
@@ -66,12 +68,8 @@ export function ConversationList({ items, activeId, onSelect, onNew, onDelete }:
       </Box>
       <List sx={{ flex: 1, overflowY: "auto", py: 0 }}>
         {items.length === 0 && (
-          <Typography
-            variant="body2" color="text.secondary"
-            sx={{ px: 2, py: 3, textAlign: "center" }}
-          >
-            暂无历史对话
-          </Typography>
+          <EmptyState fill icon={<ForumOutlinedIcon />} title="暂无历史记录"
+            hint="点击上方「新对话」开始聊天" />
         )}
         {groups.map((g) => (
           <Fragment key={g.label}>

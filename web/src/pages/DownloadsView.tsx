@@ -7,9 +7,11 @@ import DownloadIcon from "@mui/icons-material/Download";
 import DeleteIcon from "@mui/icons-material/Delete";
 import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
 import VisibilityIcon from "@mui/icons-material/Visibility";
+import FolderOpenOutlinedIcon from "@mui/icons-material/FolderOpenOutlined";
 import { AnimatePresence, motion } from "framer-motion";
 import { api } from "../api/client";
 import { listItemVariants } from "../components/motion";
+import { EmptyState } from "../components/EmptyState";
 import { formatBytes, fileMeta, previewKind } from "./downloadsUtils";
 import { DownloadPreviewDialog, type PreviewFile } from "./DownloadPreviewDialog";
 
@@ -90,9 +92,8 @@ export default function DownloadsView() {
       </Box>
 
       {items.length === 0 ? (
-        <Typography color="text.secondary" sx={{ py: 4, textAlign: "center" }}>
-          暂无文件。聊天中让助手用 save_download 保存内容后会出现在这里。
-        </Typography>
+        <EmptyState icon={<FolderOpenOutlinedIcon />} title="暂无文件"
+          hint="聊天中让助手用 save_download 保存内容后会出现在这里" />
       ) : (
         <>
           {/* 本页全选 */}

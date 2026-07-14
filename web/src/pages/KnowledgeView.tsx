@@ -9,9 +9,12 @@ import UploadFileIcon from "@mui/icons-material/UploadFile";
 import DeleteIcon from "@mui/icons-material/Delete";
 import SearchIcon from "@mui/icons-material/Search";
 import DescriptionIcon from "@mui/icons-material/Description";
+import SearchOffOutlinedIcon from "@mui/icons-material/SearchOffOutlined";
+import MenuBookOutlinedIcon from "@mui/icons-material/MenuBookOutlined";
 import { AnimatePresence, motion } from "framer-motion";
 import { api } from "../api/client";
 import { listItemVariants } from "../components/motion";
+import { EmptyState } from "../components/EmptyState";
 import { categoryColor, fmtDate, relevanceColor } from "./knowledgeUtils";
 import { KnowledgeDetailDrawer } from "./KnowledgeDetailDrawer";
 
@@ -148,9 +151,11 @@ export function KnowledgeView() {
 
       {/* 文档卡片列 */}
       {shown.length === 0 ? (
-        <Typography color="text.secondary" sx={{ py: 4, textAlign: "center" }}>
-          {searching ? "未找到相关文档" : "还没有导入文档"}
-        </Typography>
+        searching
+          ? <EmptyState icon={<SearchOffOutlinedIcon />} title="未找到相关文档"
+              hint="换个关键词试试" />
+          : <EmptyState icon={<MenuBookOutlinedIcon />} title="还没有导入文档"
+              hint="点击上方「上传」导入资料，或在聊天中让助手保存到知识库" />
       ) : (
         <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
           <AnimatePresence initial={false}>

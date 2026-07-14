@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import { Box, Typography, Card, CardContent, Chip, IconButton, Stack } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import DeleteIcon from "@mui/icons-material/Delete";
+import SentimentSatisfiedAltOutlinedIcon from "@mui/icons-material/SentimentSatisfiedAltOutlined";
 import { AnimatePresence, motion } from "framer-motion";
 import { api } from "../api/client";
 import { listItemVariants } from "../components/motion";
+import { EmptyState } from "../components/EmptyState";
 import {
   WrongAnswerDetailDrawer, answerText, typeColor, type WrongItem,
 } from "./WrongAnswerDetailDrawer";
@@ -41,7 +43,8 @@ export default function WrongAnswersView() {
       </Box>
 
       {items.length === 0 ? (
-        <Typography color="text.secondary" sx={{ py: 4, textAlign: "center" }}>暂无错题</Typography>
+        <EmptyState icon={<SentimentSatisfiedAltOutlinedIcon />} title="暂无错题"
+          hint="答错的题会自动收集到这里，方便你复习巩固" />
       ) : (
         <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
           <AnimatePresence initial={false}>
