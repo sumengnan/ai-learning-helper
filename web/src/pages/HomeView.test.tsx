@@ -110,4 +110,12 @@ describe("HomeView", () => {
     expect(screen.getByLabelText("预览 复习提纲.md")).toBeTruthy();  // md 可预览
     expect(screen.getByLabelText("下载 复习提纲.md")).toBeTruthy();
   });
+
+  it("没有产物时显示空提示", async () => {
+    (statsApi.overview as any).mockResolvedValue({
+      ...OV, learn: { ...OV.learn, recent_downloads: [] },
+    });
+    renderHome();
+    await waitFor(() => expect(screen.getByText("还没有生成的产物")).toBeTruthy());
+  });
 });

@@ -8,10 +8,6 @@ import {
 import { alpha } from "@mui/material/styles";
 import { useAuth } from "../auth/AuthProvider";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
-import AddCommentIcon from "@mui/icons-material/AddComment";
-import UploadFileIcon from "@mui/icons-material/UploadFile";
-import EditNoteIcon from "@mui/icons-material/EditNote";
-import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlined";
 import DownloadIcon from "@mui/icons-material/Download";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import type { StatsOverview } from "../api/stats";
@@ -55,9 +51,9 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
   const abilityMax = Math.max(1, ...learn.abilities.map((a) => a.count));
 
   const assetCards: { icon: string; lbl: string; v: number; sub: string; hue: Hue; act?: boolean; onClick: () => void }[] = [
-    { icon: "📚", lbl: "学习资料", v: learn.assets.documents, sub: "已建索引 · 查看 →", hue: "info", onClick: () => nav("/knowledge") },
+    { icon: "📚", lbl: "知识库", v: learn.assets.documents, sub: "已建索引 · 查看 →", hue: "info", onClick: () => nav("/knowledge") },
     { icon: "✏️", lbl: "题库", v: learn.assets.questions, sub: learn.assets.questions ? "去练习 →" : "生成一套 →", hue: "primary", act: true, onClick: () => nav("/questions") },
-    { icon: "❌", lbl: "错题本", v: learn.assets.wrong_answers, sub: learn.assets.wrong_answers ? "去复习 →" : "目前全对 👍", hue: "warning", onClick: () => nav("/wrong") },
+    { icon: "❌", lbl: "错题集", v: learn.assets.wrong_answers, sub: learn.assets.wrong_answers ? "去复习 →" : "目前全对 👍", hue: "warning", onClick: () => nav("/wrong") },
     { icon: "🧠", lbl: "AI 记的偏好", v: learn.assets.memory, sub: "点击查看它记住了什么 →", hue: "secondary", onClick: () => setMemoryOpen(true) },
   ];
 
@@ -110,38 +106,8 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
           </Card>
         ))}
       </Box>
-      {learn.recent_downloads.length > 0 && (
-        <Card sx={(t) => ({ ...cardSx(t), mt: 1.75 })}>
-          <CardContent sx={{ display: "flex", alignItems: "center", gap: 1.25, flexWrap: "wrap",
-            py: 1.5, "&:last-child": { pb: 1.5 } }}>
-            <Typography sx={{ fontSize: 12.5, color: "text.secondary", fontWeight: 600, mr: 0.5 }}>最近生成的产物</Typography>
-            {learn.recent_downloads.map((d) => {
-              const canPreview = previewKind(d.content_type) !== "none";
-              return (
-                <Stack key={d.id} direction="row" spacing={0.25} sx={{ alignItems: "center",
-                  border: 1, borderColor: "divider", borderRadius: 5, pl: 1.25, pr: 0.25, py: 0.25 }}>
-                  <Typography noWrap sx={{ fontSize: 13, maxWidth: 220 }}>{d.filename}</Typography>
-                  {canPreview && (
-                    <Tooltip title="预览"><IconButton size="small" aria-label={`预览 ${d.filename}`}
-                      onClick={() => setPreview({ id: d.id, filename: d.filename, content_type: d.content_type })}>
-                      <VisibilityIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
-                  )}
-                  <Tooltip title="下载"><IconButton size="small" aria-label={`下载 ${d.filename}`}
-                    onClick={() => download(d.id, d.filename)}>
-                    <DownloadIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
-                </Stack>
-              );
-            })}
-            <Box sx={{ flex: 1 }} />
-            <Typography onClick={() => nav("/downloads")}
-              sx={{ fontSize: 13, color: "primary.main", fontWeight: 600, cursor: "pointer" }}>
-              查看全部 →
-            </Typography>
-          </CardContent>
-        </Card>
-      )}
 
-      {/* 继续学习：继续上次 + 快捷入口 */}
+      {/* 继续学习：继续上次 + 最近生成的产物 */}
       <Eyebrow>继续学习</Eyebrow>
       <Box sx={{ display: "grid", gap: 1.75, gridTemplateColumns: { xs: "1fr", md: "1.5fr 1fr" } }}>
         <Card sx={(t) => ({ ...cardSx(t), position: "relative", overflow: "hidden" })}>
@@ -172,23 +138,49 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
             )}
           </CardContent>
         </Card>
+        {/* 最近生成的产物：替代原快捷入口；空时给出提示 */}
         <Card sx={cardSx}>
-          <CardContent sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.25 }}>
-            {[
-              { icon: <AddCommentIcon />, label: "新对话", to: "/chat" },
-              { icon: <UploadFileIcon />, label: "上传资料", to: "/knowledge" },
-              { icon: <EditNoteIcon />, label: "做题练习", to: "/questions" },
-              { icon: <ErrorOutlineIcon />, label: "看错题本", to: "/wrong" },
-            ].map((qk) => (
-              <Box key={qk.label} onClick={() => nav(qk.to)} sx={{
-                display: "flex", flexDirection: "column", gap: 0.75, p: 1.5, cursor: "pointer",
-                border: 1, borderColor: "divider", borderRadius: 2, transition: ".15s",
-                "&:hover": { borderColor: "primary.main", transform: "translateY(-1px)" },
-              }}>
-                <Box sx={{ color: "primary.main", display: "flex" }}>{qk.icon}</Box>
-                <Typography sx={{ fontSize: 13.5, fontWeight: 600 }}>{qk.label}</Typography>
+          <CardContent sx={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between", mb: 1 }}>
+              <Typography sx={{ fontSize: 11.5, fontWeight: 700, letterSpacing: ".05em",
+                textTransform: "uppercase", color: "text.disabled" }}>最近生成的产物</Typography>
+              {learn.recent_downloads.length > 0 && (
+                <Typography onClick={() => nav("/downloads")}
+                  sx={{ fontSize: 12.5, color: "primary.main", fontWeight: 600, cursor: "pointer" }}>
+                  查看全部 →
+                </Typography>
+              )}
+            </Stack>
+            {learn.recent_downloads.length === 0 ? (
+              <Box sx={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center",
+                justifyContent: "center", textAlign: "center", py: 2, gap: 0.5 }}>
+                <Box sx={{ fontSize: 30 }}>🗂️</Box>
+                <Typography sx={{ fontSize: 13, color: "text.secondary", fontWeight: 600 }}>还没有生成的产物</Typography>
+                <Typography sx={{ fontSize: 12, color: "text.disabled" }}>
+                  让 AI 帮你跑代码、出题或整理资料，产物会出现在这里
+                </Typography>
               </Box>
-            ))}
+            ) : (
+              <Stack spacing={0.75}>
+                {learn.recent_downloads.map((d) => {
+                  const canPreview = previewKind(d.content_type) !== "none";
+                  return (
+                    <Stack key={d.id} direction="row" spacing={0.25} sx={{ alignItems: "center",
+                      border: 1, borderColor: "divider", borderRadius: 2, pl: 1.25, pr: 0.25, py: 0.4 }}>
+                      <Typography noWrap sx={{ fontSize: 13, flex: 1, minWidth: 0 }}>{d.filename}</Typography>
+                      {canPreview && (
+                        <Tooltip title="预览"><IconButton size="small" aria-label={`预览 ${d.filename}`}
+                          onClick={() => setPreview({ id: d.id, filename: d.filename, content_type: d.content_type })}>
+                          <VisibilityIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
+                      )}
+                      <Tooltip title="下载"><IconButton size="small" aria-label={`下载 ${d.filename}`}
+                        onClick={() => download(d.id, d.filename)}>
+                        <DownloadIcon sx={{ fontSize: 17 }} /></IconButton></Tooltip>
+                    </Stack>
+                  );
+                })}
+              </Stack>
+            )}
           </CardContent>
         </Card>
       </Box>
