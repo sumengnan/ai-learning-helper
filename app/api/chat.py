@@ -441,7 +441,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             stoken = set_sandbox_conv(req.conversation_id)
                             try:
                                 verdict = await verifier.verify(
-                                    question, draft, collect["grounding"], registry)
+                                    question, draft, collect["grounding"], registry,
+                                    steps=collect["steps"])
                             finally:
                                 reset_sandbox_conv(stoken)
 

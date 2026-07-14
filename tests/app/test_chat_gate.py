@@ -34,7 +34,7 @@ class _StubVerifier:
         self.calls = 0
         self.seen: list[str] = []
 
-    async def verify(self, question, answer, grounding, registry):
+    async def verify(self, question, answer, grounding, registry, steps=None):
         self.seen.append(answer)
         v = self._v[min(self.calls, len(self._v) - 1)]
         self.calls += 1

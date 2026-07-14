@@ -39,9 +39,10 @@ GROUNDING_SYSTEM = (
     "\"feedback\": \"一句话说明\"}，全部有据则 unsupported 为空数组，不要多余文字。")
 
 JUDGE_SYSTEM = (
-    "你是极其挑剔的答案质检员，默认假设回答存在缺陷。先逐项找出相关性、准确性、完整性、"
-    "安全性上的问题，再据此打分——不要轻易给高分。只输出 JSON："
-    "{\"score\": 0-100 的整数, \"feedback\": \"一句话点评（指出主要问题）\"}，不要多余文字。")
+    "你是严格的答案质检员。评估「回答是否达成用户目标」，综合考量相关性、准确性、完整性、安全性。"
+    "重要：若任务主要通过工具执行完成（如已生成/保存/查询/下载成功），简洁的完成确认就是恰当的回答，"
+    "不要因为「正文没有展开罗列细节」而扣分——以是否真正达成用户意图为准，成果可能体现在工具执行结果里。"
+    "只输出 JSON：{\"score\": 0-100 的整数, \"feedback\": \"一句话点评（指出主要问题）\"}，不要多余文字。")
 
 TRAJECTORY_SYSTEM = (
     "你是严格的过程质检员。给你用户问题、AI 的任务拆分、关键步摘要、最终答案。分别评估："
@@ -104,6 +105,24 @@ def _extract_urls(answer: str) -> list[str]:
     return seen
 
 
+def _tool_exec_summary(steps: list[dict] | None, max_each: int = 120) -> str:
+    """把工具调用轨迹压成「工具名（成功/失败）：结果概要」，供 judge 理解回答背后的成果。
+
+    工具执行型任务（生成/保存/检索）的实质成果在工具结果里，最终正文常只是简短确认；
+    给 judge 补上这份摘要，避免它因「正文简略」误判低分。"""
+    if not steps:
+        return ""
+    lines = []
+    for s in steps:
+        mark = "失败" if s.get("is_error") else "成功"
+        tool = s.get("tool", "?")
+        result = (s.get("result") or "").strip().replace("\n", " ")
+        if len(result) > max_each:
+            result = result[:max_each] + "…"
+        lines.append(f"- {tool}（{mark}）：{result}" if result else f"- {tool}（{mark}）")
+    return "\n".join(lines)
+
+
 @dataclass
 class TrajectoryScore:
     plan: int | None
@@ -154,7 +173,7 @@ class AnswerVerifier:
         self._config = config
 
     async def verify(self, question: str, answer: str, grounding: list[dict],
-                     registry) -> Verdict:
+                     registry, steps: list[dict] | None = None) -> Verdict:
         cfg = self._config
         failed: list[str] = []
         feedbacks: list[str] = []
@@ -194,7 +213,7 @@ class AnswerVerifier:
 
         # 5) judge —— 独立模型 + 挑错视角打分
         if cfg.gate_check_judge:
-            score, fb = await self._judge_score(question, ans)
+            score, fb = await self._judge_score(question, ans, steps)
             if score is not None and score < cfg.answer_pass_score:
                 failed.append("judge")
                 feedbacks.append(fb or f"质量评分 {score} 低于阈值 {cfg.answer_pass_score}")
@@ -217,8 +236,15 @@ class AnswerVerifier:
             _log.warning("grounding 校验失败，跳过该项：%s", e)
             return True, ""
 
-    async def _judge_score(self, question: str, answer: str) -> tuple[int | None, str]:
-        user = f"用户问题：{question}\n回答：\n{answer}\n请先找问题再打分并点评。"
+    async def _judge_score(self, question: str, answer: str,
+                           steps: list[dict] | None = None) -> tuple[int | None, str]:
+        tools = _tool_exec_summary(steps)
+        parts = [f"用户问题：{question}"]
+        if tools:
+            parts.append(f"AI 为完成此任务调用的工具及结果（成果可能在此、而非正文）：\n{tools}")
+        parts.append(f"回答：\n{answer}")
+        parts.append("请先找问题再打分并点评。")
+        user = "\n".join(parts)
         try:
             raw = await self._judge_complete(JUDGE_SYSTEM, user)
             v = json.loads(_strip_fence(raw))

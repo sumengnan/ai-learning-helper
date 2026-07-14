@@ -4,7 +4,7 @@ import json
 import pytest
 
 from app.config import AppConfig
-from app.verify import AnswerVerifier, TrajectoryJudge
+from app.verify import AnswerVerifier, TrajectoryJudge, _tool_exec_summary
 from harness.tools.base import ToolError
 
 
@@ -231,3 +231,29 @@ async def test_trajectory_judge_bad_json_degrades_to_none():
         return "这不是JSON"
     s = await TrajectoryJudge(boom, _cfg()).score("问", "", "", "答")
     assert s.plan is None and s.steps is None and s.final is None
+
+
+# ---- judge 工具执行上下文（避免工具型任务简短确认被误判低分）----
+
+def test_tool_exec_summary_marks_success_and_failure():
+    s = _tool_exec_summary([
+        {"tool": "add_questions", "result": "已入库5道题", "is_error": False},
+        {"tool": "run_python", "result": "报错", "is_error": True},
+    ])
+    assert "add_questions（成功）" in s and "已入库5道题" in s
+    assert "run_python（失败）" in s
+
+
+async def test_judge_receives_tool_summary():
+    captured = {}
+    async def cap(system, user):
+        captured["user"] = user
+        return json.dumps({"score": 90, "feedback": ""})
+    v = AnswerVerifier(_pass_complete(),
+                       _cfg(gate_check_grounding=False, gate_check_code=False),
+                       judge_complete=cap)
+    steps = [{"tool": "add_questions", "result": "已入库5道题", "is_error": False}]
+    verdict = await v.verify("生成5道题保存到题库", "已完成", [], None, steps=steps)
+    assert verdict.ok is True
+    # judge 的输入里带上了工具执行摘要，才能公正评价「简短确认」
+    assert "add_questions" in captured["user"] and "已入库5道题" in captured["user"]
