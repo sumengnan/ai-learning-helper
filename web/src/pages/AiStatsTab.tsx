@@ -1,35 +1,14 @@
-// 系统监控（原首页「工程台」视角）：运维口径的运行概览、趋势、工具调用与成功率。
-import { useEffect, useState } from "react";
+// 「AI 运行统计」页签（原「系统监控」）：运维口径的运行概览、趋势、工具调用与成功率。
+// 数据与时间范围由父组件 HomeView 统一拉取并下发，本组件不自取数。
+import { Box, Card, CardContent, Typography, Stack, Tooltip, useTheme } from "@mui/material";
+import type { StatsOverview } from "../api/stats";
 import {
-  Box, Card, CardContent, Typography, Stack, CircularProgress, Alert,
-  Select, MenuItem, Tooltip, useTheme,
-} from "@mui/material";
-import { statsApi, type StatsOverview } from "../api/stats";
-import {
-  RANGES, DEFAULT_DAYS, rangeLabel, fmtTokens, fmtPct, fmtLatency,
+  rangeLabel, fmtTokens, fmtPct, fmtLatency,
   cardSx, Eyebrow, StatTile, TrendChart, StepsHistogram,
 } from "./statsShared";
 
-export default function SystemMonitorView() {
+export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }) {
   const theme = useTheme();
-  const [days, setDays] = useState<number>(DEFAULT_DAYS);
-  const [data, setData] = useState<StatsOverview | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    setError(null);
-    statsApi.overview(days)
-      .then((d) => { if (alive) setData(d); })
-      .catch((e) => { if (alive) setError(e instanceof Error ? e.message : "加载失败"); });
-    return () => { alive = false; };
-  }, [days]);
-
-  if (error) return <Box sx={{ p: 4 }}><Alert severity="error">监控数据加载失败：{error}</Alert></Box>;
-  if (!data) return (
-    <Box sx={{ display: "grid", placeItems: "center", height: "60vh" }}><CircularProgress /></Box>
-  );
-
   const { learn, ops } = data;
   const toolMax = Math.max(1, ...ops.tools.map((t) => t.count));
   const okColor = (r: number) => (r >= 0.97 ? theme.palette.success.main
@@ -37,20 +16,10 @@ export default function SystemMonitorView() {
   const cur = ops.totals.cost_currency || "¥";
 
   return (
-    <Box sx={{ width: "100%", maxWidth: 1600, mx: "auto", px: { xs: 2, sm: 2.5, md: 3 }, py: 3, pb: 8 }}>
-      {/* 顶部：标题 + 时间范围 */}
-      <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1, mb: 1 }}>
-        <Box sx={{ flex: 1 }}>
-          <Typography sx={{ fontSize: 22, fontWeight: 700, letterSpacing: "-.02em" }}>系统监控</Typography>
-          <Typography sx={{ fontSize: 12.5, color: "text.secondary" }}>
-            harness 运行的运维口径 —— 成功率、延迟、Token 成本、工具调用
-          </Typography>
-        </Box>
-        <Select size="small" value={days} onChange={(e) => setDays(Number(e.target.value))}
-          aria-label="时间范围" sx={{ minWidth: 108, "& .MuiSelect-select": { py: 0.7 } }}>
-          {RANGES.map((r) => <MenuItem key={r.days} value={r.days}>{r.label}</MenuItem>)}
-        </Select>
-      </Stack>
+    <>
+      <Typography sx={{ fontSize: 12.5, color: "text.secondary", mb: 1 }}>
+        harness 运行的运维口径 —— 成功率、延迟、Token 成本、工具调用
+      </Typography>
 
       {/* 运行概览 tiles */}
       <Eyebrow note={rangeLabel(days)}>运行概览</Eyebrow>
@@ -133,6 +102,6 @@ export default function SystemMonitorView() {
           )}
         </CardContent>
       </Card>
-    </Box>
+    </>
   );
 }

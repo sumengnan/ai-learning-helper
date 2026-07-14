@@ -1,7 +1,8 @@
+// 「AI 运行统计」页签（原系统监控）：通过 /monitor 路径渲染 HomeView，落在 ops 页签。
 import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import SystemMonitorView from "./SystemMonitorView";
+import HomeView from "./HomeView";
 import { statsApi, type StatsOverview } from "../api/stats";
 
 vi.mock("../api/stats", () => ({ statsApi: { overview: vi.fn(), memory: vi.fn() } }));
@@ -33,24 +34,25 @@ const OV: StatsOverview = {
   },
 };
 
-const renderMon = () => render(<MemoryRouter><SystemMonitorView /></MemoryRouter>);
+const renderOps = () =>
+  render(<MemoryRouter initialEntries={["/monitor"]}><HomeView /></MemoryRouter>);
 
-beforeEach(() => vi.resetAllMocks());
+beforeEach(() => { vi.resetAllMocks(); localStorage.clear(); });
 afterEach(() => cleanup());
 
-describe("SystemMonitorView", () => {
-  it("渲染运维指标：成功率 / P95 / 工具名", async () => {
+describe("HomeView · AI 运行统计页签", () => {
+  it("/monitor 落在运维指标：成功率 / P95 / 工具名", async () => {
     (statsApi.overview as any).mockResolvedValue(OV);
-    renderMon();
+    renderOps();
     await waitFor(() => expect(screen.getByText("P95 延迟")).toBeTruthy());
-    expect(screen.getAllByText("成功率").length).toBeGreaterThan(0);  // 指标卡 + 工具表头
-    expect(screen.getByText("14.2s")).toBeTruthy();          // p95 格式化
-    expect(screen.getByText("http_request")).toBeTruthy();   // 原始工具名（工程口径）
+    expect(screen.getAllByText("成功率").length).toBeGreaterThan(0);
+    expect(screen.getByText("14.2s")).toBeTruthy();
+    expect(screen.getByText("http_request")).toBeTruthy();
   });
 
   it("估算成本按货币符号显示（¥）", async () => {
     (statsApi.overview as any).mockResolvedValue(OV);
-    renderMon();
+    renderOps();
     await waitFor(() => expect(screen.getByText("¥12.34")).toBeTruthy());
   });
 
@@ -58,25 +60,13 @@ describe("SystemMonitorView", () => {
     (statsApi.overview as any).mockResolvedValue({
       ...OV, ops: { ...OV.ops, totals: { ...OV.ops.totals, cost_usd: null } },
     });
-    renderMon();
+    renderOps();
     await waitFor(() => expect(screen.getByText("¥ —")).toBeTruthy());
   });
 
-  it("移除旧解说词，但保留调用次数/成功率的位置提示", async () => {
+  it("默认按近 3 天拉取，切换时间范围会重新拉取（页签共用选择器）", async () => {
     (statsApi.overview as any).mockResolvedValue(OV);
-    renderMon();
-    await waitFor(() => expect(screen.getByText("http_request")).toBeTruthy());
-    // 旧解说词已删除
-    expect(screen.queryByText(/harness 独有视角/)).toBeNull();
-    expect(screen.queryByText(/普通 LLM 面板看不到/)).toBeNull();
-    // 「调用次数」「成功率」提示到对应列位置（表头）
-    expect(screen.getAllByText(/调用次数/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText("成功率").length).toBeGreaterThan(0);
-  });
-
-  it("默认按近 3 天拉取，切换时间范围会重新拉取", async () => {
-    (statsApi.overview as any).mockResolvedValue(OV);
-    renderMon();
+    renderOps();
     await waitFor(() => expect(screen.getByText("P95 延迟")).toBeTruthy());
     expect(statsApi.overview).toHaveBeenCalledWith(3);
     fireEvent.mouseDown(screen.getByLabelText("时间范围"));
