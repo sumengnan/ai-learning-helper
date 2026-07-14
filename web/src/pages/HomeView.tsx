@@ -5,7 +5,8 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
-  Box, Stack, CircularProgress, Alert, Select, MenuItem, ToggleButton, ToggleButtonGroup,
+  Box, Typography, Stack, CircularProgress, Alert, Select, MenuItem,
+  ToggleButton, ToggleButtonGroup,
 } from "@mui/material";
 import { statsApi, type StatsOverview } from "../api/stats";
 import { RANGES, DEFAULT_DAYS } from "./statsShared";
@@ -45,15 +46,18 @@ export default function HomeView() {
 
   return (
     <Box sx={{ width: "100%", maxWidth: 1600, mx: "auto", px: { xs: 2, sm: 2.5, md: 3 }, py: 3, pb: 8 }}>
-      {/* 顶部：视图切换 + 共用时间范围 */}
+      {/* 顶部：标题（随视图变化） + 右侧视图切换 + 共用时间范围 */}
       <Stack direction="row" spacing={1.5}
         sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1, mb: 2 }}>
+        <Typography sx={{ fontSize: 22, fontWeight: 700, letterSpacing: "-.02em" }}>
+          {tab === "ops" ? "AI 运行统计" : "概览"}
+        </Typography>
+        <Box sx={{ flex: 1 }} />
         <ToggleButtonGroup exclusive size="small" value={tab} color="primary"
           onChange={(_, v: TabKey | null) => { if (v) nav(v === "ops" ? "/monitor" : "/"); }}>
           <ToggleButton value="overview" sx={{ fontWeight: 600, px: 2 }}>概览</ToggleButton>
           <ToggleButton value="ops" sx={{ fontWeight: 600, px: 2 }}>AI 运行统计</ToggleButton>
         </ToggleButtonGroup>
-        <Box sx={{ flex: 1 }} />
         <Select size="small" value={days} onChange={(e) => setDays(Number(e.target.value))}
           aria-label="时间范围" sx={{ minWidth: 108, "& .MuiSelect-select": { py: 0.7 } }}>
           {RANGES.map((r) => <MenuItem key={r.days} value={r.days}>{r.label}</MenuItem>)}
