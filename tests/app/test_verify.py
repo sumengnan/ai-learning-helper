@@ -159,6 +159,16 @@ async def test_judge_is_soft_gate():
 
 # ---- grounding 逐句归因 ----
 
+def test_grounding_prompt_excludes_greetings_and_advice():
+    # 回归护栏：grounding 提示词须显式把「问候语/建议/鼓励/推理」排除在事实核查之外，
+    # 否则核查模型会把它们误判为「缺依据的论断」导致交付被拦。
+    from app.verify import GROUNDING_SYSTEM
+    for kw in ("问候", "建议", "鼓励", "推理", "客观事实"):
+        assert kw in GROUNDING_SYSTEM, f"grounding 提示词缺少排除项：{kw}"
+    # 仍保留「事实核查」字样（既是职责说明，也是测试 mock 的匹配键）
+    assert "事实核查" in GROUNDING_SYSTEM
+
+
 async def test_grounding_unsupported_listed_in_critique():
     complete = _fake_complete({
         "事实核查": {"grounded": False, "unsupported": ["地球是平的", "水往高处流"], "feedback": ""},
