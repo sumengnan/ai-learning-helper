@@ -77,12 +77,16 @@ class StatsService:
     def __init__(self, *, trajectory_conn: sqlite3.Connection,
                  app_conn: sqlite3.Connection,
                  memory_conn: sqlite3.Connection | None = None,
+                 memory_store=None,
                  price_tiers: list | None = None,
                  currency: str = "$",
                  now=None) -> None:
         self._traj = trajectory_conn
         self._app = app_conn
         self._mem = memory_conn
+        # 记忆的写侧后端（SqliteVecBackend）：删除要同步清 records/vec/fts 三表，
+        # 走它才安全；只读统计仍用 _mem 连接。缺省 None 时删除不可用（优雅降级）。
+        self._mem_store = memory_store
         # 分层单价表（按输入长度分档）；配置后由 token 数现算成本，可回溯历史事件。
         # 为空则回退累加事件里已存的 cost_usd（旧口径）。
         self._price_tiers = price_tiers or []
@@ -351,13 +355,26 @@ class StatsService:
         ph = ",".join("?" * len(conv_ids))
         try:
             rows = self._mem.execute(
-                f"SELECT text, kind, created_at FROM memory_records "
+                f"SELECT id, text, kind, created_at FROM memory_records "
                 f"WHERE kind='conversation' AND superseded=0 AND owner_id IN ({ph}) "
                 f"ORDER BY created_at DESC LIMIT ?",
                 (*conv_ids, limit)).fetchall()
         except sqlite3.Error:
             return []
-        return [{"text": r[0], "collection": r[1], "created_at": r[2]} for r in rows]
+        return [{"id": r[0], "text": r[1], "collection": r[2], "created_at": r[3]} for r in rows]
+
+    def delete_memory(self, user_id: str | None, mem_id: str) -> bool:
+        """删除当前用户的一条对话记忆（按会话归属校验）。找不到/非本人/无写后端返回 False。"""
+        if self._mem_store is None:
+            return False
+        recs = self._mem_store.get([mem_id])
+        if not recs:
+            return False
+        # 归属校验：记忆的 owner_id 必须是该用户的某个会话（否则视为不存在，不泄露他人记忆）
+        if recs[0].owner_id not in set(self._user_conv_ids(user_id)):
+            return False
+        self._mem_store.delete([mem_id])
+        return True
 
     def _last_conversation(self, user_id: str | None) -> dict | None:
         if self._app is None:

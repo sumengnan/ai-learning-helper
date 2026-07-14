@@ -5,7 +5,7 @@ export interface DailyPoint { date: string; runs: number; tokens: number }
 export interface ToolStat { name: string; count: number; errors: number; success_rate: number }
 export interface StepBucket { bucket: string; count: number }
 export interface RecentDownload { id: string; filename: string; content_type: string; size: number; created_at: string }
-export interface MemoryItem { text: string; collection: string; created_at: string }
+export interface MemoryItem { id: string; text: string; collection: string; created_at: string }
 
 export interface StatsOverview {
   range_days: number;
@@ -43,5 +43,9 @@ export const statsApi = {
     authFetch(`/api/stats/memory?limit=${limit}`).then((r) => {
       if (!r.ok) throw new Error(`加载失败：${r.status}`);
       return r.json();
+    }),
+  deleteMemory: (id: string): Promise<void> =>
+    authFetch(`/api/stats/memory/${encodeURIComponent(id)}`, { method: "DELETE" }).then((r) => {
+      if (!r.ok) throw new Error(`删除失败：${r.status}`);
     }),
 };

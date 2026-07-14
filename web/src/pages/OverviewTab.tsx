@@ -13,7 +13,7 @@ import VisibilityIcon from "@mui/icons-material/Visibility";
 import type { StatsOverview } from "../api/stats";
 import { api } from "../api/client";
 import { DownloadPreviewDialog, type PreviewFile } from "./DownloadPreviewDialog";
-import { previewKind } from "./downloadsUtils";
+import { previewKind, fileMeta, formatBytes } from "./downloadsUtils";
 import { MemoryDrawer } from "./MemoryDrawer";
 import { useProfileDrawer } from "./ProfileDrawer";
 import { profileApi, isProfileSet } from "../api/profile";
@@ -61,9 +61,9 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
   const abilityMax = Math.max(1, ...learn.abilities.map((a) => a.count));
 
   const assetCards: { icon: string; lbl: string; v: number | string; sub: string; hue: Hue; act?: boolean; onClick: () => void }[] = [
-    { icon: "📚", lbl: "知识库", v: learn.assets.documents, sub: "已建索引 · 查看 →", hue: "info", onClick: () => nav("/knowledge") },
-    { icon: "✏️", lbl: "题库", v: learn.assets.questions, sub: learn.assets.questions ? "去练习 →" : "生成一套 →", hue: "primary", act: true, onClick: () => nav("/questions") },
-    { icon: "❌", lbl: "错题集", v: learn.assets.wrong_answers, sub: learn.assets.wrong_answers ? "去复习 →" : "目前全对 👍", hue: "warning", onClick: () => nav("/wrong") },
+    { icon: "📚", lbl: "知识库", v: learn.assets.documents, sub: "去查看 →", hue: "info", onClick: () => nav("/knowledge") },
+    { icon: "✏️", lbl: "题库", v: learn.assets.questions, sub: "去查看 →", hue: "primary", onClick: () => nav("/questions") },
+    { icon: "❌", lbl: "错题集", v: learn.assets.wrong_answers, sub: "去查看 →", hue: "warning", onClick: () => nav("/wrong") },
     { icon: "🧠", lbl: "AI 记的偏好", v: learn.assets.memory, sub: "点击查看它记住了什么 →", hue: "secondary", onClick: () => setMemoryOpen(true) },
     // 与「AI 记的偏好」成对：AI 猜的(只读) ↔ 你说的(可编辑)
     { icon: "⚙️", lbl: "AI 个性化", v: profileSet == null ? "" : (profileSet ? "已设置" : "未设置"),
@@ -161,10 +161,24 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
               <Stack spacing={0.75}>
                 {learn.recent_downloads.map((d) => {
                   const canPreview = previewKind(d.content_type) !== "none";
+                  const meta = fileMeta(d.content_type);
+                  const hue = meta.color && meta.color !== "default"
+                    ? theme.palette[meta.color].main : theme.palette.text.secondary;
                   return (
-                    <Stack key={d.id} direction="row" spacing={0.25} sx={{ alignItems: "center",
-                      border: 1, borderColor: "divider", borderRadius: 2, pl: 1.25, pr: 0.25, py: 0.4 }}>
-                      <Typography noWrap sx={{ fontSize: 13, flex: 1, minWidth: 0 }}>{d.filename}</Typography>
+                    <Stack key={d.id} direction="row" spacing={1} sx={{ alignItems: "center",
+                      border: 1, borderColor: "divider", borderRadius: 2, pl: 1, pr: 0.25, py: 0.6,
+                      transition: ".15s", "&:hover": { borderColor: hue,
+                        bgcolor: alpha(hue, 0.05) } }}>
+                      <Box sx={{ width: 30, height: 30, flex: "none", borderRadius: 1.5, display: "grid",
+                        placeItems: "center", color: hue, bgcolor: alpha(hue, 0.14) }}>
+                        <meta.Icon sx={{ fontSize: 17 }} />
+                      </Box>
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography noWrap sx={{ fontSize: 13, fontWeight: 550 }}>{d.filename}</Typography>
+                        <Typography noWrap sx={{ fontSize: 11.5, color: "text.secondary" }}>
+                          {meta.label} · {formatBytes(d.size)} · {fromNow(d.created_at)}
+                        </Typography>
+                      </Box>
                       {canPreview && (
                         <Tooltip title="预览"><IconButton size="small" aria-label={`预览 ${d.filename}`}
                           onClick={() => setPreview({ id: d.id, filename: d.filename, content_type: d.content_type })}>

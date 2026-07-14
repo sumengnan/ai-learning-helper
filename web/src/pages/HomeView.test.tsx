@@ -5,7 +5,7 @@ import HomeView from "./HomeView";
 import { statsApi, type StatsOverview } from "../api/stats";
 import { profileApi } from "../api/profile";
 
-vi.mock("../api/stats", () => ({ statsApi: { overview: vi.fn(), memory: vi.fn() } }));
+vi.mock("../api/stats", () => ({ statsApi: { overview: vi.fn(), memory: vi.fn(), deleteMemory: vi.fn() } }));
 vi.mock("../api/profile", () => ({
   profileApi: { get: vi.fn().mockResolvedValue({ identity: "", goal: "", explain_prefs: [], tone: "", notes: "" }) },
   isProfileSet: () => false,
@@ -103,7 +103,7 @@ describe("HomeView", () => {
   it("点击「AI 记的偏好」打开抽屉并加载记忆", async () => {
     (statsApi.overview as any).mockResolvedValue(OV);
     (statsApi.memory as any).mockResolvedValue([
-      { text: "用户偏好用中文", collection: "semantic", created_at: "2026-07-11T01:00:00+00:00" },
+      { id: "mem1", text: "用户偏好用中文", collection: "semantic", created_at: "2026-07-11T01:00:00+00:00" },
     ]);
     renderHome();
     await waitFor(() => expect(screen.getByText("二叉树遍历")).toBeTruthy());
@@ -111,6 +111,21 @@ describe("HomeView", () => {
     await waitFor(() => expect(screen.getByText("AI 记住的偏好")).toBeTruthy());  // 抽屉标题
     expect(await screen.findByText("用户偏好用中文")).toBeTruthy();
     expect(statsApi.memory).toHaveBeenCalled();
+  });
+
+  it("记忆抽屉可删除单条", async () => {
+    (statsApi.overview as any).mockResolvedValue(OV);
+    (statsApi.memory as any).mockResolvedValue([
+      { id: "mem1", text: "用户偏好用中文", collection: "semantic", created_at: "2026-07-11T01:00:00+00:00" },
+    ]);
+    (statsApi.deleteMemory as any).mockResolvedValue(undefined);
+    renderHome();
+    await waitFor(() => expect(screen.getByText("二叉树遍历")).toBeTruthy());
+    fireEvent.click(screen.getByText("AI 记的偏好"));
+    expect(await screen.findByText("用户偏好用中文")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("删除这条记忆"));
+    await waitFor(() => expect(statsApi.deleteMemory).toHaveBeenCalledWith("mem1"));
+    await waitFor(() => expect(screen.queryByText("用户偏好用中文")).toBeNull());  // 已从列表移除
   });
 
   it("最近产物提供预览与下载入口", async () => {

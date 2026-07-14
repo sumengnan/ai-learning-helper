@@ -189,11 +189,62 @@ def test_memory_items_isolated_by_user():
     assert _svc().memory_items("someone-else") == []
 
 
+def test_memory_items_include_id():
+    items = _svc().memory_items("u", limit=10)
+    assert all(i.get("id") for i in items)          # 删除要用到 id
+
+
 def test_memory_items_no_mem_db():
     from app.stats import StatsService
     svc = StatsService(trajectory_conn=_traj_conn(), app_conn=_app_conn(), memory_conn=None,
                        now=lambda: FIXED_NOW)
     assert svc.memory_items("u") == []
+
+
+# ---------- delete_memory ----------
+
+class _FakeMemStore:
+    """最小写后端替身：记录 delete 调用，按 id → owner_id 返回记录。"""
+    def __init__(self, owner_by_id: dict):
+        self._o = dict(owner_by_id)
+        self.deleted: list[str] = []
+
+    def get(self, ids):
+        from types import SimpleNamespace
+        return [SimpleNamespace(owner_id=self._o[i]) for i in ids if i in self._o]
+
+    def delete(self, ids):
+        self.deleted.extend(ids)
+        for i in ids:
+            self._o.pop(i, None)
+
+
+def _svc_with_store(store):
+    return StatsService(trajectory_conn=_traj_conn(), app_conn=_app_conn(),
+                        memory_conn=_mem_conn(), memory_store=store, now=lambda: FIXED_NOW)
+
+
+def test_delete_memory_owned():
+    fake = _FakeMemStore({"m1": "cv1"})            # cv1 属于用户 u（见 _app_conn）
+    assert _svc_with_store(fake).delete_memory("u", "m1") is True
+    assert fake.deleted == ["m1"]
+
+
+def test_delete_memory_rejects_other_users_record():
+    fake = _FakeMemStore({"mx": "cvX"})            # cvX 不属于 u
+    assert _svc_with_store(fake).delete_memory("u", "mx") is False
+    assert fake.deleted == []                       # 未删
+
+
+def test_delete_memory_missing_returns_false():
+    fake = _FakeMemStore({})
+    assert _svc_with_store(fake).delete_memory("u", "nope") is False
+
+
+def test_delete_memory_no_store_returns_false():
+    svc = StatsService(trajectory_conn=_traj_conn(), app_conn=_app_conn(),
+                       memory_conn=_mem_conn(), memory_store=None, now=lambda: FIXED_NOW)
+    assert svc.delete_memory("u", "m1") is False
 
 
 def test_activity_series_length_and_shape():

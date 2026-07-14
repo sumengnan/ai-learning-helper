@@ -99,3 +99,56 @@ def test_overview_days_param_validated():
     assert client.get("/api/stats/overview?days=7", headers=headers).json()["range_days"] == 7
     assert client.get("/api/stats/overview?days=0", headers=headers).status_code == 422
     assert client.get("/api/stats/overview?days=999", headers=headers).status_code == 422
+
+
+class _FakeMemStore:
+    def __init__(self, owner_by_id):
+        self._o = dict(owner_by_id)
+        self.deleted = []
+
+    def get(self, ids):
+        from types import SimpleNamespace
+        return [SimpleNamespace(owner_id=self._o[i]) for i in ids if i in self._o]
+
+    def delete(self, ids):
+        self.deleted.extend(ids)
+        for i in ids:
+            self._o.pop(i, None)
+
+
+def test_memory_list_and_delete_endpoint():
+    traj = TrajectoryStore(":memory:")
+    harness = Harness(client=None, registry=ToolRegistry(),
+                      checkpoint_store=CheckpointStore(":memory:"),
+                      trajectory_store=traj, sink=TrajectorySink(traj), system_prompt="s")
+    from app.db import migrate
+    app_conn = sqlite3.connect(":memory:")
+    migrate(app_conn)                                  # 建 conversations 等表
+    store = ConversationStore(conn=app_conn)
+    mem_conn = sqlite3.connect(":memory:")
+    mem_conn.execute("CREATE TABLE memory_records(id TEXT, owner_id TEXT, kind TEXT, "
+                     "superseded INTEGER DEFAULT 0, text TEXT, created_at TEXT)")
+    fake = _FakeMemStore({})
+    stats = StatsService(trajectory_conn=_traj_conn_with_run(), app_conn=app_conn,
+                         memory_conn=mem_conn, memory_store=fake)
+    app = create_app(config=_cfg(), harness=harness, store=store,
+                     doc_store=DocumentStore(conn=app_conn), question_store=None,
+                     exam_store=None, wrong_store=None, quiz_service=None, stats_service=stats)
+    client = TestClient(app)
+    headers, uid = _auth_headers(client)
+
+    conv_id = store.create(uid, "会话")                # 属于当前用户
+    mem_conn.execute("INSERT INTO memory_records(id, owner_id, kind, text, created_at) "
+                     "VALUES ('m1', ?, 'conversation', '记忆一', '2026-07-11T01:00:00+00:00')", (conv_id,))
+    mem_conn.commit()
+    fake._o["m1"] = conv_id
+
+    items = client.get("/api/stats/memory", headers=headers).json()
+    assert any(i["id"] == "m1" for i in items)         # 列表带 id
+
+    assert client.delete("/api/stats/memory/m1", headers=headers).status_code == 200
+    assert fake.deleted == ["m1"]                      # 走真实写后端删除
+    # 不存在/他人的 → 404
+    assert client.delete("/api/stats/memory/nope", headers=headers).status_code == 404
+    # 需要鉴权
+    assert client.delete("/api/stats/memory/m1").status_code == 401

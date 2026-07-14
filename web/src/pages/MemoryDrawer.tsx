@@ -3,6 +3,7 @@ import {
   Dialog, Box, Typography, IconButton, CircularProgress, Alert, Stack, Card, Chip, Divider,
 } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
 import PsychologyIcon from "@mui/icons-material/Psychology";
 import { statsApi, type MemoryItem } from "../api/stats";
 
@@ -30,6 +31,7 @@ function collLabel(c: string): string {
 export function MemoryDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [items, setItems] = useState<MemoryItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -40,6 +42,18 @@ export function MemoryDrawer({ open, onClose }: { open: boolean; onClose: () => 
       .catch((e) => { if (alive) setError(e instanceof Error ? e.message : "加载失败"); });
     return () => { alive = false; };
   }, [open]);
+
+  async function remove(id: string) {
+    setDeleting(id); setError(null);
+    try {
+      await statsApi.deleteMemory(id);
+      setItems((cur) => (cur ? cur.filter((m) => m.id !== id) : cur));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "删除失败");
+    } finally {
+      setDeleting(null);
+    }
+  }
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth
@@ -69,12 +83,18 @@ export function MemoryDrawer({ open, onClose }: { open: boolean; onClose: () => 
           )}
           {items && items.length > 0 && (
             <Stack spacing={1.5}>
-              {items.map((m, i) => (
-                <Card key={i} variant="outlined" sx={{ p: 1.75, borderRadius: 2 }}>
-                  <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 0.75 }}>
+              {items.map((m) => (
+                <Card key={m.id} variant="outlined" sx={{ p: 1.75, borderRadius: 2 }}>
+                  <Stack direction="row" spacing={0.5} sx={{ justifyContent: "space-between", alignItems: "center", mb: 0.75 }}>
                     <Chip size="small" label={collLabel(m.collection)}
                       variant="outlined" sx={{ height: 20, fontSize: 11 }} />
-                    <Typography sx={{ fontSize: 11.5, color: "text.disabled" }}>{fromNow(m.created_at)}</Typography>
+                    <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
+                      <Typography sx={{ fontSize: 11.5, color: "text.disabled" }}>{fromNow(m.created_at)}</Typography>
+                      <IconButton size="small" aria-label="删除这条记忆" disabled={deleting === m.id}
+                        onClick={() => remove(m.id)} sx={{ p: 0.25 }}>
+                        <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                    </Stack>
                   </Stack>
                   <Typography sx={{ fontSize: 13.5, whiteSpace: "pre-wrap", wordBreak: "break-word",
                     color: "text.primary", lineHeight: 1.55 }}>{m.text}</Typography>
