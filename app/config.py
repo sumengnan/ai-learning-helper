@@ -47,6 +47,8 @@ class AppConfig(HarnessConfig):
     enable_trajectory_judge: bool = False   # 与 answer gate 独立，可单独开
     trajectory_pass_score: int = 60         # 最终层分数阈值（低于则软门不过）
     judge_model: str = ""                   # 独立 judge 模型；空则回退主 model
+    judge_base_url: str = ""                # judge 独立端点；空则回退主 base_url
+    judge_api_key: str = ""                 # judge 独立 key；空则回退主 api_key
     judge_samples: int = 1                  # 预留：多次取多数（起步 1）
     # 聊天附件：裸字节落盘目录、单文件上限、单会话待发数量上限、可直接喂视觉模型的图片上限
     attachments_dir: str = "attachments"

@@ -175,6 +175,8 @@ step_relevance_min: float = 0.0        # 检索低分阈值；0 表示只判空�
 enable_trajectory_judge: bool = False  # 与 answer gate 独立，可单独开
 trajectory_pass_score: int = 60
 judge_model: str = ""                  # 独立 judge 模型；空则回退主 model
+judge_base_url: str = ""               # judge 独立端点；空则回退主 base_url
+judge_api_key: str = ""                # judge 独立 key；空则回退主 api_key
 judge_samples: int = 1                 # 预留：多次取多数（起步 1）
 # 加固维度
 gate_check_facts: bool = False         # 引用链接可达性

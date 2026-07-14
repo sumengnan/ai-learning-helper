@@ -25,3 +25,36 @@ def build_completer(client, model_name: str):
         return final
 
     return complete
+
+
+def _judge_config(config):
+    """按 judge_* 覆盖返回 judge 专用 config；judge_model 为空则返回 None（回退主模型）。
+
+    参照 embedding/rerank 的回退模式：judge_base_url/judge_api_key 为空时回退主端点，
+    因此「只配 judge_model 换裁判模型」和「配独立端点/key」都能工作。model_copy 不改原 config。
+    """
+    if not config.judge_model:
+        return None
+    return config.model_copy(update={
+        "model": config.judge_model,
+        "base_url": config.judge_base_url or config.base_url,
+        "api_key": config.judge_api_key or config.api_key,
+    })
+
+
+def build_judge_completer(client, config):
+    """构造 judge 专用 completer：配了 judge_model 则起独立 client（可指向独立端点/key），
+    否则回退传入的主 client/主模型。用独立/更强模型当裁判可降低「自己给自己打高分」的偏差。
+
+    注意：build_completer 的 model_name 仅作计费标签，实际模型固化在 client 的 config 里，
+    所以换裁判模型必须新建 client（而非仅传不同 model_name）。
+    """
+    jcfg = _judge_config(config)
+    if jcfg is None:
+        return build_completer(client, config.model)
+    from harness.llm.openai_compat import OpenAICompatibleClient
+    from harness.reliability.retry import RetryingModelClient
+    jclient = RetryingModelClient(
+        OpenAICompatibleClient(jcfg),
+        max_retries=config.max_retries, base_delay=config.retry_base_delay)
+    return build_completer(jclient, config.judge_model)

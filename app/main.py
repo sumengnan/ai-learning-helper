@@ -92,18 +92,18 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
         expose_headers=["X-Refresh-Token", "X-Run-Id"])
     # 回答交付前校验门（开关开时装配；测试可注入 verifier）：用单发 completer 做
     # grounding/judge，代码块在会话沙箱实跑。
+    from .completion import build_judge_completer
     if verifier is None and config.enable_answer_gate:
         from .verify import AnswerVerifier
-        # 独立 judge 模型（config.judge_model 为空则回退主模型），降低自评打高分偏差
-        _judge_complete = build_completer(harness.client, config.judge_model or config.model)
+        # judge 用独立 completer（可指向独立端点/模型），降低自评打高分偏差
         verifier = AnswerVerifier(build_completer(harness.client, config.model), config,
-                                  judge_complete=_judge_complete)
+                                  judge_complete=build_judge_completer(harness.client, config))
     # 轨迹 judge（交付前一次性回看整轨迹分层打分）：与 answer gate 独立，可单独开
     trajectory_judge = None
     if config.enable_trajectory_judge:
         from .verify import TrajectoryJudge
         trajectory_judge = TrajectoryJudge(
-            build_completer(harness.client, config.judge_model or config.model), config)
+            build_judge_completer(harness.client, config), config)
     # 断点续传：进程内运行管理器（后台任务 + 内存事件总线），供 /api/chat 起后台生成、
     # attach 刷新接回。启动时对账残留的 streaming 消息（上次进程重启丢了在途任务）。
     from .run_manager import RunManager
