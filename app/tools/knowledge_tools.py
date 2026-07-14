@@ -11,8 +11,10 @@ from ..knowledge import EmptyDocument, strip_markdown
 class SaveToKnowledgeTool(Tool):
     name = "save_to_knowledge"
     description = (
-        "把一段整理好的内容永久保存到用户的「知识库」，之后可在知识库菜单查看、"
-        "语义检索与删除。适用于用户明确要求把资料/网页/抓取到的数据存进知识库的场景。"
+        "把内容作为「可检索的知识素材」存入用户知识库，供以后语义检索/RAG 使用"
+        "（可在知识库菜单查看、删除）。仅用于用户明确要「存进知识库 / 收藏资料」的场景。"
+        "注意：这不是生成给用户的成品文档——若用户要把内容「整理成学习笔记 / 总结 / 报告 / 文档」"
+        "这类给用户查看或下载的成品，请改用 save_download，而不是存回知识库。"
         "title 为条目标题，text 为正文。"
         "（若只是想让自己以后记住某事、而非用户的知识库，请改用 remember。）")
 

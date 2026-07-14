@@ -13,7 +13,8 @@ from harness.tools.base import Tool
 class SaveDownloadTool(Tool):
     name = "save_download"
     description = (
-        "把整理好的内容保存为可下载文件（笔记/导出/图表）。"
+        "把整理好的内容生成为「给用户的成品文件」供查看/下载——学习笔记、总结、报告、导出、图表等。"
+        "这是给用户的最终产物、文件（不进知识库检索）。用户说「整理成笔记 / 导出 / 存成文件」用这个。"
         "content 为文本内容；若要保存图片等二进制，先把它 base64 编码并令 encoding=base64。")
 
     class Params(BaseModel):
