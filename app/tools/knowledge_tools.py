@@ -33,4 +33,6 @@ class SaveToKnowledgeTool(Tool):
             res = await self._knowledge.ingest_text(self._uid, params.title, text)
         except EmptyDocument:
             return "保存失败：内容为空。"
-        return f"已保存到知识库：《{res['filename']}》（{res['num_chunks']} 块），可在知识库菜单查看。"
+        # 末尾带机读标记〔知识ID:...〕：交付门据此在校验不通过时清理该轮误入库的条目（前端剥离不展示）
+        return (f"已保存到知识库：《{res['filename']}》（{res['num_chunks']} 块），"
+                f"可在知识库菜单查看。〔知识ID:{res['id']}〕")

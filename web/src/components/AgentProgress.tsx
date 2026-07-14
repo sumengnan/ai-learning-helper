@@ -11,6 +11,10 @@ import BuildIcon from "@mui/icons-material/Build";
 import { CollapsibleBlock } from "./CollapsibleBlock";
 import { EllipsisText } from "./EllipsisText";
 
+// 工具结果里的机读标记（〔下载ID:x〕〔知识ID:x〕〔题目ID:x〕）供后端追踪产物，展示时剥离不露给用户
+const ID_MARKER_RE = /〔(?:下载|知识|题目)ID:[^〕]*〕/g;
+const stripIdMarkers = (t?: string) => (t || "").replace(ID_MARKER_RE, "").trimEnd();
+
 // MCP 工具名为 mcp__<server>__<tool>；拆出来友好展示为「server · tool」并挂 MCP 标签。
 function mcpParts(name: string): { server: string; tool: string } | null {
   const m = /^mcp__(.+?)__(.+)$/.exec(name);
@@ -143,7 +147,7 @@ export function AgentProgress({ steps, live = false, stopped = false }: {
                     sx={{ m: 0, fontFamily: "monospace", whiteSpace: "pre-wrap", wordBreak: "break-all",
                           color: "text.primary" }}
                   >
-                    {s.result}
+                    {stripIdMarkers(s.result)}
                   </Typography>
                 </Box>
               )}

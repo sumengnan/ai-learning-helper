@@ -27,14 +27,18 @@ def _sqlite_allow_cross_thread(monkeypatch):
     monkeypatch.setattr(sqlite3, "connect", _patched)
 
 
-def test_download_ids_extracts_only_successful_save_download():
-    from app.api.chat import _download_ids
+def test_side_effect_ids_groups_by_tool():
+    from app.api.chat import _side_effect_ids
     steps = [
         {"tool": "save_download", "result": "已保存〔下载ID:aaa〕", "is_error": False},
-        {"tool": "save_download", "result": "保存失败", "is_error": True},          # 失败轮不算
-        {"tool": "search_memory", "result": "〔下载ID:bbb〕", "is_error": False},   # 非 save_download 不算
+        {"tool": "save_to_knowledge", "result": "已存〔知识ID:kkk〕", "is_error": False},
+        {"tool": "add_questions", "result": "已入库〔题目ID:q1,q2〕", "is_error": False},
+        {"tool": "save_download", "result": "保存失败", "is_error": True},          # 失败步不算
     ]
-    assert _download_ids(steps) == ["aaa"]
+    fx = _side_effect_ids(steps)
+    assert fx["download"] == ["aaa"]
+    assert fx["knowledge"] == ["kkk"]
+    assert fx["questions"] == ["q1", "q2"]
 
 
 class _StubVerifier:

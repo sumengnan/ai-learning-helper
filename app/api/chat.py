@@ -102,16 +102,30 @@ class _Decision(BaseModel):
     approved: bool
 
 
-_DL_ID_RE = re.compile(r"〔下载ID:([0-9a-fA-F]+)〕")
+_DL_ID_RE = re.compile(r"〔下载ID:([^〕]+)〕")
+_KB_ID_RE = re.compile(r"〔知识ID:([^〕]+)〕")
+_Q_ID_RE = re.compile(r"〔题目ID:([^〕]+)〕")
 
 
-def _download_ids(steps: list[dict]) -> list[str]:
-    """从 save_download 成功结果里提取下载 id（工具返回带机读标记〔下载ID:...〕）。"""
-    ids: list[str] = []
+def _side_effect_ids(steps: list[dict]) -> dict[str, list[str]]:
+    """提取本轮各副作用工具成功产物的 id（下载/知识/题目），供失败轮清理。
+
+    工具在结果里带机读标记：save_download→〔下载ID:x〕、save_to_knowledge→〔知识ID:x〕、
+    add_questions→〔题目ID:x,y〕。失败步（is_error）不计。"""
+    out: dict[str, list[str]] = {"download": [], "knowledge": [], "questions": []}
     for s in steps or []:
-        if s.get("tool") == "save_download" and not s.get("is_error"):
-            ids += _DL_ID_RE.findall(s.get("result") or "")
-    return ids
+        if s.get("is_error"):
+            continue
+        r = s.get("result") or ""
+        tool = s.get("tool")
+        if tool == "save_download":
+            out["download"] += _DL_ID_RE.findall(r)
+        elif tool == "save_to_knowledge":
+            out["knowledge"] += _KB_ID_RE.findall(r)
+        elif tool == "add_questions":
+            for grp in _Q_ID_RE.findall(r):
+                out["questions"] += [x for x in grp.split(",") if x]
+    return out
 
 
 def _plan_text(progress: list[dict]) -> str:
@@ -422,15 +436,27 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     # 交付门：缓冲 → 校验 → 不过则回灌重答，最多 answer_gate_max_retries 次
                     corrective = None
                     max_attempts = config.answer_gate_max_retries + 1
-                    stale_dl_ids: list[str] = []   # 未通过轮生成的下载文件，交付时清理掉
+                    # 未通过轮生成的副作用产物（下载/知识/题目），交付/降级时清理掉
+                    stale_fx: dict[str, list[str]] = {"download": [], "knowledge": [], "questions": []}
 
-                    def _purge_downloads(ids):
+                    def _purge_side_effects(fx):
                         _dl = getattr(harness, "download_store", None)
-                        for _did in ids:
+                        for _did in fx["download"]:
                             try:
                                 if _dl is not None:
                                     _dl.delete(user_id, _did)
                             except Exception:   # 清理失败不阻断交付
+                                pass
+                        for _kid in fx["knowledge"]:
+                            try:
+                                if knowledge_service is not None:
+                                    knowledge_service.delete(user_id, _kid)
+                            except Exception:
+                                pass
+                        if fx["questions"] and question_store is not None:
+                            try:
+                                question_store.delete_many(user_id, fx["questions"])
+                            except Exception:
                                 pass
 
                     for attempt in range(max_attempts):
@@ -445,7 +471,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             yield s
                         steps.extend(collect["steps"])
                         draft = (collect["final"] or "").strip()
-                        cur_dl_ids = _download_ids(collect["steps"])   # 本轮生成的下载文件
+                        cur_fx = _side_effect_ids(collect["steps"])   # 本轮生成的副作用产物
 
                         ekey = uuid4().hex
                         yield _emit_verify("校验中…", status="running", key=ekey)
@@ -481,7 +507,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             yield _emit_verify("校验通过", status="ok", key=ekey)
                             delivered = draft
                             delivered_sources = source_sink.snapshot()
-                            _purge_downloads(stale_dl_ids)   # 交付本轮，删掉之前失败轮的下载文件
+                            _purge_side_effects(stale_fx)   # 交付本轮，删掉之前失败轮的副作用产物
                             break
                         # error 事件的 text 携带完整原因（critique），供前端展开显示
                         # error 事件 text：中文层名 + 完整原因，供前端展示「哪层没过 + 为什么」
@@ -496,9 +522,10 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             if verdict.summary:
                                 delivered = (f"⚠️ 此回答未通过自动校验（{verdict.summary}），"
                                              f"请谨慎参考。\n\n" + delivered)
-                            _purge_downloads(stale_dl_ids)   # 降级交付本轮，清理之前失败轮的下载文件
+                            _purge_side_effects(stale_fx)   # 降级交付本轮，清理之前失败轮的副作用产物
                             break
-                        stale_dl_ids += cur_dl_ids   # 本轮未通过、将重答，其下载文件作废待清理
+                        for _k in stale_fx:   # 本轮未通过、将重答，其副作用产物作废待清理
+                            stale_fx[_k] += cur_fx[_k]
                         yield _emit_verify("重答中…", status="running")
                         corrective = (f"你上一版回答未通过自动校验。问题：{verdict.critique}。"
                                       f"请针对性修正后，重新完整回答原问题：{question}")

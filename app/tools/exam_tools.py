@@ -120,16 +120,20 @@ class AddQuestionsTool(Tool):
 
     async def run(self, params: "AddQuestionsTool.Params") -> str:
         valid = [q for q in params.questions if _valid(q, ALL_TYPES)]
-        added = 0
+        added_ids: list[str] = []
         for q in valid:
             q.setdefault("source", "聊天整理")
             q["explanation"] = q.get("explanation", "")
-            if self._store.create_deduped(self._uid, q) is not None:
-                added += 1
+            qid = self._store.create_deduped(self._uid, q)
+            if qid is not None:
+                added_ids.append(qid)
+        added = len(added_ids)
         skipped = len(params.questions) - added
         if added == 0:
             return f"没有新题入库（跳过 {skipped} 道：无效或与题库重复）。"
-        return f"已入库 {added} 道，跳过 {skipped} 道（无效或重复）。"
+        # 末尾带机读标记〔题目ID:id,id〕：交付门据此在校验不通过时清理该轮误入库的题（前端剥离不展示）
+        return (f"已入库 {added} 道，跳过 {skipped} 道（无效或重复）。"
+                f"〔题目ID:{','.join(added_ids)}〕")
 
 
 class GenerateQuestionsTool(Tool):
