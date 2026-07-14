@@ -46,7 +46,7 @@ from ..tools.exam_tools import (
 from ..tools.knowledge_tools import SaveToKnowledgeTool
 from ..tools.save_download import SaveDownloadTool
 from ..logging_setup import set_log_context
-from ..verify import Verdict
+from ..verify import Verdict, _tool_exec_summary
 
 log = logging.getLogger("app.chat")
 
@@ -105,15 +105,6 @@ def _plan_text(progress: list[dict]) -> str:
     """从进度事件里取最后一次任务拆分（scope=plan 的 JSON 文本），供轨迹 judge 回看。"""
     plans = [p["text"] for p in progress if p.get("scope") == "plan"]
     return plans[-1] if plans else ""
-
-
-def _steps_summary(steps: list[dict]) -> str:
-    """把工具调用轨迹压成「✓/✗ 工具名」逐行摘要。"""
-    lines = []
-    for s in steps:
-        mark = "✗" if s.get("is_error") else "✓"
-        lines.append(f"{mark} {s.get('tool')}")
-    return "\n".join(lines)
 
 
 def make_chat_router(harness, store, config, question_store=None, wrong_store=None,
@@ -452,7 +443,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                 and config.enable_trajectory_judge and draft):
                             tscore = await trajectory_judge.score(
                                 question, _plan_text(progress),
-                                _steps_summary(collect["steps"]), draft)
+                                _tool_exec_summary(collect["steps"]), draft)
                             yield _emit_quality(tscore)
                             if (tscore.final is not None
                                     and tscore.final < config.trajectory_pass_score):
