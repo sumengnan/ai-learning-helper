@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+from harness.memory.chunker import kind_for_filename
+
 from .documents import _category
 from .parsing import parse_file
 
@@ -32,7 +34,8 @@ class KnowledgeService:
         doc_id = uuid4().hex
         chunk_ids = await self._memory.add_texts(
             [text], self._collection_for(user_id),
-            {"source": filename, "doc_id": doc_id, "user_id": user_id})
+            {"source": filename, "doc_id": doc_id, "user_id": user_id},
+            kind=kind_for_filename(filename))
         excerpt = " ".join(text.split())[:200]     # 压平空白后取首段作摘要
         self._doc_store.create(user_id, doc_id, filename, len(data), chunk_ids, excerpt)
         return {"id": doc_id, "filename": filename, "num_chunks": len(chunk_ids)}
@@ -48,7 +51,8 @@ class KnowledgeService:
         doc_id = uuid4().hex
         chunk_ids = await self._memory.add_texts(
             [text], self._collection_for(user_id),
-            {"source": title, "doc_id": doc_id, "user_id": user_id})
+            {"source": title, "doc_id": doc_id, "user_id": user_id},
+            kind=kind_for_filename(title))       # 有后缀按类型；无后缀→auto 嗅探
         excerpt = " ".join(text.split())[:200]
         self._doc_store.create(user_id, doc_id, title, len(text.encode("utf-8")),
                                chunk_ids, excerpt)

@@ -1,48 +1,97 @@
 from __future__ import annotations
 
-# 句子/段落边界字符：优先在这些字符之后切分，避免把一句话从中间切成两半
-_BOUNDARY = "。！？；!?;\n"
+import importlib
+import logging
+import re
+
+from semantic_text_splitter import CodeSplitter, MarkdownSplitter, TextSplitter
+
+logger = logging.getLogger("harness.memory.chunker")
+
+# kind → tree-sitter 语言模块（只支持主流几种；其余语言回退递归 TextSplitter）
+_LANG_MODULES = {
+    "python": "tree_sitter_python",
+    "javascript": "tree_sitter_javascript",
+    "typescript": "tree_sitter_typescript",
+    "java": "tree_sitter_java",
+    "go": "tree_sitter_go",
+}
+
+# 文件后缀 → 切分 kind
+_EXT_KIND = {
+    "md": "markdown", "markdown": "markdown", "html": "markdown", "htm": "markdown",
+    "py": "python",
+    "js": "javascript", "mjs": "javascript", "cjs": "javascript", "jsx": "javascript",
+    "ts": "typescript", "tsx": "typescript",
+    "java": "java", "go": "go",
+    "txt": "text", "pdf": "text", "docx": "text", "doc": "text",
+}
+
+_lang_cache: dict = {}
+_MD_HEADING = re.compile(r"^#{1,6}\s", re.M)
+_MD_TABLE = re.compile(r"^\s*\|.+\|\s*$", re.M)
 
 
-def _last_boundary(text: str, lo: int, hi: int) -> int:
-    """返回 [lo, hi) 内最后一个边界字符之后的切点位置；窗口内无边界则返回 -1。"""
-    lo = max(lo, 0)
-    for i in range(hi - 1, lo - 1, -1):
-        if text[i] in _BOUNDARY:
-            return i + 1
-    return -1
+def kind_for_filename(filename: str | None) -> str:
+    """文件名后缀 → 切分 kind；未知/无后缀返回 auto（交内容嗅探）。"""
+    name = filename or ""
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    return _EXT_KIND.get(ext, "auto")
 
 
-def chunk(text: str, chunk_size: int, overlap: int) -> list[str]:
+def _sniff(text: str) -> str:
+    """内容嗅探：有 markdown 标题/表格/代码围栏 → markdown，否则纯文本。"""
+    if "```" in text or _MD_HEADING.search(text) or _MD_TABLE.search(text):
+        return "markdown"
+    return "text"
+
+
+def _lang_capsule(kind: str):
+    """取 tree-sitter 语言 capsule；未支持/加载失败返回 None（回退递归切分）。"""
+    if kind not in _LANG_MODULES:
+        return None
+    if kind in _lang_cache:
+        return _lang_cache[kind]
+    cap = None
+    try:
+        mod = importlib.import_module(_LANG_MODULES[kind])
+        # tree_sitter_typescript 无 language()，用 language_typescript()
+        cap = mod.language_typescript() if kind == "typescript" else mod.language()
+    except Exception as e:  # 语言包缺失/加载失败 → 回退 TextSplitter
+        logger.warning("代码语言 %s 加载失败，回退递归切分：%s", kind, e)
+    _lang_cache[kind] = cap
+    return cap
+
+
+def _make_splitter(kind: str, capacity, overlap: int):
+    if kind == "markdown":
+        # 结构化：按标题层级切、保表格/代码块/列表完整；不做重叠避免污染结构
+        return MarkdownSplitter(capacity)
+    lang = _lang_capsule(kind)
+    if lang is not None:
+        # 代码：tree-sitter 按语法边界切，不切断函数/类
+        return CodeSplitter(lang, capacity)
+    # 纯文本 / PDF：递归按语义边界（段落→句子→…），带 overlap
+    return TextSplitter(capacity, overlap=overlap)
+
+
+def chunk(text: str, chunk_size: int = 1000, overlap: int = 200,
+          kind: str = "auto", hard_max: int | None = None) -> list[str]:
+    """结构感知切分（所有 RAG 入库统一入口）。
+
+    kind：``markdown`` | ``text`` | ``auto`` | 语言名(python/javascript/typescript/java/go)。
+    ``auto`` 按内容嗅探 markdown / 纯文本；语言名走 tree-sitter 代码切分（不切断函数）。
+    capacity=(chunk_size, hard_max) 为硬上限：尽量在语义边界填满，绝不超 hard_max；
+    表格 / 代码块在上限内保持完整（切断的表格 embedding 几乎无检索价值）。
+    """
     if chunk_size <= 0:
         raise ValueError("chunk_size 必须为正")
-    if overlap < 0 or overlap >= chunk_size:
-        raise ValueError("overlap 必须在 [0, chunk_size) 内")
-    text = text.strip()
+    text = (text or "").strip()
     if not text:
         return []
-    if len(text) <= chunk_size:
-        return [text]
-    # 边界回溯：在每块的末尾 window 字符内找最后一个句子边界，切在其后，避免半截句；
-    # 窗口内无标点（如无边界的连续串）再退回硬切，既不切碎句子又保证向前推进。
-    window = chunk_size // 4
-    n = len(text)
-    chunks: list[str] = []
-    start = 0
-    while start < n:
-        hard_end = start + chunk_size
-        if hard_end >= n:               # 末块：取到结尾，不再回溯
-            chunks.append(text[start:])
-            break
-        end = hard_end
-        cut = _last_boundary(text, hard_end - window, hard_end)
-        if cut > start:                 # 窗口内找到边界 → 切在边界之后
-            end = cut
-        chunks.append(text[start:end])
-        nxt = end - overlap
-        start = nxt if nxt > start else end   # overlap=0 等极端情形下仍保证前进
-    # 末块若不超过 overlap，则已被前一块的重叠区完整覆盖，属冗余，丢弃。
-    # overlap=0 时条件为 <=0 永不触发，真实尾块保留。
-    if len(chunks) > 1 and len(chunks[-1]) <= overlap:
-        chunks.pop()
-    return chunks
+    hi = hard_max if (hard_max and hard_max > chunk_size) else chunk_size * 2
+    capacity = (chunk_size, hi)
+    ov = max(0, min(overlap, chunk_size - 1))          # overlap 必须小于容量下限
+    resolved = _sniff(text) if kind == "auto" else kind
+    splitter = _make_splitter(resolved, capacity, ov)
+    return [c for c in splitter.chunks(text) if c.strip()]

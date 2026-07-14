@@ -118,7 +118,7 @@ def build_harness(config) -> Harness:
         _retriever = Retriever(mem_store, embedder, reranker, _rcfg,
                                complete=build_completer(client, config.model))
         mem = Memory(mem_store, embedder, config.chunk_size, config.chunk_overlap,
-                     retriever=_retriever)
+                     retriever=_retriever, chunk_hard_max=config.chunk_hard_max)
         memory = mem
         memory_store = mem_store
         from harness.memory.maintainer import ConsolidationConfig, MemoryMaintainer

@@ -23,25 +23,29 @@ class Memory:
 
     def __init__(self, backend: MemoryBackend, embedder: EmbeddingClient,
                  chunk_size: int = 1000, overlap: int = 200,
-                 retriever: Retriever | None = None) -> None:
+                 retriever: Retriever | None = None,
+                 chunk_hard_max: int | None = None) -> None:
         self._backend = backend
         self._embedder = embedder
         self._chunk_size = chunk_size
         self._overlap = overlap
+        self._chunk_hard_max = chunk_hard_max
         self._retriever = retriever or Retriever(
             backend, embedder, NoOpReranker(), RetrievalConfig())
 
     async def add_texts(self, texts: list[str], collection: str,
-                        metadata: dict | None = None) -> list[str]:
+                        metadata: dict | None = None, kind: str = "auto") -> list[str]:
+        """kind：切分策略提示（markdown/text/auto/语言名），见 chunker.chunk。"""
         all_chunks: list[str] = []
         for t in texts:
-            all_chunks.extend(chunk(t, self._chunk_size, self._overlap))
+            all_chunks.extend(chunk(t, self._chunk_size, self._overlap,
+                                    kind=kind, hard_max=self._chunk_hard_max))
         if not all_chunks:
             return []
-        owner_id, kind = collection_to_scope(collection)
+        owner_id, col_kind = collection_to_scope(collection)
         vectors = await self._embedder.embed(all_chunks)
         records = [
-            MemoryRecord(owner_id=owner_id, kind=kind, mem_type=MemType.SEMANTIC,
+            MemoryRecord(owner_id=owner_id, kind=col_kind, mem_type=MemType.SEMANTIC,
                          text=c, embedding=v, metadata=metadata or {})
             for c, v in zip(all_chunks, vectors)]
         return self._backend.upsert(records)
