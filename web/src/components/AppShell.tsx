@@ -190,7 +190,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               transformOrigin={{ vertical: "top", horizontal: "right" }}>
               <MenuItem onClick={() => { setMenuAnchor(null); openProfile(); }}>
                 <ListItemIcon><TuneIcon fontSize="small" /></ListItemIcon>
-                我的个性化
+                AI 个性化
               </MenuItem>
               <Divider />
               <MenuItem onClick={onLogout}>

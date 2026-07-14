@@ -66,7 +66,7 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
     { icon: "❌", lbl: "错题集", v: learn.assets.wrong_answers, sub: learn.assets.wrong_answers ? "去复习 →" : "目前全对 👍", hue: "warning", onClick: () => nav("/wrong") },
     { icon: "🧠", lbl: "AI 记的偏好", v: learn.assets.memory, sub: "点击查看它记住了什么 →", hue: "secondary", onClick: () => setMemoryOpen(true) },
     // 与「AI 记的偏好」成对：AI 猜的(只读) ↔ 你说的(可编辑)
-    { icon: "⚙️", lbl: "我的个性化", v: profileSet == null ? "" : (profileSet ? "已设置" : "未设置"),
+    { icon: "⚙️", lbl: "AI 个性化", v: profileSet == null ? "" : (profileSet ? "已设置" : "未设置"),
       sub: profileSet ? "编辑 →" : "告诉 AI 你是谁 →", hue: "success", act: !profileSet, onClick: openProfile },
   ];
 

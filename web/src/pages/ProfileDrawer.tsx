@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import {
-  Drawer, Box, Typography, IconButton, TextField, Chip, Stack, Button,
+  Dialog, Box, Typography, IconButton, TextField, Chip, Stack, Button,
   CircularProgress, Alert, Snackbar, Divider,
 } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
@@ -76,25 +76,27 @@ function ProfileDrawer({ open, onClose, onSaved }: {
 
   return (
     <>
-      <Drawer anchor="right" open={open} onClose={onClose}
-        slotProps={{ paper: { sx: { width: { xs: "100%", sm: 460 }, maxWidth: "100%" } } }}>
-        <Box sx={{ p: 2.5, display: "flex", alignItems: "center", gap: 1.5,
-          borderBottom: 1, borderColor: "divider" }}>
-          <TuneIcon color="primary" />
-          <Box sx={{ flex: 1 }}>
-            <Typography sx={{ fontWeight: 700, fontSize: 16 }}>我的个性化</Typography>
-            <Typography sx={{ fontSize: 12.5, color: "text.secondary" }}>
-              告诉 AI 你是谁、想怎么学——一次设定，长期生效
-            </Typography>
-          </Box>
-          <IconButton onClick={onClose} aria-label="关闭"><CloseIcon /></IconButton>
-        </Box>
+      <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth
+        slotProps={{ paper: { sx: { maxHeight: "85vh" } } }}>
+        <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2, maxHeight: "85vh" }}>
+          <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
+            <TuneIcon color="primary" />
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography variant="h6" sx={{ fontWeight: 700 }}>AI 个性化</Typography>
+              <Typography sx={{ fontSize: 12.5, color: "text.secondary" }}>
+                告诉 AI 你是谁、想怎么学——一次设定，长期生效
+              </Typography>
+            </Box>
+            <IconButton size="small" onClick={onClose} aria-label="关闭"><CloseIcon /></IconButton>
+          </Stack>
+          <Divider />
 
-        {loading ? (
-          <Box sx={{ display: "flex", justifyContent: "center", py: 8 }}><CircularProgress /></Box>
-        ) : (
-          <Box sx={{ p: 2.5, overflow: "auto", display: "flex", flexDirection: "column", gap: 2.5 }}>
-            {error && <Alert severity="error" onClose={() => setError(null)}>{error}</Alert>}
+          {loading ? (
+            <Box sx={{ display: "flex", justifyContent: "center", py: 8 }}><CircularProgress /></Box>
+          ) : (
+            <Box sx={{ overflowY: "auto", flex: 1, display: "flex", flexDirection: "column", gap: 2.5,
+              pt: 0.5 }}>
+              {error && <Alert severity="error" onClose={() => setError(null)}>{error}</Alert>}
 
             <TextField label="身份 / 水平" fullWidth size="small" value={form.identity}
               onChange={(e) => setForm((f) => ({ ...f, identity: e.target.value }))}
@@ -138,9 +140,10 @@ function ProfileDrawer({ open, onClose, onSaved }: {
               startIcon={saving ? <CircularProgress size={16} color="inherit" /> : undefined}>
               {saving ? "保存中…" : "保存"}
             </Button>
-          </Box>
-        )}
-      </Drawer>
+            </Box>
+          )}
+        </Box>
+      </Dialog>
 
       <Snackbar open={Boolean(toast)} autoHideDuration={3000} onClose={() => setToast(null)}
         anchorOrigin={{ vertical: "bottom", horizontal: "center" }}>
