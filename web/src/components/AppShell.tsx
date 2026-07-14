@@ -31,13 +31,13 @@ const MINI = 68;
 export const chromeBg = (t: Theme) => (t.palette.mode === "light" ? "#eceef2" : "#181a1f");
 
 const NAV: { to: string; label: string; icon: ReactNode }[] = [
-  { to: "/", label: "首页", icon: <SpaceDashboardIcon /> },
+  { to: "/", label: "概览", icon: <SpaceDashboardIcon /> },
   { to: "/chat", label: "AI聊天", icon: <ChatBubbleOutlineIcon /> },
   { to: "/knowledge", label: "知识库", icon: <MenuBookIcon /> },
   { to: "/questions", label: "题库", icon: <QuizIcon /> },
   { to: "/wrong", label: "错题集", icon: <ErrorOutlineIcon /> },
   { to: "/downloads", label: "下载", icon: <DownloadIcon /> },
-  { to: "/monitor", label: "系统监控", icon: <MonitorHeartIcon /> },
+  { to: "/monitor", label: "AI运行统计", icon: <MonitorHeartIcon /> },
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {

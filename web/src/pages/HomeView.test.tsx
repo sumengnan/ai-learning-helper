@@ -38,7 +38,7 @@ const OV: StatsOverview = {
 
 const renderHome = () => render(<MemoryRouter><HomeView /></MemoryRouter>);
 
-beforeEach(() => vi.resetAllMocks());
+beforeEach(() => { vi.resetAllMocks(); localStorage.clear(); });
 afterEach(() => cleanup());
 
 describe("HomeView", () => {
@@ -52,6 +52,16 @@ describe("HomeView", () => {
     // 工程黑话不出现在学习主场（已迁移到「系统监控」菜单）
     expect(screen.queryByText("P95 延迟")).toBeNull();
     expect(screen.queryByRole("button", { name: "工程台" })).toBeNull();  // 切换页签已移除
+  });
+
+  it("提供「概览」「AI 运行统计」页签，点后者切到运维指标", async () => {
+    (statsApi.overview as any).mockResolvedValue(OV);
+    renderHome();
+    await waitFor(() => expect(screen.getByText("二叉树遍历")).toBeTruthy());
+    // 默认概览页签不出现运维黑话
+    expect(screen.queryByText("P95 延迟")).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "AI 运行统计" }));
+    await waitFor(() => expect(screen.getByText("P95 延迟")).toBeTruthy());
   });
 
   it("无对话时显示开始对话引导", async () => {
