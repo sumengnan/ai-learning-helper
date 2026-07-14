@@ -26,6 +26,13 @@ class TextDelta(Event):
 
 
 @dataclass
+class ReasoningDelta(Event):
+    """思考模式（如 Qwen3 reasoning_content）的推理增量。先于正文产出，
+    用于让用户看到模型正在思考（也解释了首字为何较慢）。"""
+    text: str
+
+
+@dataclass
 class ToolCallRequested(Event):
     tool_calls: list[ToolCall] = field(default_factory=list)
 

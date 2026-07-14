@@ -5,6 +5,7 @@ import {
   IconButton, Tooltip, Snackbar, Alert, CircularProgress,
 } from "@mui/material";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
+import DownloadIcon from "@mui/icons-material/Download";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 import StopCircleIcon from "@mui/icons-material/StopCircle";
@@ -12,6 +13,7 @@ import { motion } from "framer-motion";
 import type { ChatMessage } from "../types";
 import { streamChat, attachChat, stopRun, sendDecision, api } from "../api/client";
 import { AgentProgress } from "./AgentProgress";
+import { ThinkingBlock } from "./ThinkingBlock";
 import { SourceList } from "./SourceList";
 import { MessageMeta } from "./MessageMeta";
 import { linkifyCitations, citeId } from "./citations";
@@ -35,6 +37,21 @@ const readBool = (k: string, dflt: boolean) => {
   const v = localStorage.getItem(k);
   return v === null ? dflt : v === "1";
 };
+
+// 从助手消息的工具轨迹里提取 AI 生成的可下载文件（save_download 结果带机读标记〔下载ID:...〕）。
+// 基于已持久化的 steps，故刷新后仍可用。
+const DL_ID_RE = /〔下载ID:([0-9a-fA-F]+)〕/;
+function generatedFiles(steps?: { tool: string; args?: any; result?: string }[]) {
+  const out: { id: string; filename: string }[] = [];
+  for (const s of steps || []) {
+    if (s.tool !== "save_download" || !s.result) continue;
+    const m = s.result.match(DL_ID_RE);
+    if (m && !out.some((f) => f.id === m[1])) {
+      out.push({ id: m[1], filename: (s.args && s.args.filename) || "下载文件" });
+    }
+  }
+  return out;
+}
 
 // 等待 AI 回复时的“正在输入”三点动画（framer-motion 循环，风格与全站统一）
 function TypingDots() {
@@ -197,6 +214,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled }:
   // 把一个 SSE 事件应用到最后一条（助手）消息上；RunError 时调 markError。
   const applyEvent = (e: any, markError: () => void) => {
     if (e.type === "TextDelta") upd((a) => { a.content += e.data.text; });
+    else if (e.type === "ReasoningDelta") upd((a) => { a.reasoning = (a.reasoning || "") + e.data.text; });
     else if (e.type === "ToolStarted") upd((a) => a.steps!.push({ tool: e.data.tool_call.name, args: e.data.tool_call.arguments }));
     else if (e.type === "ToolFinished") upd((a) => {
       const s = a.steps![a.steps!.length - 1];
@@ -429,6 +447,11 @@ export function ChatView({ conversationId, initial, autoSend, onTitled }:
                   live={busy && i === messages.length - 1 && m.status === "streaming"}
                   stopped={m.status === "stopped"} />
               )}
+              {/* 思考模式：先于正文展示模型的推理内容（也解释了首字为何慢）*/}
+              {m.role === "assistant" && m.reasoning && (
+                <ThinkingBlock reasoning={m.reasoning}
+                  live={busy && i === messages.length - 1 && m.status === "streaming"} />
+              )}
               {m.content ? (
                 m.role === "assistant" ? (
                   <Markdown onCitationClick={(n) => scrollToCite(String(i), n)}>
@@ -448,6 +471,24 @@ export function ChatView({ conversationId, initial, autoSend, onTitled }:
                   {m.role === "assistant" ? "…" : ""}
                 </Typography>
               )}
+              {/* AI 生成的可下载文件：常驻一行，不受「展示工具调用」开关影响 */}
+              {m.role === "assistant" && (() => {
+                const files = generatedFiles(m.steps);
+                if (!files.length) return null;
+                return (
+                  <Box sx={{ mt: 1, display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center" }}>
+                    <Typography variant="caption" color="text.secondary">生成的文件：</Typography>
+                    {files.map((f) => (
+                      <Button key={f.id} size="small" variant="outlined"
+                        startIcon={<DownloadIcon fontSize="small" />}
+                        onClick={() => api.downloads.save(f.id, f.filename)
+                          .catch(() => setErr(`「${f.filename}」下载失败`))}>
+                        {f.filename}
+                      </Button>
+                    ))}
+                  </Box>
+                );
+              })()}
               {/* 元信息页脚：状态 / 耗时 / tokens / 参考来源，用虚线与正文分隔，各成一块提高辨识度。
                   生成中即显示「生成中」状态与实时增长的耗时——无需等正文、也不受 Token 开关限制。 */}
               {m.role === "assistant" && (() => {

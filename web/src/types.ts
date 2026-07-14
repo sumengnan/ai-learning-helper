@@ -18,6 +18,7 @@ export type SourceItem = {
 export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
+  reasoning?: string;   // 思考模式的推理内容（reasoning_content）；先于正文流式到达
   steps?: { tool: string; args: any; result?: string; isError?: boolean }[];
   progress?: { scope: string; text: string; status?: "running" | "ok" | "error" | null; key?: string | null; agent?: string | null }[];
   sources?: SourceItem[];

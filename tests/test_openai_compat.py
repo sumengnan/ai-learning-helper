@@ -57,6 +57,31 @@ async def test_stream_normalizes_text_and_tool_and_done(monkeypatch):
     assert out[-1].type == "done"
 
 
+class _ReasoningDelta:
+    def __init__(self, reasoning=None, content=None):
+        self.reasoning_content = reasoning
+        self.content = content
+        self.tool_calls = None
+
+
+async def test_stream_yields_reasoning_before_text(monkeypatch):
+    # 思考模式：reasoning_content 先于 content，单独产出 reasoning chunk（不计入正文）
+    cfg = HarnessConfig(api_key="k")
+    client = OpenAICompatibleClient(cfg)
+    events = [
+        _FakeEvent(_ReasoningDelta(reasoning="先想一下")),
+        _FakeEvent(_ReasoningDelta(content="最终答案")),
+    ]
+
+    async def fake_create(**kwargs):
+        return _fake_stream(events)
+
+    monkeypatch.setattr(client._client.chat.completions, "create", fake_create)
+    out = [c async for c in client.stream([Message(role=Role.USER, content="hi")], [])]
+    assert out[0].type == "reasoning" and out[0].text == "先想一下"
+    assert any(c.type == "text" and c.text == "最终答案" for c in out)
+
+
 class _FakeUsage:
     def __init__(self, p, c, t):
         self.prompt_tokens = p

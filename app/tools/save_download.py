@@ -38,4 +38,6 @@ class SaveDownloadTool(Tool):
             return f"保存失败：超过 {self._max // (1024 * 1024)}MB 上限。"
         content_type = mimetypes.guess_type(params.filename)[0] or "application/octet-stream"
         rec = self._store.create(self._uid, params.filename, data, content_type)
-        return f"已保存到下载区：{rec['filename']}（{rec['size']} 字节）。"
+        # 末尾带机读标记〔下载ID:...〕：前端据此在该条消息下方渲染下载按钮（会剥离不展示给用户）
+        return (f"已保存到下载区：{rec['filename']}（{rec['size']} 字节）。"
+                f"〔下载ID:{rec['id']}〕")

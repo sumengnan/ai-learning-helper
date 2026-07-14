@@ -277,6 +277,16 @@ export const api = {
         if (!r.ok) throw new Error(await detail(r, `加载失败：${r.status}`));
         return r.blob();
       }),
+    // 鉴权 blob → object URL → 触发浏览器保存（下载菜单与聊天页共用）
+    save: async (id: string, filename: string): Promise<void> => {
+      const r = await authFetch(`/api/downloads/${id}`);
+      if (!r.ok) throw new Error(await detail(r, `下载失败：${r.status}`));
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement("a");
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    },
   },
   attachments: {
     upload: (convId: string, file: File): Promise<Attachment> => {
