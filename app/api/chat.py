@@ -35,6 +35,7 @@ from ..summaries import SummaryStore
 from ..summarizer import RollingSummarizer
 from ..sources import SOURCE_GUIDE, SourceSink, wrap_tool
 from ..tools.attachment_tools import ListAttachmentsTool, ReadAttachmentTool
+from ..exam_flow import grade_exam_turn
 from ..tools.exam_tools import (
     AddQuestionsTool,
     DeleteQuestionsTool,
@@ -44,6 +45,7 @@ from ..tools.exam_tools import (
     SampleQuestionsTool,
     SampleWrongAnswersTool,
     SaveWrongAnswerTool,
+    StartExamTool,
 )
 from ..tools.knowledge_tools import SaveToKnowledgeTool
 from ..tools.save_download import SaveDownloadTool
@@ -62,6 +64,11 @@ def _chunks(text: str, size: int = _DELIVER_CHUNK):
 
 EXAM_GUIDE = (
     "\n\n你具备「题库 / 错题集 / 模拟考试」能力：\n"
+    "- 【正式模拟考试优先用 start_exam 开考】：从题库(source=bank)/错题集(source=wrong)抽题，"
+    "或即席出题(source=adhoc，需在 questions 传入含答案的题)。开考后每题的判分与「答错自动存错题集」"
+    "都由系统在后台确定性完成——你【无需也不要】调用 save_wrong_answer，只需把系统返回的题目呈现给用户，"
+    "并在系统给出「[考试系统判定]…」提示后据其讲解、再呈现系统给的下一题。\n"
+    "- 以下是未用 start_exam 时的零散练习指引：\n"
     "- 当用户想模拟考试/刷题时，用 sample_questions 从题库抽题；"
     "想「用错题重考/复习错题」时用 sample_wrong_answers 从错题集抽题；题库为空时可即席出题。\n"
     "- 每次只问一道题，等用户作答后再继续。\n"
@@ -154,8 +161,12 @@ def _plan_text(progress: list[dict]) -> str:
 def make_chat_router(harness, store, config, question_store=None, wrong_store=None,
                      verifier=None, attachment_store=None, run_manager=None,
                      knowledge_service=None, quiz_service=None,
-                     profile_store=None, trajectory_judge=None) -> APIRouter:
+                     profile_store=None, trajectory_judge=None,
+                     exam_session_store=None) -> APIRouter:
     router = APIRouter()
+    # 简答题判分用 judge completer（考试判分中间件用；客观题不需要模型）
+    from ..completion import build_judge_completer
+    _exam_judge = build_judge_completer(harness.client, config)
     # 断点续传：一轮生成跑成脱离请求的后台任务，事件走 RunManager 内存总线（见 app/run_manager.py）。
     # 未注入时退化为每路由独立实例（测试/无续传场景），行为仍正确、只是跨请求接不上。
     if run_manager is None:
@@ -182,7 +193,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                   summarizer=_summarizer, conv_memory=_conv_memory)
 
     def _build_registry(user_id: str, save_wrong: bool, conv_id: str,
-                        has_attachments: bool) -> tuple[ToolRegistry, SourceSink]:
+                        has_attachments: bool,
+                        exam_active: bool = False) -> tuple[ToolRegistry, SourceSink]:
         reg = ToolRegistry()
         sink = SourceSink()
         # 来源工具包一层记源（wrap_tool 只包「产生来源」的工具，其余原样）
@@ -206,12 +218,17 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             _reg(DeleteQuestionsTool(question_store, user_id))
             if quiz_service is not None:
                 _reg(GenerateQuestionsTool(quiz_service, user_id))
-            if save_wrong and wrong_store is not None:
+            # 考试激活时不暴露 save_wrong_answer：判分与保存已由服务端确定性完成，防重复入库
+            if save_wrong and wrong_store is not None and not exam_active:
                 _reg(SaveWrongAnswerTool(question_store, wrong_store, user_id))
         # 错题集捞题/删题是独立能力，不受「答错自动保存」开关限制
         if wrong_store is not None:
             _reg(SampleWrongAnswersTool(wrong_store, user_id))
             _reg(DeleteWrongAnswersTool(wrong_store, user_id))
+        # 服务端托管考试：模型用 start_exam 开考（题源题库/错题集/即席），开考后判分与保存全自动
+        if exam_session_store is not None and (question_store is not None or wrong_store is not None):
+            _reg(StartExamTool(exam_session_store, user_id, conv_id,
+                               question_store=question_store, wrong_store=wrong_store))
         # 附件工具：本会话有过附件才暴露（按需取内容，图片走视觉）
         if attachment_store is not None and has_attachments:
             _reg(ListAttachmentsTool(attachment_store, user_id, conv_id))
@@ -241,8 +258,18 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             attachment_store is not None
             and attachment_store.count_conv(user_id, req.conversation_id) > 0)
         history = store.messages(req.conversation_id)
+        # 考试判分中间件：若本会话有 active 考试，把本条消息当作对当前题的作答，服务端判分、
+        # 答错确定性存错题集、推进游标，产出注入模型的判定提示。必须先于 _build_registry，
+        # 使 exam_active 反映本轮判分后的状态（可能刚好答完/被结束）。
+        exam_note, exam_active = "", False
+        if exam_session_store is not None:
+            exam_note, exam_active = await grade_exam_turn(
+                exam_session_store, wrong_store, _exam_judge,
+                user_id=user_id, conv_id=req.conversation_id,
+                message=req.message, save_wrong=req.save_wrong)
         registry, source_sink = _build_registry(user_id, req.save_wrong,
-                                                 req.conversation_id, has_attachments)
+                                                 req.conversation_id, has_attachments,
+                                                 exam_active)
         gate_on = verifier is not None and config.enable_answer_gate
         # 喂给模型的消息：带附件时追加只含文件名的名单提示（不含内容），入库仍用原文
         model_message = req.message
@@ -252,6 +279,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 f"{req.message}\n\n[本轮附件] 用户上传了 {len(attachment_metas)} 个文件："
                 f"{names}（内容未加载，需要时用 list_attachments/read_attachment 获取，"
                 f"或在沙箱 /workspace/uploads/ 下访问）")
+        # 考试判定提示（系统权威）：让模型据此讲解并呈现下一题；判分/保存已在服务端完成
+        if exam_note:
+            model_message = model_message + exam_note
 
         # 分层上下文：窗口/摘要/检索的重活在此按会话级预算一次，_new_loop 内只做同步拼装。
         _ctx_t0 = time.time()

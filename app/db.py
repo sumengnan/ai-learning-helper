@@ -43,6 +43,12 @@ _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS user_profiles(
          user_id TEXT PRIMARY KEY, identity TEXT, goal TEXT,
          explain_prefs TEXT, tone TEXT, notes TEXT, updated_at TEXT)""",
+    # 服务端托管的模拟考试：一会话一条 active。questions/results 为 JSON，cursor 指向当前待作答题。
+    # 判分与「答错必存」由服务端在 /api/chat 判分中间件里确定性执行，不依赖模型调用工具。
+    """CREATE TABLE IF NOT EXISTS exam_sessions(
+         conversation_id TEXT PRIMARY KEY, user_id TEXT, mode TEXT,
+         questions TEXT, cursor INTEGER, results TEXT, status TEXT,
+         created_at TEXT, updated_at TEXT)""",
 )
 
 # 历史库若建于某列引入之前，需在此补齐（CREATE TABLE IF NOT EXISTS 不改既有表结构）

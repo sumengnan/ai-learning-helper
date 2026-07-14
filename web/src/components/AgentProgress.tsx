@@ -101,7 +101,6 @@ export function AgentProgress({ steps, live = false, stopped = false }: {
       title="工具调用"
       status={status}
       summary={summary}
-      defaultExpanded={status === "running"}
     >
       {steps.map((s, i) => {
         const sp = s.result === undefined;
@@ -109,7 +108,6 @@ export function AgentProgress({ steps, live = false, stopped = false }: {
         return (
           <Accordion
             key={i} disableGutters elevation={0}
-            defaultExpanded={sp && live}
             sx={{ bgcolor: "transparent", "&:before": { display: "none" } }}
           >
             <AccordionSummary

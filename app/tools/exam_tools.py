@@ -249,3 +249,67 @@ class DeleteWrongAnswersTool(Tool):
         hit = [i for i in params.wrong_answer_ids if i in before]
         self._store.delete_many(self._uid, hit)
         return f"已从错题集删除 {len(hit)} 道题。"
+
+
+class StartExamTool(Tool):
+    name = "start_exam"
+    description = (
+        "开始一场由系统托管的模拟考试。开考后，每题的判分与「答错自动入错题集」都由系统"
+        "在后台确定性完成——你【无需也不要】再调用 save_wrong_answer。你只负责呈现题目、"
+        "并在系统给出判定后讲解。\n"
+        "source：题源，bank=从题库抽题、wrong=从错题集抽题重考、adhoc=你现编题目考。\n"
+        "adhoc 时【必须】在 questions 传入题目（含答案），每题形如 "
+        "{\"type\":\"single|multiple|truefalse|short\",\"stem\":\"题干\","
+        "\"options\":[\"选项\"]或null,\"answer\":单选选项索引/多选索引数组/判断true或false/简答参考答案,"
+        "\"explanation\":\"解析\"}。\n"
+        "mode：instant=即时式（每题即判即讲）、graded=打分式（全部答完再公布得分与讲解）。")
+
+    class Params(BaseModel):
+        source: str = "bank"
+        count: int = 5
+        types: _OptIdList = None
+        mode: str = "instant"
+        questions: _QuestionList | None = None
+
+    def __init__(self, exam_store, user_id: str, conv_id: str,
+                 question_store=None, wrong_store=None) -> None:
+        self._exam = exam_store
+        self._qs = question_store
+        self._ws = wrong_store
+        self._uid = user_id
+        self._conv = conv_id
+
+    async def run(self, params: "StartExamTool.Params") -> str:
+        from ..exam_grader import present_question
+
+        mode = "graded" if params.mode == "graded" else "instant"
+        count = _clamp(params.count)
+        questions: list[dict] = []
+        if params.source == "adhoc":
+            for q in (params.questions or []):
+                if _valid(q, ALL_TYPES):
+                    questions.append({"type": q["type"], "stem": q["stem"],
+                                      "options": q.get("options"), "answer": q.get("answer"),
+                                      "explanation": q.get("explanation", "")})
+            if not questions:
+                return "无法开始考试：adhoc 模式需在 questions 里传入至少一道合法题目（含答案）。"
+        elif params.source == "wrong":
+            if self._ws is None:
+                return "错题集不可用。"
+            rows = self._ws.sample(self._uid, count)
+            questions = [r["snapshot"] for r in rows]
+            if not questions:
+                return "错题集为空，无法用错题重考。可先做题，答错的题会进入错题集。"
+        else:  # bank
+            if self._qs is None:
+                return "题库不可用。"
+            questions = self._qs.sample(self._uid, count, params.types)
+            if not questions:
+                return ("题库为空，无法抽题考试。可先到「题库」生成题目，"
+                        "或让我用 add_questions 整理入库、或用 source=adhoc 现编题考你。")
+
+        self._exam.start(self._uid, self._conv, questions, mode)
+        mode_zh = "打分式" if mode == "graded" else "即时式"
+        first = present_question(questions[0], 0, len(questions))
+        return (f"已开始考试：共 {len(questions)} 题，{mode_zh}。请把下面第一题原样呈现给用户，"
+                f"等其作答；判分与错题保存由系统自动完成。\n\n{first}")
