@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import re
 from urllib.parse import urlparse
 
 from harness.tools.base import Tool
@@ -37,6 +38,31 @@ def _clip(text: str, n: int = 80) -> str:
     return t[:n] + "…" if len(t) > n else t
 
 
+# http_request 结果以 "HTTP {status}" 开头（见 render_http_result），据此取状态码
+_HTTP_STATUS = re.compile(r"^HTTP (\d{3})")
+
+# 拦截 / 错误页标志（CDN 拦截、访问拒绝等）：命中则抓取实为失败，不算有效来源
+_ERROR_PAGE_SIGNALS = (
+    "the request could not be satisfied",   # CloudFront 拦截页
+    "access denied", "403 forbidden", "404 not found", "error 1020",
+    "请求无法满足", "访问被拒绝", "拒绝访问",
+)
+
+
+def _http_status(result: str) -> int | None:
+    m = _HTTP_STATUS.match(result or "")
+    return int(m.group(1)) if m else None
+
+
+def _looks_error_page(result: str) -> bool:
+    """抓取结果是否为拦截/错误页（标志文案在开头或标题里）。"""
+    return any(s in (result or "")[:300].lower() for s in _ERROR_PAGE_SIGNALS)
+
+
+def _no_real_content(result: str) -> bool:
+    return "无可提取正文" in (result or "")
+
+
 # ---- 各工具的来源 builder：入参 (args, result)，出参 dict|None（不含 index）----
 
 def _b_search_memory(args: dict, result: str) -> dict | None:
@@ -56,6 +82,9 @@ def _b_search_memory(args: dict, result: str) -> dict | None:
 
 
 def _b_browse(args: dict, result: str) -> dict | None:
+    # 只收抓到真实内容的网页：拦截/错误页、无正文一律不记源
+    if _looks_error_page(result) or _no_real_content(result):
+        return None
     title = url = ""
     for line in (result or "").splitlines():
         if line.startswith("标题：") and not title:
@@ -70,6 +99,13 @@ def _b_browse(args: dict, result: str) -> dict | None:
 def _b_http(args: dict, result: str) -> dict | None:
     url = str(args.get("url") or "")
     if not url:
+        return None
+    # 只收 HTTP 200 且有真实内容的抓取：非 200 / 拦截错误页 / 无正文都不记源。
+    # （浏览器兜底成功的结果无 "HTTP nnn" 前缀，status 为 None，仅按内容判定。）
+    status = _http_status(result)
+    if status is not None and status != 200:
+        return None
+    if _looks_error_page(result) or _no_real_content(result):
         return None
     return {"type": "web", "label": _domain(url), "url": url}
 
