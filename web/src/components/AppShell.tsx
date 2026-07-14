@@ -137,6 +137,38 @@ export function AppShell({ children }: { children: ReactNode }) {
             </Tooltip>
           ))}
         </List>
+        <Divider />
+        {/* 折叠/展开开关：置于菜单栏底部，与导航项同款样式，随宽度动画 */}
+        <List sx={{ px: navOpen ? 1 : 0.5, py: 0.5 }}>
+          <Tooltip title={navOpen ? "" : "展开菜单"} placement="right">
+            <ListItemButton
+              onClick={() => setNavOpen((o) => !o)}
+              aria-label={navOpen ? "折叠菜单" : "展开菜单"}
+              sx={{
+                borderRadius: 1.5,
+                justifyContent: navOpen ? "initial" : "center",
+                px: navOpen ? 2 : 1.5,
+              }}
+            >
+              <ListItemIcon sx={{ minWidth: 0, mr: navOpen ? 2 : 0, justifyContent: "center" }}>
+                <MenuIcon />
+              </ListItemIcon>
+              <AnimatePresence initial={false}>
+                {navOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, width: 0 }}
+                    animate={{ opacity: 1, width: "auto" }}
+                    exit={{ opacity: 0, width: 0 }}
+                    transition={{ duration: 0.2 }}
+                    style={{ overflow: "hidden" }}
+                  >
+                    <ListItemText primary="折叠菜单" sx={{ m: 0, whiteSpace: "nowrap" }} />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </ListItemButton>
+          </Tooltip>
+        </List>
         <VersionBadge open={navOpen} />
       </Drawer>
 
@@ -144,12 +176,6 @@ export function AppShell({ children }: { children: ReactNode }) {
         <AppBar position="static" color="default" elevation={0}
           sx={{ borderBottom: 1, borderColor: "divider" }}>
           <Toolbar sx={{ gap: 1 }}>
-            <Tooltip title={navOpen ? "折叠菜单" : "展开菜单"}>
-              <IconButton edge="start" onClick={() => setNavOpen((o) => !o)}
-                aria-label={navOpen ? "折叠菜单" : "展开菜单"}>
-                <MenuIcon />
-              </IconButton>
-            </Tooltip>
             <Box sx={{ flex: 1 }} />
             <Tooltip title={mode === "light" ? "切换到暗色" : "切换到亮色"}>
               <IconButton onClick={toggleMode} aria-label="切换明暗主题">
