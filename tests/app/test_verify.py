@@ -291,3 +291,16 @@ async def test_consistency_ok_when_no_claim():
                        _cfg(gate_check_grounding=False, gate_check_code=False, gate_check_judge=False))
     verdict = await v.verify("问", "光合作用是把光能转化为化学能的过程。", [], None, steps=[])
     assert verdict.ok is True   # 无完成性措辞，不拦
+
+
+# ---- structured output：judge/grounding LLM 调用强制 JSON ----
+
+async def test_judge_call_forces_json_response_format():
+    from harness.llm.openai_compat import get_extra_body_override
+    seen = {}
+    async def cap(system, user):
+        seen["rf"] = get_extra_body_override().get("response_format")
+        return json.dumps({"score": 90, "feedback": ""})
+    v = AnswerVerifier(cap, _cfg(gate_check_grounding=False, gate_check_code=False))
+    await v.verify("问", "答", [], None)
+    assert seen["rf"] == {"type": "json_object"}   # judge 调用期间强制了 JSON 输出

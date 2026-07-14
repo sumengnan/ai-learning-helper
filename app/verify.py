@@ -18,16 +18,33 @@ harness 内核零改动。
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
 from dataclasses import dataclass, field
 
+from harness.llm.openai_compat import (
+    get_extra_body_override, reset_extra_body_override, set_extra_body_override)
 from harness.tools.base import ToolError
 
 from .quiz_service import _strip_fence
 
 _log = logging.getLogger("app.verify")
+
+
+@contextlib.contextmanager
+def _json_output():
+    """让本次 LLM 调用强制输出合法 JSON（response_format），叠加在当前 extra_body 覆盖上、调用后还原。
+
+    比「prompt 要求 + 手工 _strip_fence 解析」更可靠，少踩「模型不吐 JSON 导致校验被跳过」的坑；
+    兼容端点不支持时由各调用点的 try/except 兜底（解析失败即跳过该项，不拦交付）。"""
+    token = set_extra_body_override(
+        {**get_extra_body_override(), "response_format": {"type": "json_object"}})
+    try:
+        yield
+    finally:
+        reset_extra_body_override(token)
 
 # 硬门：失败不允许降级交付（必须重答或明确拦截）
 _HARD_CHECKS = frozenset({"format", "code", "empty", "consistency"})
@@ -186,7 +203,8 @@ class TrajectoryJudge:
                 f"关键步摘要：\n{step_summaries or '（无）'}\n\n"
                 f"最终答案：\n{answer}\n\n请分别给 拆分/每步/最终 打分并简评。")
         try:
-            raw = await self._complete(TRAJECTORY_SYSTEM, user)
+            with _json_output():
+                raw = await self._complete(TRAJECTORY_SYSTEM, user)
             v = json.loads(_strip_fence(raw))
             return TrajectoryScore(
                 _coerce_int(v.get("plan")), _coerce_int(v.get("steps")),
@@ -261,7 +279,8 @@ class AnswerVerifier:
     async def _judge_grounding(self, context: str, answer: str) -> tuple[bool, str]:
         user = f"知识库资料：\n{context}\n\n待核查回答：\n{answer}\n\n请逐条判断回答是否都有资料支撑。"
         try:
-            raw = await self._complete(GROUNDING_SYSTEM, user)
+            with _json_output():
+                raw = await self._complete(GROUNDING_SYSTEM, user)
             v = json.loads(_strip_fence(raw))
             grounded = bool(v.get("grounded", True))
             unsupported = v.get("unsupported") or []
@@ -284,7 +303,8 @@ class AnswerVerifier:
         parts.append("请先找问题再打分并点评。")
         user = "\n".join(parts)
         try:
-            raw = await self._judge_complete(JUDGE_SYSTEM, user)
+            with _json_output():
+                raw = await self._judge_complete(JUDGE_SYSTEM, user)
             v = json.loads(_strip_fence(raw))
             return _coerce_int(v.get("score", 100)), v.get("feedback") or ""
         except Exception as e:
