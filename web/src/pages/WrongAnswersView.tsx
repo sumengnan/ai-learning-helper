@@ -1,87 +1,112 @@
 import { useEffect, useState } from "react";
-import { Box, Typography, Button, Card, CardContent, Checkbox, Chip, Stack } from "@mui/material";
-import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
+import { Box, Typography, Card, CardContent, Chip, IconButton, Stack } from "@mui/material";
+import { alpha } from "@mui/material/styles";
+import DeleteIcon from "@mui/icons-material/Delete";
 import { AnimatePresence, motion } from "framer-motion";
 import { api } from "../api/client";
 import { listItemVariants } from "../components/motion";
+import {
+  WrongAnswerDetailDrawer, answerText, typeColor, type WrongItem,
+} from "./WrongAnswerDetailDrawer";
 
-interface Wrong {
-  id: string;
-  user_answer: unknown;
-  snapshot: { type: string; stem: string; answer: unknown; explanation: string };
-}
+const TYPE_LABEL: Record<string, string> = {
+  single: "单选", multiple: "多选", truefalse: "判断", short: "简答",
+};
+const typeLabel = (t: string) => TYPE_LABEL[t] ?? t;
+
+// 多行截断（答案过长显示 …）
+const clampSx = {
+  display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as const,
+  overflow: "hidden", wordBreak: "break-all" as const,
+};
 
 export default function WrongAnswersView() {
-  const [items, setItems] = useState<Wrong[]>([]);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [items, setItems] = useState<WrongItem[]>([]);
+  const [preview, setPreview] = useState<WrongItem | null>(null);
 
   const refresh = () => api.wrong.list().then(setItems);
   useEffect(() => { refresh(); }, []);
 
-  const toggle = (id: string) =>
-    setSelected((s) => {
-      const n = new Set(s);
-      n.has(id) ? n.delete(id) : n.add(id);
-      return n;
-    });
-
-  const removeSelected = async () => {
-    if (selected.size === 0) return;
-    await api.wrong.removeMany([...selected]);
-    setSelected(new Set());
+  async function removeOne(id: string) {
+    await api.wrong.removeMany([id]);
     await refresh();
-  };
+  }
 
   return (
-    <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2 }}>
-      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2, maxWidth: 880, mx: "auto" }}>
+      {/* 头部：标题 + 计数 */}
+      <Box>
         <Typography variant="h5" sx={{ fontWeight: 700 }}>错题集</Typography>
-        <Button
-          variant="contained" color="error" startIcon={<DeleteSweepIcon />}
-          onClick={removeSelected} disabled={selected.size === 0}
-        >
-          批量删除（{selected.size}）
-        </Button>
+        <Typography color="text.secondary" variant="body2">共 {items.length} 道错题</Typography>
       </Box>
+
       {items.length === 0 ? (
-        <Typography color="text.secondary">暂无错题。</Typography>
+        <Typography color="text.secondary" sx={{ py: 4, textAlign: "center" }}>暂无错题</Typography>
       ) : (
-        <Stack spacing={1.5} component="div">
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
           <AnimatePresence initial={false}>
-          {items.map((w) => (
-            <motion.div key={w.id} layout variants={listItemVariants}
-              initial="initial" animate="animate" exit="exit">
-            <Card variant="outlined">
-              <CardContent sx={{ display: "flex", gap: 1 }}>
-                <Checkbox
-                  sx={{ p: 0, mt: 0.25 }}
-                  checked={selected.has(w.id)}
-                  onChange={() => toggle(w.id)}
-                />
-                <Box>
-                  <Typography component="div">
-                    <Chip size="small" label={w.snapshot.type} sx={{ mr: 1 }} />
-                    {w.snapshot.stem}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    你的作答：{JSON.stringify(w.user_answer)}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    正确答案：{JSON.stringify(w.snapshot.answer)}
-                  </Typography>
-                  {w.snapshot.explanation && (
-                    <Typography variant="body2" color="text.disabled">
-                      解析：{w.snapshot.explanation}
-                    </Typography>
-                  )}
-                </Box>
-              </CardContent>
-            </Card>
-            </motion.div>
-          ))}
+            {items.map((w) => (
+              <motion.div key={w.id} layout variants={listItemVariants}
+                initial="initial" animate="animate" exit="exit">
+                <Card variant="outlined"
+                  sx={{ "&:hover": { borderColor: "primary.main", boxShadow: 2 } }}>
+                  <CardContent sx={{ display: "flex", gap: 1, "&:last-child": { pb: 2 } }}>
+                    <Box sx={{ minWidth: 0, flex: 1, cursor: "pointer" }} onClick={() => setPreview(w)}>
+                      {/* 题目：正文色加粗，作为主内容突出 */}
+                      <Typography variant="body1" sx={{
+                        fontWeight: 700, color: "text.primary",
+                        display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+                        overflow: "hidden", wordBreak: "break-all",
+                      }}>
+                        {w.snapshot.stem}
+                      </Typography>
+
+                      {/* 我的答案：红色淡块 + 左侧红条 */}
+                      <Box sx={{
+                        mt: 0.75, px: 1, py: 0.5, borderRadius: 1,
+                        borderLeft: "2px solid", borderColor: "error.light",
+                        bgcolor: (t) => alpha(t.palette.error.main, 0.05),
+                      }}>
+                        <Typography variant="body2" sx={{ color: "text.secondary", ...clampSx }}>
+                          <Box component="span" sx={{ color: "error.main", fontWeight: 600 }}>我的答案：</Box>
+                          {answerText(w.snapshot.type, w.snapshot.options, w.user_answer)}
+                        </Typography>
+                      </Box>
+
+                      {/* 正确答案：绿色淡块 + 左侧绿条 */}
+                      <Box sx={{
+                        mt: 0.5, px: 1, py: 0.5, borderRadius: 1,
+                        borderLeft: "2px solid", borderColor: "success.light",
+                        bgcolor: (t) => alpha(t.palette.success.main, 0.05),
+                      }}>
+                        <Typography variant="body2" sx={{ color: "text.secondary", ...clampSx }}>
+                          <Box component="span" sx={{ color: "success.main", fontWeight: 600 }}>正确答案：</Box>
+                          {answerText(w.snapshot.type, w.snapshot.options, w.snapshot.answer)}
+                        </Typography>
+                      </Box>
+
+                      {/* 底部：题型标签，分隔线与上方隔开 */}
+                      <Stack direction="row" spacing={1} sx={{
+                        mt: 1, pt: 1, alignItems: "center", flexWrap: "wrap",
+                        borderTop: "1px dashed", borderColor: "divider",
+                      }}>
+                        <Chip size="small" variant="outlined"
+                          label={typeLabel(w.snapshot.type)} color={typeColor(w.snapshot.type)} />
+                      </Stack>
+                    </Box>
+                    <IconButton size="small" color="error" aria-label="删除错题"
+                      onClick={() => removeOne(w.id)}>
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  </CardContent>
+                </Card>
+              </motion.div>
+            ))}
           </AnimatePresence>
-        </Stack>
+        </Box>
       )}
+
+      <WrongAnswerDetailDrawer item={preview} onClose={() => setPreview(null)} />
     </Box>
   );
 }
