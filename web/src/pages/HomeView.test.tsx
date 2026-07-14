@@ -60,8 +60,10 @@ describe("HomeView", () => {
     await waitFor(() => expect(screen.getByText("二叉树遍历")).toBeTruthy());
     // 默认概览视图不出现运维黑话
     expect(screen.queryByText("P95 延迟")).toBeNull();
+    expect(screen.getAllByText("概览").length).toBe(2);           // 标题 + 切换按钮
     fireEvent.click(screen.getByRole("button", { name: "AI 运行统计" }));
     await waitFor(() => expect(screen.getByText("P95 延迟")).toBeTruthy());
+    expect(screen.getAllByText("AI 运行统计").length).toBe(2);     // 切换后标题也变
   });
 
   it("无对话时显示开始对话引导", async () => {
