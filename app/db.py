@@ -39,6 +39,10 @@ _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS conversation_summaries(
          conv_id TEXT PRIMARY KEY, up_to_seq INTEGER NOT NULL,
          summary TEXT NOT NULL, tokens INTEGER NOT NULL, created_at TEXT NOT NULL)""",
+    # 用户个性化（学习偏好）：一人一行，聊天/考试讲评时注入系统提示。全空则不注入。
+    """CREATE TABLE IF NOT EXISTS user_profiles(
+         user_id TEXT PRIMARY KEY, identity TEXT, goal TEXT,
+         explain_prefs TEXT, tone TEXT, notes TEXT, updated_at TEXT)""",
 )
 
 # 历史库若建于某列引入之前，需在此补齐（CREATE TABLE IF NOT EXISTS 不改既有表结构）

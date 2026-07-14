@@ -1,6 +1,6 @@
 // 「概览」页签（原首页「学习主场」）：我的积累、继续学习、AI 在为我做什么。
 // 数据与时间范围由父组件 HomeView 统一拉取并下发，本组件不自取数。
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Box, Card, CardContent, Typography, Stack, Button, IconButton, Tooltip, useTheme,
@@ -15,6 +15,8 @@ import { api } from "../api/client";
 import { DownloadPreviewDialog, type PreviewFile } from "./DownloadPreviewDialog";
 import { previewKind } from "./downloadsUtils";
 import { MemoryDrawer } from "./MemoryDrawer";
+import { useProfileDrawer } from "./ProfileDrawer";
+import { profileApi, isProfileSet } from "../api/profile";
 import { rangeLabel, fmtTokens, fmtPct, cardSx, Eyebrow, Sparkline, fromNow } from "./statsShared";
 
 // 按当前时段给出问候语与配图
@@ -26,8 +28,8 @@ function greetingOf(hour: number): { text: string; emoji: string } {
   return { text: "晚上好", emoji: "🌆" };
 }
 
-// 我的积累四张卡的主题色（各一色，打破清一色白卡的单调）
-type Hue = "info" | "primary" | "warning" | "secondary";
+// 我的积累各卡的主题色（各一色，打破清一色白卡的单调）
+type Hue = "info" | "primary" | "warning" | "secondary" | "success";
 
 export function OverviewTab({ data, days }: { data: StatsOverview; days: number }) {
   const nav = useNavigate();
@@ -36,6 +38,14 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
   const greet = greetingOf(new Date().getHours());
   const [preview, setPreview] = useState<PreviewFile | null>(null);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  // 个性化「已设置/未设置」状态：profile 非 stats 数据，本卡自取；保存后随 savedTick 刷新
+  const { open: openProfile, savedTick } = useProfileDrawer();
+  const [profileSet, setProfileSet] = useState<boolean | null>(null);
+  useEffect(() => {
+    let alive = true;
+    profileApi.get().then((p) => { if (alive) setProfileSet(isProfileSet(p)); }).catch(() => {});
+    return () => { alive = false; };
+  }, [savedTick]);
 
   // 下载：需带 Bearer，取鉴权 blob 再触发保存
   async function download(id: string, filename: string) {
@@ -50,11 +60,14 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
   const { learn } = data;
   const abilityMax = Math.max(1, ...learn.abilities.map((a) => a.count));
 
-  const assetCards: { icon: string; lbl: string; v: number; sub: string; hue: Hue; act?: boolean; onClick: () => void }[] = [
+  const assetCards: { icon: string; lbl: string; v: number | string; sub: string; hue: Hue; act?: boolean; onClick: () => void }[] = [
     { icon: "📚", lbl: "知识库", v: learn.assets.documents, sub: "已建索引 · 查看 →", hue: "info", onClick: () => nav("/knowledge") },
     { icon: "✏️", lbl: "题库", v: learn.assets.questions, sub: learn.assets.questions ? "去练习 →" : "生成一套 →", hue: "primary", act: true, onClick: () => nav("/questions") },
     { icon: "❌", lbl: "错题集", v: learn.assets.wrong_answers, sub: learn.assets.wrong_answers ? "去复习 →" : "目前全对 👍", hue: "warning", onClick: () => nav("/wrong") },
     { icon: "🧠", lbl: "AI 记的偏好", v: learn.assets.memory, sub: "点击查看它记住了什么 →", hue: "secondary", onClick: () => setMemoryOpen(true) },
+    // 与「AI 记的偏好」成对：AI 猜的(只读) ↔ 你说的(可编辑)
+    { icon: "⚙️", lbl: "我的个性化", v: profileSet == null ? "" : (profileSet ? "已设置" : "未设置"),
+      sub: profileSet ? "编辑 →" : "告诉 AI 你是谁 →", hue: "success", act: !profileSet, onClick: openProfile },
   ];
 
   return (
@@ -66,7 +79,7 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
 
       {/* 我的积累 */}
       <Eyebrow>我的积累</Eyebrow>
-      <Box sx={{ display: "grid", gap: 1.75, gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4,1fr)" } }}>
+      <Box sx={{ display: "grid", gap: 1.75, gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(5,1fr)" } }}>
         {assetCards.map((a) => (
           <Card key={a.lbl} onClick={a.onClick} sx={(t) => ({ ...cardSx(t),
             position: "relative", overflow: "hidden", cursor: "pointer", transition: ".18s",

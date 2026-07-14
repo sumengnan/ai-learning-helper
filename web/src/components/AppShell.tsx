@@ -17,10 +17,12 @@ import DownloadIcon from "@mui/icons-material/Download";
 import Brightness4Icon from "@mui/icons-material/Brightness4";
 import Brightness7Icon from "@mui/icons-material/Brightness7";
 import LogoutIcon from "@mui/icons-material/Logout";
+import TuneIcon from "@mui/icons-material/Tune";
 import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import FaceRetouchingNaturalIcon from "@mui/icons-material/FaceRetouchingNatural";
 import { useColorMode } from "../ThemeModeProvider";
 import { useAuth } from "../auth/AuthProvider";
+import { useProfileDrawer } from "../pages/ProfileDrawer";
 import { VersionBadge } from "./VersionBadge";
 
 const WIDTH = 220;
@@ -43,6 +45,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const { mode, toggleMode } = useColorMode();
   const { user, logout } = useAuth();
+  const { open: openProfile } = useProfileDrawer();
   const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
   const [navOpen, setNavOpen] = useState(true);
   const width = navOpen ? WIDTH : MINI;
@@ -185,6 +188,11 @@ export function AppShell({ children }: { children: ReactNode }) {
               onClose={() => setMenuAnchor(null)}
               anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
               transformOrigin={{ vertical: "top", horizontal: "right" }}>
+              <MenuItem onClick={() => { setMenuAnchor(null); openProfile(); }}>
+                <ListItemIcon><TuneIcon fontSize="small" /></ListItemIcon>
+                我的个性化
+              </MenuItem>
+              <Divider />
               <MenuItem onClick={onLogout}>
                 <ListItemIcon><LogoutIcon fontSize="small" /></ListItemIcon>
                 退出登录

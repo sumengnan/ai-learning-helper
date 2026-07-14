@@ -26,6 +26,7 @@ from ..auth import current_user
 from ..completion import build_completer
 from ..context_assembly import ContextAssembler
 from ..conversation_memory import ConversationMemoryService
+from ..profile import render_profile_block
 from ..sandbox_manager import reset_sandbox_conv, set_sandbox_conv
 from ..summaries import SummaryStore
 from ..summarizer import RollingSummarizer
@@ -101,7 +102,8 @@ class _Decision(BaseModel):
 
 def make_chat_router(harness, store, config, question_store=None, wrong_store=None,
                      verifier=None, attachment_store=None, run_manager=None,
-                     knowledge_service=None, quiz_service=None) -> APIRouter:
+                     knowledge_service=None, quiz_service=None,
+                     profile_store=None) -> APIRouter:
     router = APIRouter()
     # 断点续传：一轮生成跑成脱离请求的后台任务，事件走 RunManager 内存总线（见 app/run_manager.py）。
     # 未注入时退化为每路由独立实例（测试/无续传场景），行为仍正确、只是跨请求接不上。
@@ -202,9 +204,13 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
 
         # 分层上下文：窗口/摘要/检索的重活在此按会话级预算一次，_new_loop 内只做同步拼装。
         _ctx_t0 = time.time()
+        # 用户个性化：非空时注入 <user_profile> 块（聊天与考试讲评同源生效）；空则零变更
+        profile_block = ""
+        if profile_store is not None:
+            profile_block = render_profile_block(profile_store.get(user_id))
         base_ctx = await _assembler.build_manager(
-            harness.system_prompt + EXAM_GUIDE + ATTACHMENT_GUIDE + SOURCE_GUIDE, history,
-            req.message, req.conversation_id)
+            harness.system_prompt + profile_block + EXAM_GUIDE + ATTACHMENT_GUIDE + SOURCE_GUIDE,
+            history, req.message, req.conversation_id)
         log.info("上下文组装 conv=%s 历史%d条 耗时%dms",
                  req.conversation_id, len(history), round((time.time() - _ctx_t0) * 1000))
 

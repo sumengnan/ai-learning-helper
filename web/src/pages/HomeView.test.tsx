@@ -3,8 +3,13 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import HomeView from "./HomeView";
 import { statsApi, type StatsOverview } from "../api/stats";
+import { profileApi } from "../api/profile";
 
 vi.mock("../api/stats", () => ({ statsApi: { overview: vi.fn(), memory: vi.fn() } }));
+vi.mock("../api/profile", () => ({
+  profileApi: { get: vi.fn().mockResolvedValue({ identity: "", goal: "", explain_prefs: [], tone: "", notes: "" }) },
+  isProfileSet: () => false,
+}));
 
 const OV: StatsOverview = {
   range_days: 14,
@@ -38,7 +43,12 @@ const OV: StatsOverview = {
 
 const renderHome = () => render(<MemoryRouter><HomeView /></MemoryRouter>);
 
-beforeEach(() => { vi.resetAllMocks(); localStorage.clear(); });
+beforeEach(() => {
+  vi.resetAllMocks(); localStorage.clear();
+  // resetAllMocks 会清掉工厂里设的实现，重新给个性化接口一个默认返回
+  (profileApi.get as any).mockResolvedValue(
+    { identity: "", goal: "", explain_prefs: [], tone: "", notes: "" });
+});
 afterEach(() => cleanup());
 
 describe("HomeView", () => {

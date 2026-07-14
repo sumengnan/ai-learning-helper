@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { AuthProvider } from "./auth/AuthProvider";
 import { RequireAuth } from "./auth/RequireAuth";
 import { AppShell } from "./components/AppShell";
+import { ProfileDrawerProvider } from "./pages/ProfileDrawer";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { ChatPage } from "./pages/ChatPage";

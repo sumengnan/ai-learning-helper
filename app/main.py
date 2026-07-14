@@ -14,6 +14,7 @@ from .api.chat import make_chat_router
 from .api.conversations import make_conversations_router
 from .api.documents import make_documents_router
 from .api.downloads import make_downloads_router
+from .api.profile import make_profile_router
 from .api.questions import make_questions_router
 from .api.stats import make_stats_router
 from .api.version import make_version_router
@@ -26,6 +27,7 @@ from .config import AppConfig
 from .conversations import ConversationStore
 from .db import migrate, open_db
 from .documents import DocumentStore
+from .profile import ProfileStore
 from .knowledge import KnowledgeService
 from .logging_setup import configure_logging
 from .question_import import QuestionImporter
@@ -39,7 +41,8 @@ _DEFAULT_SECRET = "dev-insecure-secret-change-me"
 def create_app(config: AppConfig | None = None, harness=None, store=None, doc_store=None,
                question_store=None, exam_store=None, wrong_store=None,
                quiz_service=None, user_store=None, verifier=None,
-               attachment_store=None, stats_service=None, question_importer=None) -> FastAPI:
+               attachment_store=None, stats_service=None, question_importer=None,
+               profile_store=None) -> FastAPI:
     # exam_store 参数保留仅为向后兼容（模拟考试已迁入聊天工具，不再有独立考试端点）
     config = config or AppConfig()
     configure_logging()   # 幂等：确保测试/嵌入式启动也有可见日志
@@ -48,7 +51,7 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
     # 应用领域各 Store 共享同一个数据库连接（单文件 app.db）；仅在需要时创建，
     # 避免测试注入全部 Store 时产生多余的 app.db 副作用。
     need_db = any(s is None for s in (store, doc_store, question_store, wrong_store,
-                                      user_store, attachment_store))
+                                      user_store, attachment_store, profile_store))
     app_conn = None
     if need_db:
         app_conn = open_db(config.app_db_path)
@@ -60,6 +63,7 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
     wrong_store = wrong_store if wrong_store is not None else WrongAnswerStore(conn=app_conn)
     attachment_store = (attachment_store if attachment_store is not None
                         else AttachmentStore(config.attachments_dir, conn=app_conn))
+    profile_store = profile_store if profile_store is not None else ProfileStore(conn=app_conn)
 
     has_mem = (getattr(harness, "memory", None) is not None
                and getattr(harness, "memory_store", None) is not None)
@@ -114,7 +118,7 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
                                         question_store=question_store, wrong_store=wrong_store,
                                         verifier=verifier, attachment_store=attachment_store,
                                         run_manager=run_manager, knowledge_service=service,
-                                        quiz_service=quiz_service))
+                                        quiz_service=quiz_service, profile_store=profile_store))
     app.include_router(make_documents_router(service, doc_store, config))
     app.include_router(make_attachments_router(attachment_store, store, config))
 
@@ -125,6 +129,7 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
     app.include_router(make_questions_router(question_store, config, question_importer,
                                              wrong_store=wrong_store))
     app.include_router(make_wrong_answers_router(wrong_store))
+    app.include_router(make_profile_router(profile_store))
 
     # 首页概览统计：聚合 harness 运行轨迹 + 应用业务数据。用独立只读连接（跨线程安全），
     # 复用请求期已建的 app_conn（若存在），memory 库缺失时降级为空。

@@ -6,6 +6,10 @@ import HomeView from "./HomeView";
 import { statsApi, type StatsOverview } from "../api/stats";
 
 vi.mock("../api/stats", () => ({ statsApi: { overview: vi.fn(), memory: vi.fn() } }));
+vi.mock("../api/profile", () => ({
+  profileApi: { get: vi.fn().mockResolvedValue({ identity: "", goal: "", explain_prefs: [], tone: "", notes: "" }) },
+  isProfileSet: () => false,
+}));
 
 const OV: StatsOverview = {
   range_days: 14,
