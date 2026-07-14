@@ -17,10 +17,6 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
 
   return (
     <>
-      <Typography sx={{ fontSize: 12.5, color: "text.secondary", mb: 1 }}>
-        harness 运行的运维口径 —— 成功率、延迟、Token 成本、工具调用
-      </Typography>
-
       {/* 运行概览 tiles */}
       <Eyebrow note={rangeLabel(days)}>运行概览</Eyebrow>
       <Box sx={{ display: "grid", gap: 1.75,

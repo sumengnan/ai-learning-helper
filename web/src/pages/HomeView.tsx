@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
-  Box, Typography, Stack, CircularProgress, Alert, Select, MenuItem, Tabs, Tab,
+  Box, Stack, CircularProgress, Alert, Select, MenuItem, ToggleButton, ToggleButtonGroup,
 } from "@mui/material";
 import { statsApi, type StatsOverview } from "../api/stats";
 import { RANGES, DEFAULT_DAYS } from "./statsShared";
@@ -45,17 +45,17 @@ export default function HomeView() {
 
   return (
     <Box sx={{ width: "100%", maxWidth: 1600, mx: "auto", px: { xs: 2, sm: 2.5, md: 3 }, py: 3, pb: 8 }}>
-      {/* 顶部：页签切换 + 共用时间范围 */}
+      {/* 顶部：视图切换 + 共用时间范围 */}
       <Stack direction="row" spacing={1.5}
-        sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1, mb: 2,
-          borderBottom: 1, borderColor: "divider" }}>
-        <Tabs value={tab} sx={{ flex: 1, minHeight: 40 }}
-          onChange={(_, v: TabKey) => nav(v === "ops" ? "/monitor" : "/")}>
-          <Tab value="overview" label="概览" sx={{ minHeight: 40, fontWeight: 600 }} />
-          <Tab value="ops" label="AI 运行统计" sx={{ minHeight: 40, fontWeight: 600 }} />
-        </Tabs>
+        sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1, mb: 2 }}>
+        <ToggleButtonGroup exclusive size="small" value={tab} color="primary"
+          onChange={(_, v: TabKey | null) => { if (v) nav(v === "ops" ? "/monitor" : "/"); }}>
+          <ToggleButton value="overview" sx={{ fontWeight: 600, px: 2 }}>概览</ToggleButton>
+          <ToggleButton value="ops" sx={{ fontWeight: 600, px: 2 }}>AI 运行统计</ToggleButton>
+        </ToggleButtonGroup>
+        <Box sx={{ flex: 1 }} />
         <Select size="small" value={days} onChange={(e) => setDays(Number(e.target.value))}
-          aria-label="时间范围" sx={{ minWidth: 108, mb: 0.75, "& .MuiSelect-select": { py: 0.7 } }}>
+          aria-label="时间范围" sx={{ minWidth: 108, "& .MuiSelect-select": { py: 0.7 } }}>
           {RANGES.map((r) => <MenuItem key={r.days} value={r.days}>{r.label}</MenuItem>)}
         </Select>
       </Stack>

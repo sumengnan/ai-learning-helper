@@ -49,18 +49,18 @@ describe("HomeView", () => {
     expect(screen.getByText("52")).toBeTruthy();          // AI 记的偏好
     expect(screen.getByText("联网查资料")).toBeTruthy();   // 能力（产品话术）
     expect(screen.getByText("114.0 万")).toBeTruthy();     // token 格式化
-    // 工程黑话不出现在学习主场（已迁移到「系统监控」菜单）
+    // 工程黑话不出现在学习主场（默认落在「概览」视图，运维指标在「AI 运行统计」切换项下）
     expect(screen.queryByText("P95 延迟")).toBeNull();
     expect(screen.queryByRole("button", { name: "工程台" })).toBeNull();  // 切换页签已移除
   });
 
-  it("提供「概览」「AI 运行统计」页签，点后者切到运维指标", async () => {
+  it("提供「概览」「AI 运行统计」切换按钮，点后者切到运维指标", async () => {
     (statsApi.overview as any).mockResolvedValue(OV);
     renderHome();
     await waitFor(() => expect(screen.getByText("二叉树遍历")).toBeTruthy());
-    // 默认概览页签不出现运维黑话
+    // 默认概览视图不出现运维黑话
     expect(screen.queryByText("P95 延迟")).toBeNull();
-    fireEvent.click(screen.getByRole("tab", { name: "AI 运行统计" }));
+    fireEvent.click(screen.getByRole("button", { name: "AI 运行统计" }));
     await waitFor(() => expect(screen.getByText("P95 延迟")).toBeTruthy());
   });
 
