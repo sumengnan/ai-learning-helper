@@ -418,6 +418,11 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                   <AttachmentChips items={m.attachments} />
                 </Box>
               )}
+              {/* 思考过程：置于最顶（工具调用等过程块之上），先于正文展示推理内容 */}
+              {m.role === "assistant" && m.reasoning && (
+                <ThinkingBlock reasoning={m.reasoning}
+                  live={busy && i === messages.length - 1 && m.status === "streaming"} />
+              )}
               {m.role === "assistant" && m.progress && (() => {
                 const planItems = m.progress.filter((p) => p.scope === "plan");
                 const plan = planItems[planItems.length - 1];
@@ -458,11 +463,6 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                   live={busy && i === messages.length - 1 && m.status === "streaming"}
                   stopped={m.status === "stopped"} />
               )}
-              {/* 思考模式：先于正文展示模型的推理内容（也解释了首字为何慢）*/}
-              {m.role === "assistant" && m.reasoning && (
-                <ThinkingBlock reasoning={m.reasoning}
-                  live={busy && i === messages.length - 1 && m.status === "streaming"} />
-              )}
               {m.content ? (
                 m.role === "assistant" ? (
                   <Markdown onCitationClick={(n) => scrollToCite(String(i), n)}>
@@ -500,28 +500,27 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                   </Box>
                 );
               })()}
-              {/* 结果校验徽章：常驻气泡底部，不受「展示工具调用」开关控制 */}
-              {m.role === "assistant" && (
-                <VerifyBadge message={m}
-                  live={busy && i === messages.length - 1 && m.status === "streaming"} />
-              )}
-              {/* 元信息页脚：状态 / 耗时 / tokens / 参考来源，用虚线与正文分隔，各成一块提高辨识度。
-                  生成中即显示「生成中」状态与实时增长的耗时——无需等正文、也不受 Token 开关限制。 */}
+              {/* 元信息页脚：校验 / 状态 / 耗时 / tokens / 参考来源——均为系统级信息，
+                  用虚线与正文分隔，同处虚线下方，各成一块提高辨识度。生成中即显示状态与实时耗时。 */}
               {m.role === "assistant" && (() => {
                 const live = busy && i === messages.length - 1 && m.status === "streaming";
                 const hasSources = !!(showSources && m.sources && m.sources.length > 0);
+                // 校验是系统级信息，与状态/耗时/tokens 同处虚线下方（不受 showTools 开关影响）
+                const hasVerify = !!((m.progress || []).some(
+                  (p) => p.scope === "verify" || p.scope === "check") || m.quality);
                 const hasStatus = live || m.status === "done" || m.status === "error"
                   || m.status === "stopped" || m.status === "interrupted";
                 const hasElapsed = (live && m.startedAt != null) || (showTools && m.elapsedMs != null);
                 const hasTokens = showTools && !!m.usage;
                 const showMetaRow = hasStatus || hasElapsed || hasTokens;
-                if (!showMetaRow && !hasSources) return null;
+                if (!showMetaRow && !hasSources && !hasVerify) return null;
                 // 正文已有内容时用虚线与正文分隔；生成初期正文尚空则不画分隔线，避免悬空的线
                 const separated = !!m.content;
                 return (
                   <Box sx={{ mt: separated ? 1.25 : 0.75, pt: separated ? 1 : 0,
                     borderTop: separated ? "1px dashed" : 0, borderColor: "divider",
                     display: "flex", flexDirection: "column", gap: 0.75 }}>
+                    {hasVerify && <VerifyBadge message={m} live={live} />}
                     {showMetaRow && (
                       <MessageMeta status={m.status} live={live} startedAt={m.startedAt}
                         elapsedMs={m.elapsedMs} usage={m.usage} showMeta={showTools} />

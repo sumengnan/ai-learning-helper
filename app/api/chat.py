@@ -13,7 +13,8 @@ from pydantic import BaseModel
 
 from harness.approval import reset_context, resolve, set_context
 from harness.events import (
-    ModelUsage, Progress, RunError, RunFinished, TextDelta, ToolFinished, ToolStarted)
+    ModelUsage, Progress, ReasoningDelta, RunError, RunFinished, TextDelta,
+    ToolFinished, ToolStarted)
 from harness.llm.openai_compat import set_extra_body_override
 from harness.loop.agent_loop import AgentLoop
 from harness.persistence.serialize import event_to_dict
@@ -310,6 +311,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                 collect["grounding"].append(
                                     {"tool": st["tool"], "content": ev.result.content,
                                      "is_error": ev.result.is_error})
+                    elif isinstance(ev, ReasoningDelta):
+                        # 累积思考过程供落库，刷新后仍能还原（前端仍实时收到该事件流式展示）
+                        collect["reasoning"] = collect.get("reasoning", "") + ev.text
                     elif isinstance(ev, ModelUsage):
                         # 记录用量供落库（与前端一致取最新一次的 total/cost），刷新后仍可展示
                         collect["usage"] = {"tokens": ev.usage.total_tokens, "cost": ev.cost_usd}
@@ -384,7 +388,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 if not gate_on:
                     # 直通路径：单次尝试、逐字流式（与开门前行为一致）
                     collect = {"final": None, "error": None, "steps": steps,
-                               "grounding": [], "progress": progress, "usage": None}
+                               "grounding": [], "progress": progress, "usage": None,
+                               "reasoning": ""}
                     run_id_a = uuid4().hex
                     store.add_run(req.conversation_id, run_id_a)
                     source_sink.reset()
@@ -416,7 +421,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     for attempt in range(max_attempts):
                         msg = model_message if corrective is None else corrective
                         collect = {"final": None, "error": None, "steps": [],
-                                   "grounding": [], "progress": progress, "usage": None}
+                                   "grounding": [], "progress": progress, "usage": None,
+                                   "reasoning": ""}
                         run_id_a = uuid4().hex
                         store.add_run(req.conversation_id, run_id_a)
                         source_sink.reset()   # 每次尝试重置，交付时快照该次来源
@@ -459,7 +465,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             delivered = draft
                             delivered_sources = source_sink.snapshot()
                             break
-                        yield _emit_verify(f"未通过（{verdict.summary}）", status="error", key=ekey)
+                        # error 事件的 text 携带完整原因（critique），供前端展开显示
+                        reason = verdict.critique or verdict.summary or "未通过自动校验"
+                        yield _emit_verify(reason, status="error", key=ekey)
                         if attempt == max_attempts - 1:      # 用尽次数 → 降级交付
                             delivered = draft or "（本轮未完成）"
                             delivered_sources = source_sink.snapshot()
@@ -489,7 +497,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                   steps=steps or None, progress=progress or None,
                                   status=status, sources=delivered_sources or None,
                                   tokens=_usage.get("tokens"), cost=_usage.get("cost"),
-                                  elapsed_ms=_elapsed)
+                                  elapsed_ms=_elapsed, reasoning=collect.get("reasoning") or None)
                 log.info("聊天完成 status=%s 耗时%dms tokens=%s 工具%d次 来源%d条",
                          status, _elapsed, _usage.get("tokens"), len(steps),
                          len(delivered_sources))

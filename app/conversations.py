@@ -133,17 +133,19 @@ class ConversationStore:
                     steps: list[dict] | None = None, progress: list[dict] | None = None,
                     status: str = "done", sources: list[dict] | None = None,
                     tokens: int | None = None, cost: float | None = None,
-                    elapsed_ms: int | None = None) -> None:
+                    elapsed_ms: int | None = None, reasoning: str | None = None) -> None:
         """一轮结束：按 run_id 把 streaming 占位 assistant UPDATE 为最终内容 + steps/progress/
-        sources（参考来源）+ 状态 + 用量（tokens/cost）+ 耗时（elapsed_ms）——刷新后仍能还原。"""
+        sources（参考来源）+ 状态 + 用量（tokens/cost）+ 耗时（elapsed_ms）+ reasoning（思考过程）
+        ——刷新后仍能还原。"""
         self._conn.execute(
             "UPDATE conversation_messages SET content=?, steps=?, progress=?, sources=?, "
-            "status=?, tokens=?, cost=?, elapsed_ms=? WHERE conv_id=? AND run_id=? AND role='assistant'",
+            "status=?, tokens=?, cost=?, elapsed_ms=?, reasoning=? "
+            "WHERE conv_id=? AND run_id=? AND role='assistant'",
             (content,
              json.dumps(steps, ensure_ascii=False) if steps else None,
              json.dumps(progress, ensure_ascii=False) if progress else None,
              json.dumps(sources, ensure_ascii=False) if sources else None,
-             status, tokens, cost, elapsed_ms, conv_id, run_id))
+             status, tokens, cost, elapsed_ms, reasoning or None, conv_id, run_id))
         self._conn.commit()
 
     def flush_partial(self, conv_id: str, run_id: str, content: str) -> None:
@@ -174,7 +176,7 @@ class ConversationStore:
         + attachments（用户上传附件元数据）+ run_id + status（续传用）。"""
         rows = self._conn.execute(
             "SELECT role, content, steps, progress, sources, attachments, run_id, status, "
-            "tokens, cost, elapsed_ms "
+            "tokens, cost, elapsed_ms, reasoning "
             "FROM conversation_messages WHERE conv_id = ? ORDER BY seq", (conv_id,)).fetchall()
         return [{"role": role, "content": content,
                  "steps": json.loads(steps) if steps else None,
@@ -182,9 +184,10 @@ class ConversationStore:
                  "sources": json.loads(sources) if sources else None,
                  "attachments": json.loads(attachments) if attachments else None,
                  "run_id": run_id, "status": status,
-                 "tokens": tokens, "cost": cost, "elapsed_ms": elapsed_ms}
+                 "tokens": tokens, "cost": cost, "elapsed_ms": elapsed_ms,
+                 "reasoning": reasoning}
                 for role, content, steps, progress, sources, attachments, run_id, status,
-                tokens, cost, elapsed_ms in rows]
+                tokens, cost, elapsed_ms, reasoning in rows]
 
     def rename(self, user_id: str, conv_id: str, title: str) -> bool:
         cur = self._conn.execute(

@@ -48,6 +48,7 @@ export function ChatPage() {
       // 刷新后仍还原用量与耗时
       usage: m.tokens != null ? { tokens: m.tokens, cost: m.cost ?? null } : undefined,
       elapsedMs: m.elapsed_ms ?? undefined,
+      reasoning: m.reasoning ?? undefined,   // 刷新后还原思考过程
     })));
     setActiveId(id);
   }

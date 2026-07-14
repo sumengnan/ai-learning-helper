@@ -43,7 +43,8 @@ def _fake_harness(make_mock, turns):
 def _cfg():
     # quiz/user 等 store 未在这些测试里注入，走 create_app 默认路径；用 :memory: 免得
     # 在 cwd 落下 app.db。
-    return AppConfig(api_key="k", app_db_path=":memory:")
+    # _env_file=None：测试隔离，不读开发机 .env（否则 answer_gate/judge_model 等会污染用例）
+    return AppConfig(api_key="k", app_db_path=":memory:", _env_file=None)
 
 
 def _auth_headers(client, username="u"):

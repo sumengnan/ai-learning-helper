@@ -23,21 +23,25 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
   // 无任何校验信号 → 不渲染徽章
   if (verify.length === 0 && checks.length === 0 && !quality) return null;
 
-  const vOk = verify.some((p) => p.status === "ok");
-  const vErr = verify.some((p) => p.status === "error");
   const vLast = verify[verify.length - 1];
   const vRunning = vLast?.status === "running";
+  // 取「最后一个终态事件」判定：多轮重答时以最终结果为准，中途某轮未通过不应盖过最终通过
+  const vTerminal = [...verify].reverse().find((p) => p.status === "ok" || p.status === "error");
 
-  // 状态机：未通过优先；其次通过；再次进行中；否则（流结束且无 error）视为通过
+  // 状态机：以最后终态为准；仍在进行则 running；无终态且非 live 视为通过
   const state: "running" | "ok" | "error" =
-    vErr ? "error" : vOk ? "ok" : (live || vRunning) ? "running" : "ok";
+    vTerminal?.status === "error" ? "error"
+      : vTerminal?.status === "ok" ? "ok"
+        : (live || vRunning) ? "running" : "ok";
 
   const stateIcon =
     state === "running" ? <CircularProgress size={14} />
       : state === "error" ? <CancelIcon sx={{ fontSize: 16 }} color="error" />
         : <CheckCircleIcon sx={{ fontSize: 16 }} color="success" />;
 
-  const label = state === "running" ? "验证中…" : state === "error" ? "未通过" : "校验通过";
+  // 进行中：原地显示当前过程文案（校验中…/重答中…），出结果后替换为终态文案（而非堆日志）
+  const label = state === "running" ? (vLast?.text || "验证中…")
+    : state === "error" ? "未通过" : "校验通过";
   const qFinal = quality ? quality.final : undefined;
 
   const summary = (
@@ -53,14 +57,14 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
           · 质量 {qFinal}
         </Typography>
       )}
-      {state === "error" && vLast?.text && (
-        <EllipsisText text={vLast.text} sx={{ ml: 0.5, color: "text.secondary" }} maxChars={28} />
+      {state === "error" && vTerminal?.text && (
+        <EllipsisText text={vTerminal.text} sx={{ ml: 0.5, color: "text.secondary" }} maxChars={28} />
       )}
     </Box>
   );
 
   return (
-    <Box sx={{ mt: 1 }}>
+    <Box>
       <CollapsibleBlock icon={<FactCheckIcon sx={{ fontSize: 15 }} color="action" />}
         title="校验" status={state} summary={summary}>
         {checks.length > 0 && (
@@ -90,17 +94,15 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
             )}
           </Box>
         )}
-        {/* checks / quality 都空但有 verify 信号时，展开面板给出 verify 明细行 */}
-        {checks.length === 0 && !quality && verify.map((p, i) => (
-          <Box key={p.key ?? i} sx={{ display: "flex", alignItems: "center", gap: 0.75, py: 0.15 }}>
-            {p.status === "error"
-              ? <CancelIcon sx={{ fontSize: 14 }} color="error" />
-              : p.status === "ok"
-                ? <CheckCircleIcon sx={{ fontSize: 14 }} color="success" />
-                : <CircularProgress size={11} />}
-            <Typography variant="caption" color="text.secondary">{p.text}</Typography>
+        {/* 未通过：展开显示完整原因（后端把 critique 放进 error 事件 text），不堆过程日志 */}
+        {state === "error" && vTerminal?.text && (
+          <Box sx={{ display: "flex", alignItems: "flex-start", gap: 0.75, py: 0.15 }}>
+            <CancelIcon sx={{ fontSize: 14, mt: 0.15 }} color="error" />
+            <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "pre-wrap" }}>
+              未通过原因：{vTerminal.text}
+            </Typography>
           </Box>
-        ))}
+        )}
       </CollapsibleBlock>
     </Box>
   );

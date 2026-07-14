@@ -10,17 +10,25 @@ const msg = (over: Partial<ChatMessage> = {}): ChatMessage =>
   ({ role: "assistant", content: "答案", ...over });
 
 describe("VerifyBadge 状态机", () => {
-  it("本轮进行中（live）→ 显示「验证中…」", () => {
+  it("本轮进行中（live）→ 原地显示当前过程文案（校验中…/重答中…）", () => {
     render(<VerifyBadge live message={msg({
       status: "streaming",
-      progress: [{ scope: "verify", text: "校验中", status: "running" }],
+      progress: [{ scope: "verify", text: "校验中…", status: "running" }],
     })} />);
-    expect(screen.getByText("验证中…")).toBeTruthy();
+    expect(screen.getByText("校验中…")).toBeTruthy();
   });
 
-  it("verify running 也进入「验证中…」（即使非 live）", () => {
+  it("verify running（非 live）→ 显示过程文案（如重答中…）", () => {
     render(<VerifyBadge message={msg({
-      progress: [{ scope: "verify", text: "校验中", status: "running" }],
+      progress: [{ scope: "verify", text: "重答中…", status: "running" }],
+    })} />);
+    expect(screen.getByText("重答中…")).toBeTruthy();
+  });
+
+  it("live 但尚无 verify 文案 → 回退「验证中…」", () => {
+    render(<VerifyBadge live message={msg({
+      status: "streaming",
+      checks: [{ tool: "search_memory", status: "ok", text: "检索命中" }],
     })} />);
     expect(screen.getByText("验证中…")).toBeTruthy();
   });

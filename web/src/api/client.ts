@@ -195,6 +195,7 @@ export const api = {
     tokens?: number | null;
     cost?: number | null;
     elapsed_ms?: number | null;
+    reasoning?: string | null;
   }[]> =>
     authFetch(`/api/conversations/${id}/messages`).then((r) => r.json()),
   remove: (id: string): Promise<void> =>
