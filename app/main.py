@@ -94,7 +94,16 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
     # grounding/judge，代码块在会话沙箱实跑。
     if verifier is None and config.enable_answer_gate:
         from .verify import AnswerVerifier
-        verifier = AnswerVerifier(build_completer(harness.client, config.model), config)
+        # 独立 judge 模型（config.judge_model 为空则回退主模型），降低自评打高分偏差
+        _judge_complete = build_completer(harness.client, config.judge_model or config.model)
+        verifier = AnswerVerifier(build_completer(harness.client, config.model), config,
+                                  judge_complete=_judge_complete)
+    # 轨迹 judge（交付前一次性回看整轨迹分层打分）：与 answer gate 独立，可单独开
+    trajectory_judge = None
+    if config.enable_trajectory_judge:
+        from .verify import TrajectoryJudge
+        trajectory_judge = TrajectoryJudge(
+            build_completer(harness.client, config.judge_model or config.model), config)
     # 断点续传：进程内运行管理器（后台任务 + 内存事件总线），供 /api/chat 起后台生成、
     # attach 刷新接回。启动时对账残留的 streaming 消息（上次进程重启丢了在途任务）。
     from .run_manager import RunManager
@@ -118,7 +127,8 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
                                         question_store=question_store, wrong_store=wrong_store,
                                         verifier=verifier, attachment_store=attachment_store,
                                         run_manager=run_manager, knowledge_service=service,
-                                        quiz_service=quiz_service, profile_store=profile_store))
+                                        quiz_service=quiz_service, profile_store=profile_store,
+                                        trajectory_judge=trajectory_judge))
     app.include_router(make_documents_router(service, doc_store, config))
     app.include_router(make_attachments_router(attachment_store, store, config))
 

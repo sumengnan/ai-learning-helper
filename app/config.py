@@ -39,6 +39,15 @@ class AppConfig(HarnessConfig):
     gate_check_grounding: bool = True       # 分项开关：知识库 grounding
     gate_check_code: bool = True            # 分项开关：代码可运行
     gate_check_judge: bool = True           # 分项开关：LLM 自评打分
+    gate_check_facts: bool = False          # 分项开关：引用链接可达性核对
+    # 每步校验（实时层，规则/阈值为主，内核零改动）
+    enable_step_check: bool = True          # 高风险步实时校验（检索相关性/代码执行）
+    step_relevance_min: float = 0.0         # 检索低分阈值；0=只判空命中（起步）
+    # 轨迹 judge（评估层，交付前一次性回看整轨迹分层打分）
+    enable_trajectory_judge: bool = False   # 与 answer gate 独立，可单独开
+    trajectory_pass_score: int = 60         # 最终层分数阈值（低于则软门不过）
+    judge_model: str = ""                   # 独立 judge 模型；空则回退主 model
+    judge_samples: int = 1                  # 预留：多次取多数（起步 1）
     # 聊天附件：裸字节落盘目录、单文件上限、单会话待发数量上限、可直接喂视觉模型的图片上限
     attachments_dir: str = "attachments"
     attachment_max_mb: int = 100

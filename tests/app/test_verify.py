@@ -4,7 +4,7 @@ import json
 import pytest
 
 from app.config import AppConfig
-from app.verify import AnswerVerifier
+from app.verify import AnswerVerifier, TrajectoryJudge
 from harness.tools.base import ToolError
 
 
@@ -140,3 +140,94 @@ async def test_llm_error_does_not_block_delivery():
     v = AnswerVerifier(boom, _cfg(gate_check_code=False, gate_check_grounding=False))
     verdict = await v.verify("问", "正常答案", [], None)
     assert verdict.ok is True
+
+
+# ---- 硬门/软门 ----
+
+async def test_format_is_hard_gate():
+    v = AnswerVerifier(_pass_complete(), _cfg())
+    verdict = await v.verify("问", "   ", [], None)
+    assert "format" in verdict.hard_failed
+
+
+async def test_judge_is_soft_gate():
+    complete = _fake_complete({"事实核查": {"grounded": True}, "质检": {"score": 30, "feedback": "差"}})
+    v = AnswerVerifier(complete, _cfg(gate_check_code=False))
+    verdict = await v.verify("问", "答", [], None)
+    assert "judge" in verdict.failed and verdict.hard_failed == []
+
+
+# ---- grounding 逐句归因 ----
+
+async def test_grounding_unsupported_listed_in_critique():
+    complete = _fake_complete({
+        "事实核查": {"grounded": False, "unsupported": ["地球是平的", "水往高处流"], "feedback": ""},
+        "质检": {"score": 95}})
+    v = AnswerVerifier(complete, _cfg(gate_check_code=False))
+    grounding = [{"tool": "search_memory", "content": "[1] 资料", "is_error": False}]
+    verdict = await v.verify("问", "答", grounding, None)
+    assert "grounding" in verdict.failed and "地球是平的" in verdict.critique
+
+
+# ---- judge 独立模型 ----
+
+async def test_judge_uses_independent_completer():
+    main_c = _fake_complete({"事实核查": {"grounded": True}, "质检": {"score": 99}})
+    judge_c = _fake_complete({"质检": {"score": 20, "feedback": "独立judge判差"}})
+    v = AnswerVerifier(main_c, _cfg(gate_check_code=False, gate_check_grounding=False),
+                       judge_complete=judge_c)
+    verdict = await v.verify("问", "答", [], None)
+    assert "judge" in verdict.failed and "独立judge" in verdict.critique
+
+
+# ---- facts 引用链接可达性 ----
+
+class _HttpStub:
+    class Params:
+        def __init__(self, url):
+            self.url = url
+
+    def __init__(self, body):
+        self._body = body
+
+    async def run(self, params):
+        return self._body
+
+
+async def test_facts_unreachable_link_fails():
+    reg = _StubRegistry({"http_request": _HttpStub("HTTP 404\n标题：Not Found\n")})
+    v = AnswerVerifier(_pass_complete(), _cfg(
+        gate_check_grounding=False, gate_check_judge=False, gate_check_code=False,
+        gate_check_facts=True))
+    verdict = await v.verify("问", "详见 https://example.com/x 。", [], reg)
+    assert "facts" in verdict.failed
+
+
+async def test_facts_reachable_link_passes():
+    reg = _StubRegistry({"http_request": _HttpStub("HTTP 200\n标题：OK\n")})
+    v = AnswerVerifier(_pass_complete(), _cfg(
+        gate_check_grounding=False, gate_check_judge=False, gate_check_code=False,
+        gate_check_facts=True))
+    verdict = await v.verify("问", "详见 https://example.com/x 。", [], reg)
+    assert verdict.ok is True
+
+
+# ---- TrajectoryJudge ----
+
+async def test_trajectory_judge_parses_scores():
+    complete = _fake_complete({"过程质检": {"plan": 80, "steps": 70, "final": 90, "feedback": "不错"}})
+    s = await TrajectoryJudge(complete, _cfg()).score("问", "拆分", "✓ search_memory", "答案")
+    assert (s.plan, s.steps, s.final, s.feedback) == (80, 70, 90, "不错")
+
+
+async def test_trajectory_judge_handles_null_scores():
+    complete = _fake_complete({"过程质检": {"plan": None, "steps": None, "final": 85, "feedback": ""}})
+    s = await TrajectoryJudge(complete, _cfg()).score("问", "", "", "答")
+    assert s.plan is None and s.steps is None and s.final == 85
+
+
+async def test_trajectory_judge_bad_json_degrades_to_none():
+    async def boom(system, user):
+        return "这不是JSON"
+    s = await TrajectoryJudge(boom, _cfg()).score("问", "", "", "答")
+    assert s.plan is None and s.steps is None and s.final is None

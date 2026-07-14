@@ -12,6 +12,7 @@ from harness.tools.builtins.calculator import CalculatorTool
 from harness.tools.builtins.http_tool import HttpRequestTool
 
 from .tools.plan_tool import UpdatePlanTool, PLAN_SYSTEM_GUIDANCE
+from .tools.validating import ValidatingTool, relevance_check
 
 
 @dataclass
@@ -48,6 +49,10 @@ def build_harness(config) -> Harness:
     def _reg(tool):
         reg.register(tool)
         pool[tool.name] = tool
+
+    def _reg_exec(tool):
+        # 代码/命令类：套每步校验（捕 ToolError 标记执行未通过），可整体关闭
+        _reg(ValidatingTool(tool, exec_mode=True) if config.enable_step_check else tool)
 
     _reg(CalculatorTool())
     _reg(UpdatePlanTool())
@@ -141,7 +146,9 @@ def build_harness(config) -> Harness:
                 build_completer(client, config.model),
                 candidate_k=config.memory_write_candidate_k,
                 ttl_by_type=_ttl_by_type)
-        _reg(SearchMemoryTool(mem, default_k=config.search_top_k))
+        _search_tool = SearchMemoryTool(mem, default_k=config.search_top_k)
+        _reg(ValidatingTool(_search_tool, relevance_check)
+             if config.enable_step_check else _search_tool)
         _reg(RememberTool(mem))
         _reg(RecallEpisodesTool(EpisodicMemory(mem), default_k=config.episode_recall_k))
 
@@ -175,12 +182,12 @@ def build_harness(config) -> Harness:
         _reg(WriteFileTool(sandbox))
         _reg(ReadFileTool(sandbox, config.sandbox_output_max_chars))
         _reg(ListFilesTool(sandbox))
-        _reg(RunShellTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
-        _reg(RunPythonTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
+        _reg_exec(RunShellTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
+        _reg_exec(RunPythonTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
         # 配了多镜像路由（sandbox_images）或语言/版本子沙箱（sandbox_lang_images）时暴露多语言代码工具
         if getattr(sandbox, "sandbox_for", None) is not None or config.sandbox_lang_images:
-            _reg(RunNodeTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
-            _reg(RunJavaTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
+            _reg_exec(RunNodeTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
+            _reg_exec(RunJavaTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
 
     if config.enable_dispatch:
         from harness.orchestration.roster_loader import load_roster

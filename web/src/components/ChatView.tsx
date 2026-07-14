@@ -19,6 +19,7 @@ import { MessageMeta } from "./MessageMeta";
 import { linkifyCitations, citeId } from "./citations";
 import { EmptyHint } from "./EmptyHint";
 import { ProgressBlock } from "./ProgressBlock";
+import { VerifyBadge } from "./VerifyBadge";
 import { PlanBlock } from "./PlanBlock";
 import { Markdown } from "./Markdown";
 import { RollingNumber } from "./RollingNumber";
@@ -225,6 +226,22 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
     else if (e.type === "Progress" && e.data.scope === "sources") upd((a) => {
       try { a.sources = JSON.parse(e.data.text); } catch { /* 忽略坏 JSON */ }
     });
+    // 每步校验（scope=check）：从 key `check:<tool>` 或 text 提取工具名，同工具合并为一行。
+    // 仍入 progress 列供徽章判定 verify/check 信号；另单列 checks 供徽章展开明细。
+    else if (e.type === "Progress" && e.data.scope === "check") upd((a) => {
+      (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text, status: e.data.status, key: e.data.key, agent: e.data.agent });
+      const key: string = e.data.key || "";
+      const tool = key.startsWith("check:") ? key.slice("check:".length) : (e.data.text || "").split(/\s+/)[0] || "check";
+      const status: "ok" | "error" = e.data.status === "error" ? "error" : "ok";
+      const row = { tool, status, text: e.data.text || "" };
+      a.checks = [...(a.checks || [])];
+      const at = a.checks.findIndex((c) => c.tool === tool);
+      if (at >= 0) a.checks[at] = row; else a.checks.push(row);
+    });
+    // 轨迹质量分（scope=quality）：text 为 JSON，解析失败忽略该事件、不抛。
+    else if (e.type === "Progress" && e.data.scope === "quality") upd((a) => {
+      try { a.quality = JSON.parse(e.data.text); } catch { /* 解析失败忽略，不显示质量分 */ }
+    });
     else if (e.type === "Progress") upd((a) => { (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text, status: e.data.status, key: e.data.key, agent: e.data.agent }); });
     else if (e.type === "RunStarted") runIdRef.current = e.data.run_id;
     else if (e.type === "ApprovalRequired") setApproval({ approvalId: e.data.approval_id, command: e.data.command, reason: e.data.reason });
@@ -413,7 +430,6 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                 const sandbox = m.progress.filter((p) => p.scope === "sandbox");
                 const sub = m.progress.filter((p) => p.scope.startsWith("subagent:"));
                 const skill = m.progress.filter((p) => p.scope === "skill");
-                const verify = m.progress.filter((p) => p.scope === "verify");
                 const live = busy && i === messages.length - 1 && m.status === "streaming";
                 const stopped = m.status === "stopped";
                 // 进行中的块：生成中转圈；用户停止→stopped（已取消）；否则收尾为 ok
@@ -428,18 +444,12 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                 const subStatus: "running" | "ok" | "error" | "stopped" =
                   sub.some((p) => /未产出|失败/.test(p.text)) ? "error"
                     : endInflight(!sub.some((p) => /完成|未产出|失败/.test(p.text)));
-                // 校验门：最后一步 running 且在跑 → running；出现过通过 → ok；否则若有未通过 → error
-                const vLast = verify[verify.length - 1];
-                const vStatus: "running" | "ok" | "error" | "stopped" =
-                  verify.some((p) => p.status === "ok") ? "ok"
-                    : verify.some((p) => p.status === "error") ? "error"
-                      : endInflight(vLast?.status === "running");
+                // 校验状态改由常驻 VerifyBadge 展示（脱离本 showTools 分支）
                 return (
                   <>
                     <ProgressBlock title="技能" kind="skill" items={skill} status="ok" />
                     <ProgressBlock title="沙箱执行" kind="sandbox" items={sandbox} status={sbStatus} />
                     <ProgressBlock title="子代理执行" kind="subagent" items={sub} status={subStatus} />
-                    <ProgressBlock title="校验" kind="verify" items={verify} status={vStatus} />
                   </>
                 );
               })()}
@@ -490,6 +500,11 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                   </Box>
                 );
               })()}
+              {/* 结果校验徽章：常驻气泡底部，不受「展示工具调用」开关控制 */}
+              {m.role === "assistant" && (
+                <VerifyBadge message={m}
+                  live={busy && i === messages.length - 1 && m.status === "streaming"} />
+              )}
               {/* 元信息页脚：状态 / 耗时 / tokens / 参考来源，用虚线与正文分隔，各成一块提高辨识度。
                   生成中即显示「生成中」状态与实时增长的耗时——无需等正文、也不受 Token 开关限制。 */}
               {m.role === "assistant" && (() => {

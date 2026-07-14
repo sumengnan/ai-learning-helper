@@ -100,10 +100,25 @@ class _Decision(BaseModel):
     approved: bool
 
 
+def _plan_text(progress: list[dict]) -> str:
+    """从进度事件里取最后一次任务拆分（scope=plan 的 JSON 文本），供轨迹 judge 回看。"""
+    plans = [p["text"] for p in progress if p.get("scope") == "plan"]
+    return plans[-1] if plans else ""
+
+
+def _steps_summary(steps: list[dict]) -> str:
+    """把工具调用轨迹压成「✓/✗ 工具名」逐行摘要。"""
+    lines = []
+    for s in steps:
+        mark = "✗" if s.get("is_error") else "✓"
+        lines.append(f"{mark} {s.get('tool')}")
+    return "\n".join(lines)
+
+
 def make_chat_router(harness, store, config, question_store=None, wrong_store=None,
                      verifier=None, attachment_store=None, run_manager=None,
                      knowledge_service=None, quiz_service=None,
-                     profile_store=None) -> APIRouter:
+                     profile_store=None, trajectory_judge=None) -> APIRouter:
     router = APIRouter()
     # 断点续传：一轮生成跑成脱离请求的后台任务，事件走 RunManager 内存总线（见 app/run_manager.py）。
     # 未注入时退化为每路由独立实例（测试/无续传场景），行为仍正确、只是跨请求接不上。
@@ -348,6 +363,19 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                  "status": ev.status, "key": ev.key, "agent": ev.agent})
                 return ev
 
+            def _emit_quality(tscore):
+                # 轨迹 judge 三层质量分 → 前端常驻徽章（scope=quality，text 为 JSON）
+                payload = json.dumps(
+                    {"plan": tscore.plan, "steps": tscore.steps,
+                     "final": tscore.final, "feedback": tscore.feedback},
+                    ensure_ascii=False)
+                st = ("error" if (tscore.final is not None
+                                  and tscore.final < config.trajectory_pass_score) else "ok")
+                ev = Progress("quality", payload, status=st, key="quality")
+                progress.append({"scope": ev.scope, "text": ev.text,
+                                 "status": ev.status, "key": ev.key, "agent": ev.agent})
+                return ev
+
             def _emit_sources(items):
                 # 借 Progress 通道把来源即时推给在途客户端（scope=sources，前端特判、不入 progress 列）
                 return Progress("sources", json.dumps(items, ensure_ascii=False))
@@ -410,6 +438,21 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                     question, draft, collect["grounding"], registry)
                             finally:
                                 reset_sandbox_conv(stoken)
+
+                        # 轨迹 judge：仅当其它校验项已通过时才花一次独立模型调用，
+                        # 回看整轨迹（拆分/关键步/最终）分层打分；final 偏低则并入软门重答。
+                        if (verdict.ok and trajectory_judge is not None
+                                and config.enable_trajectory_judge and draft):
+                            tscore = await trajectory_judge.score(
+                                question, _plan_text(progress),
+                                _steps_summary(collect["steps"]), draft)
+                            yield _emit_quality(tscore)
+                            if (tscore.final is not None
+                                    and tscore.final < config.trajectory_pass_score):
+                                verdict = Verdict(
+                                    ok=False, failed=["trajectory"],
+                                    critique=tscore.feedback or f"整体质量 {tscore.final} 偏低",
+                                    summary="trajectory")
 
                         if verdict.ok:
                             yield _emit_verify("校验通过", status="ok", key=ekey)

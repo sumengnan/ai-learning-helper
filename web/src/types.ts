@@ -21,6 +21,10 @@ export type ChatMessage = {
   reasoning?: string;   // 思考模式的推理内容（reasoning_content）；先于正文流式到达
   steps?: { tool: string; args: any; result?: string; isError?: boolean }[];
   progress?: { scope: string; text: string; status?: "running" | "ok" | "error" | null; key?: string | null; agent?: string | null }[];
+  // 每步校验标记（scope=check）：每个高风险工具一行，✓/✗ + 文案
+  checks?: { tool: string; status: "ok" | "error"; text: string }[];
+  // 轨迹 judge 三层质量分（scope=quality）：拆分/关键步/最终 + 简评；解析失败为 null
+  quality?: { plan?: number | null; steps?: number | null; final?: number | null; feedback?: string } | null;
   sources?: SourceItem[];
   usage?: { tokens: number; cost: number | null };
   attachments?: Attachment[];
