@@ -19,7 +19,7 @@ class _StubSandbox:
     async def close(self):
         self.closed = True
 
-    async def exec(self, command, timeout):
+    async def exec(self, command, timeout, *, quiet=False):
         self.execs.append(command)
         return ExecResult("", "", 0)
 

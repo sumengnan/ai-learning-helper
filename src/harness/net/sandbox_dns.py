@@ -12,7 +12,8 @@ async def resolve_in_sandbox(sandbox, host: str, timeout: float = 30.0) -> list[
 
     `getent ahosts <host>` 每行形如 "<ip>  STREAM <host>"，取首列即 IP（含 A/AAAA）。
     """
-    res = await sandbox.exec(["getent", "ahosts", host], timeout + 5)
+    # quiet=True：DNS 解析是内部基础设施动作，不刷到前端沙箱活动日志（用户不关心 getent ahosts）
+    res = await sandbox.exec(["getent", "ahosts", host], timeout + 5, quiet=True)
     ips: list[str] = []
     for line in res.stdout.splitlines():
         parts = line.split()

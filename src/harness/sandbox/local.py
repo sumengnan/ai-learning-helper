@@ -27,8 +27,9 @@ class LocalSandbox:
             shutil.rmtree(self.workspace, ignore_errors=True)
         self._started = False
 
-    async def exec(self, command: list[str], timeout: float) -> ExecResult:
-        await self.start()
+    async def exec(self, command: list[str], timeout: float,
+                   *, quiet: bool = False) -> ExecResult:
+        await self.start()   # 本地沙箱本就不发 Progress，quiet 仅为接口一致
         proc = await asyncio.create_subprocess_exec(
             *command, cwd=self.workspace,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
