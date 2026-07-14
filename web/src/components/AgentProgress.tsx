@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../types";
 import {
   Accordion, AccordionSummary, AccordionDetails, Typography, Box, CircularProgress, Chip,
@@ -48,6 +49,21 @@ function pendingIcon(live: boolean, stopped: boolean, size: number) {
 export function AgentProgress({ steps, live = false, stopped = false }: {
   steps: NonNullable<ChatMessage["steps"]>; live?: boolean; stopped?: boolean;
 }) {
+  const last = steps[steps.length - 1];
+  const lastPending = steps.length > 0 && last.result === undefined;
+
+  // 进行中步骤实时耗时：让用户看到「正在执行、已多久」而非只有干转圈（hooks 须在 early-return 前）
+  const [now, setNow] = useState(() => Date.now());
+  const startRef = useRef(Date.now());
+  const runKey = `${steps.length}:${last?.tool ?? ""}`;
+  useEffect(() => { startRef.current = Date.now(); setNow(Date.now()); }, [runKey]);
+  useEffect(() => {
+    if (!(live && lastPending)) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [live, lastPending]);
+  const elapsed = Math.floor((now - startRef.current) / 1000);
+
   if (!steps.length) return null;
   const pending = steps.some((s) => s.result === undefined);
   const anyError = steps.some((s) => s.isError);
@@ -56,9 +72,6 @@ export function AgentProgress({ steps, live = false, stopped = false }: {
       : anyError ? "error"
         : pending ? (stopped ? "stopped" : "error")
           : "ok";
-  // 标题右侧显示最后一步（工具名 + 其状态）
-  const last = steps[steps.length - 1];
-  const lastPending = last.result === undefined;
   const cutLabel = stopped ? "（已取消）" : "（未完成）";
   const summary = (
     <>
@@ -70,6 +83,11 @@ export function AgentProgress({ steps, live = false, stopped = false }: {
         <CheckCircleIcon sx={{ fontSize: 14 }} color="success" />
       )}
       <ToolLabel name={last.tool} sx={{ ml: 0.5 }} maxChars={SUMMARY_MAX} />
+      {lastPending && live && (
+        <Typography variant="caption" color="text.secondary" sx={{ ml: 0.5, flexShrink: 0 }}>
+          执行中{elapsed > 0 ? ` · 已 ${elapsed}s` : "…"}
+        </Typography>
+      )}
       {lastPending && !live && (
         <Typography variant="caption" color="text.secondary" sx={{ ml: 0.5, flexShrink: 0 }}>
           {cutLabel}
@@ -83,6 +101,7 @@ export function AgentProgress({ steps, live = false, stopped = false }: {
       title="工具调用"
       status={status}
       summary={summary}
+      defaultExpanded={status === "running"}
     >
       {steps.map((s, i) => {
         const sp = s.result === undefined;
@@ -90,6 +109,7 @@ export function AgentProgress({ steps, live = false, stopped = false }: {
         return (
           <Accordion
             key={i} disableGutters elevation={0}
+            defaultExpanded={sp && live}
             sx={{ bgcolor: "transparent", "&:before": { display: "none" } }}
           >
             <AccordionSummary
