@@ -72,9 +72,9 @@ function TypingDots() {
 // 耗时格式化保持从此处导出（历史引用/测试用），实现移入 duration.ts
 export { fmtDuration } from "./duration";
 
-export function ChatView({ conversationId, initial, autoSend, onTitled }:
+export function ChatView({ conversationId, initial, autoSend, onTitled, onStart }:
   { conversationId: string; initial: ChatMessage[]; autoSend?: string | null;
-    onTitled?: () => void }) {
+    onTitled?: () => void; onStart?: () => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initial);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -248,6 +248,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled }:
       startedAt: Date.now() };
     // 新对话首条消息：用它自动命名（并行、不阻塞回复；失败不影响聊天）
     const isFirst = messages.length === 0;
+    if (isFirst) onStart?.();   // 通知上层：这条新对话已开始聊天，不再是空草稿
     stickRef.current = true;   // 发送即恢复跟随：即使之前上滑看历史，也自动回到底部
     setMessages((m) => [...m, userMsg, assistant]);
     if (isFirst && msg) {

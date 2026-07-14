@@ -1,6 +1,6 @@
 // web/src/pages/ChatPage.tsx
 import { useEffect, useState } from "react";
-import { Box } from "@mui/material";
+import { Box, Snackbar, Alert } from "@mui/material";
 import type { Conversation, ChatMessage } from "../types";
 import { api } from "../api/client";
 import { ConversationList } from "../components/ConversationList";
@@ -12,6 +12,9 @@ export function ChatPage() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [initial, setInitial] = useState<ChatMessage[]>([]);
   const [autoSend, setAutoSend] = useState<string | null>(null);
+  // 已新建但还没开始聊天的空对话 id；用于避免重复新建、并给出提示
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [snack, setSnack] = useState<string | null>(null);
 
   const refresh = () => api.list().then(setConvs);
 
@@ -27,6 +30,9 @@ export function ChatPage() {
 
   async function select(id: string) {
     const msgs = await api.messages(id);
+    // 选中的若仍是空的「新对话」，继续视作草稿；否则清掉草稿标记
+    const conv = convs.find((c) => c.id === id);
+    setDraftId(msgs.length === 0 && conv?.title === "新对话" ? id : null);
     setAutoSend(null);
     setInitial(msgs.map((m) => ({
       role: m.role as "user" | "assistant",
@@ -47,17 +53,23 @@ export function ChatPage() {
   }
   // 新建对话：直接创建空对话，标题由发出的第一句话自动生成
   async function newConv() {
+    // 已存在一个新建但未聊天的空对话 → 不重复创建，提示去开始聊天
+    if (draftId && draftId === activeId) {
+      setSnack("已经添加了新对话，可以开始聊天了");
+      return;
+    }
     const { id } = await api.create();
     await refresh();
-    setAutoSend(null); setInitial([]); setActiveId(id);
+    setAutoSend(null); setInitial([]); setActiveId(id); setDraftId(id);
   }
   async function ask(question: string) {
     const { id } = await api.create();
     await refresh();
-    setInitial([]); setAutoSend(question); setActiveId(id);
+    setInitial([]); setAutoSend(question); setActiveId(id); setDraftId(null);
   }
   async function del(id: string) {
     await api.remove(id); await refresh();
+    if (id === draftId) setDraftId(null);
     if (id === activeId) { setActiveId(null); setInitial([]); setAutoSend(null); }
   }
 
@@ -68,9 +80,19 @@ export function ChatPage() {
       <Box sx={{ flex: 1, minWidth: 0, height: "100%", bgcolor: "background.paper" }}>
         {activeId
           ? <ChatView key={activeId} conversationId={activeId} initial={initial}
-              autoSend={autoSend} onTitled={refresh} />
+              autoSend={autoSend} onTitled={refresh}
+              onStart={() => setDraftId(null)} />
           : <EmptyHint onAsk={ask} />}
       </Box>
+      <Snackbar
+        open={Boolean(snack)} autoHideDuration={3000}
+        onClose={() => setSnack(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        <Alert severity="info" variant="filled" onClose={() => setSnack(null)}>
+          {snack}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }
