@@ -118,6 +118,7 @@ class _ChatRequest(BaseModel):
     message: str
     save_wrong: bool = True         # 「考试答错自动保存错题集」开关（默认开）
     think: bool = True              # 「思考模式」开关（默认开）；透传 enable_thinking，可手动关
+    verify: bool = True             # 「结果校验」开关（默认开）；关则本轮跳过交付门校验
     attachment_ids: list[str] = []  # 本轮随消息发送的附件（已先经上传接口拿到 id）
 
 
@@ -270,7 +271,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         registry, source_sink = _build_registry(user_id, req.save_wrong,
                                                  req.conversation_id, has_attachments,
                                                  exam_active)
-        gate_on = verifier is not None and config.enable_answer_gate
+        # 交付门开启需三者皆备：装配了 verifier + 服务端总开关 + 本轮用户开关（默认开，可手动关）
+        gate_on = verifier is not None and config.enable_answer_gate and req.verify
         # 喂给模型的消息：带附件时追加只含文件名的名单提示（不含内容），入库仍用原文
         model_message = req.message
         if attachment_metas:

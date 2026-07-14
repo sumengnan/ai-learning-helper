@@ -150,6 +150,31 @@ def test_first_answer_passes_delivers_as_is(make_mock, text_turn):
     assert store.messages(cid)[-1].content == "好答案"
 
 
+def test_verify_toggle_off_skips_gate(make_mock, text_turn):
+    # 本轮 verify=False：即便装配了 verifier 且服务端开关开，也跳过校验、直通产出
+    verifier = _StubVerifier([Verdict(ok=True)])
+    client, store = _client(make_mock, [text_turn("直接产出")], verifier)
+    h = _auth(client)
+    cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
+    with client.stream("POST", "/api/chat",
+                       json={"conversation_id": cid, "message": "问", "verify": False},
+                       headers=h) as resp:
+        assert resp.status_code == 200
+        events = _events(resp)
+    assert verifier.calls == 0                      # 关校验 → verifier 未被调用
+    assert _final(events) == "直接产出"
+    assert not _verify_progress(events)             # 无校验进度
+
+
+def test_verify_toggle_on_default_runs_gate(make_mock, text_turn):
+    # 不传 verify（默认 True）→ 校验照常运行
+    verifier = _StubVerifier([Verdict(ok=True)])
+    client, store = _client(make_mock, [text_turn("好答案")], verifier)
+    h = _auth(client)
+    _cid, events = _run_chat(client, h, "问")
+    assert verifier.calls == 1 and _final(events) == "好答案"
+
+
 def test_gate_off_passthrough_streams_live(make_mock, text_turn):
     # enable_answer_gate=False（且不注入 verifier）→ 走直通流式，不校验
     cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,

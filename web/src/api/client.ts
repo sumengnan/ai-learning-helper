@@ -127,13 +127,13 @@ async function consumeSSE(resp: Response, onEvent: (e: AgentEvent) => void): Pro
 export async function streamChat(
   conversationId: string, message: string, onEvent: (e: AgentEvent) => void,
   signal?: AbortSignal, saveWrong = false, attachmentIds: string[] = [],
-  onRunId?: (runId: string) => void, think = false,
+  onRunId?: (runId: string) => void, think = false, verify = true,
 ): Promise<void> {
   const resp = await authFetch("/api/chat", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       conversation_id: conversationId, message, save_wrong: saveWrong,
-      attachment_ids: attachmentIds, think,
+      attachment_ids: attachmentIds, think, verify,
     }),
     signal,
   });
