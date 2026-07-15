@@ -27,10 +27,13 @@ web/src/**/*.js.map
 web/src/**/*.d.ts
 
 # 运行时数据（应用启动/测试时生成，非源码）
+# downloads_dir / attachments_dir 默认是相对路径，从项目根启动或测试没隔离时就落在这里；
+# attachments/ 存的是用户上传的裸字节，尤其不该入库。
 *.db
 *.db-wal
 *.db-shm
 downloads/
+attachments/
 
 # eval 报告产物（每轮一份，带时间戳）。基线 evals/baselines/ 要进 git —— 它是门禁判据，
 # 分数变化必须以 diff 形式出现在 PR 里让人看见。
