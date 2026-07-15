@@ -253,3 +253,58 @@ describe("刷新后从 progress 重建质量分", () => {
     expect(screen.queryByText(/质量/)).toBeNull();
   });
 });
+
+describe("刷新后从 progress 重建每步校验", () => {
+  // checks 不是数据库列，是从 progress 派生的；ChatView 只在实时 SSE 时赋值，
+  // 刷新走 ui_messages 加载则为空 —— 但 scope="check" 的条目一直在 progress 列里
+  const ck = (text: string, status: "ok" | "error", tool: string) =>
+    ({ scope: "check", text, status, key: `check:${tool}` });
+
+  it("无 message.checks 但 progress 里有 → 步骤校验仍显示（此前刷新即消失）", () => {
+    render(<VerifyBadge message={msg({
+      progress: [ck("run_python 执行通过", "ok", "run_python"),
+                 { scope: "verify", text: "校验通过", status: "ok" }],
+    })} />);
+    fireEvent.click(screen.getByText("结果校验通过"));
+    expect(screen.getByText("run_python 执行通过")).toBeTruthy();
+  });
+
+  it("交付门关时刷新 → 主行按步骤校验降级，不谎称结果校验", () => {
+    render(<VerifyBadge message={msg({
+      progress: [ck("run_python 执行通过", "ok", "run_python")],
+    })} />);
+    expect(screen.getByText("步骤校验通过")).toBeTruthy();
+  });
+
+  it("刷新后步骤校验失败仍亮红", () => {
+    render(<VerifyBadge message={msg({
+      progress: [ck("run_python 执行未通过", "error", "run_python")],
+    })} />);
+    expect(screen.getByText("步骤校验未通过")).toBeTruthy();
+  });
+
+  it("同工具多条 → 合并为一行取最后一条（与实时逻辑一致）", () => {
+    render(<VerifyBadge message={msg({
+      progress: [ck("run_python 执行未通过", "error", "run_python"),
+                 ck("run_python 执行通过", "ok", "run_python")],
+    })} />);
+    expect(screen.getByText("步骤校验通过")).toBeTruthy();       // 后来者覆盖
+    fireEvent.click(screen.getByText("步骤校验通过"));
+    expect(screen.queryByText("run_python 执行未通过")).toBeNull();
+  });
+
+  it("message.checks 优先于 progress（实时路径不被回退值覆盖）", () => {
+    render(<VerifyBadge message={msg({
+      checks: [{ tool: "run_python", status: "error", text: "实时的失败" }],
+      progress: [ck("run_python 执行通过", "ok", "run_python")],
+    })} />);
+    expect(screen.getByText("步骤校验未通过")).toBeTruthy();
+  });
+
+  it("search_memory 命中仍被过滤（重建不绕过既有过滤）", () => {
+    render(<VerifyBadge message={msg({
+      progress: [ck("search_memory 命中 3 条", "ok", "search_memory")],
+    })} />);
+    expect(screen.queryByText("search_memory 命中 3 条")).toBeNull();
+  });
+});

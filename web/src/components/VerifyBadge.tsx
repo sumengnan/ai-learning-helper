@@ -24,6 +24,27 @@ function qualityFromProgress(progress: ChatMessage["progress"]): ChatMessage["qu
   }
 }
 
+// 从 progress 里重建每步校验（scope="check"）。
+// message.checks 同样只在实时 SSE 时由 ChatView 赋值，刷新后走 ui_messages 加载则没有
+// （checks 不是数据库列，是从 progress 派生的）；而 scope="check" 的条目一直在 progress 列里。
+// 必须复刻 ChatView 的实时逻辑：工具名取自 key `check:<tool>`，同工具合并为一行、后来者覆盖，
+// 顺序按首次出现——否则刷新前后同一轮的明细会长得不一样。
+function checksFromProgress(progress: ChatMessage["progress"]): NonNullable<ChatMessage["checks"]> {
+  const out: NonNullable<ChatMessage["checks"]> = [];
+  for (const p of progress || []) {
+    if (p.scope !== "check") continue;
+    const key = p.key || "";
+    const tool = key.startsWith("check:")
+      ? key.slice("check:".length)
+      : (p.text || "").split(/\s+/)[0] || "check";
+    const row = { tool, status: (p.status === "error" ? "error" : "ok") as "ok" | "error",
+                  text: p.text || "" };
+    const at = out.findIndex((c) => c.tool === tool);
+    if (at >= 0) out[at] = row; else out.push(row);
+  }
+  return out;
+}
+
 // 展开明细里的来源分组标题（步骤校验 / 结果校验）
 const SectionLabel = ({ text }: { text: string }) => (
   <Typography variant="caption" color="text.disabled"
@@ -48,8 +69,9 @@ const SectionLabel = ({ text }: { text: string }) => (
 // 仅当本轮有 verify/check/quality 任一信号时渲染，否则返回 null。
 export function VerifyBadge({ message, live = false }: { message: ChatMessage; live?: boolean }) {
   const verify = (message.progress || []).filter((p) => p.scope === "verify");
+  // checks 实时由 ChatView 赋值、刷新后为空 → 回退到从 progress 重建（数据一直在那）。
   // 检索命中是正常情形，不作为校验状态展示（仅保留失败/未命中等有意义的每步校验）
-  const checks = (message.checks || []).filter(
+  const checks = (message.checks || checksFromProgress(message.progress)).filter(
     (c) => !(c.tool === "search_memory" && c.status === "ok"));
   // quality 只在实时 SSE 时被 ChatView 赋值；刷新后从 progress 里的 scope="quality"
   // 条目重建（_emit_quality 把同一份 JSON 既推事件也写进 progress 列），否则质量分
