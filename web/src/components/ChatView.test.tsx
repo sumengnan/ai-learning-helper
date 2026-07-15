@@ -320,4 +320,63 @@ describe("ChatView", () => {
     await waitFor(() => expect((api as any).downloads.save)
       .toHaveBeenCalledWith("abc123", "报告.md"));
   });
+
+  // 开了校验门的轮次，交付前不显示文件：校验不过会重答，届时服务端会清掉本轮产物，
+  // 提前显示等于给用户一个马上失效的下载按钮。
+  const _dlStep = {
+    tool: "save_download", args: { filename: "报告.md" },
+    result: "已保存到下载区：报告.md（10 字节）。〔下载ID:abc123〕",
+  };
+
+  it("校验门轮次交付前不显示生成的文件", async () => {
+    render(<MemoryRouter><ChatView conversationId="c1" initial={[
+      { role: "user", content: "导出报告" },
+      { role: "assistant", content: "", status: "streaming", steps: [_dlStep],
+        progress: [{ scope: "verify", text: "校验中…", status: "running", key: "v0" }] },
+    ]} /></MemoryRouter>);
+    expect(screen.queryByRole("button", { name: /报告\.md/ })).toBeNull();
+    expect(screen.queryByText("生成的文件：")).toBeNull();
+  });
+
+  it("校验门轮次：工具已跑完但还没发校验事件时也不显示（否则会闪一下）", async () => {
+    // 服务端在轮次开头就发 scope=verify 信号，故此刻 progress 里已有它、文件仍被盖住
+    render(<MemoryRouter><ChatView conversationId="c1" initial={[
+      { role: "user", content: "导出报告" },
+      { role: "assistant", content: "", status: "streaming", steps: [_dlStep],
+        progress: [{ scope: "verify", text: "生成中…", status: "running", key: "g0" }] },
+    ]} /></MemoryRouter>);
+    expect(screen.queryByRole("button", { name: /报告\.md/ })).toBeNull();
+  });
+
+  it("校验通过交付后显示生成的文件", async () => {
+    render(<MemoryRouter><ChatView conversationId="c1" initial={[
+      { role: "user", content: "导出报告" },
+      { role: "assistant", content: "已导出。", status: "done", steps: [_dlStep],
+        progress: [{ scope: "verify", text: "校验通过", status: "ok", key: "v0" }] },
+    ]} /></MemoryRouter>);
+    expect(screen.getByRole("button", { name: /报告\.md/ })).toBeTruthy();
+  });
+
+  it("没开校验门时，生成中就显示文件（不改原有行为）", async () => {
+    render(<MemoryRouter><ChatView conversationId="c1" initial={[
+      { role: "user", content: "导出报告" },
+      { role: "assistant", content: "写着…", status: "streaming", steps: [_dlStep] },
+    ]} /></MemoryRouter>);
+    expect(screen.getByRole("button", { name: /报告\.md/ })).toBeTruthy();
+  });
+
+  it("被清理的产物不再渲染按钮（重答后旧文件已被服务端删掉）", async () => {
+    // 交付后 steps 里有两版：旧版标记已被 scope=purged 事件剔掉，只剩新版
+    render(<MemoryRouter><ChatView conversationId="c1" initial={[
+      { role: "user", content: "导出报告" },
+      { role: "assistant", content: "已导出。", status: "done", steps: [
+        { tool: "save_download", args: { filename: "旧版.md" },
+          result: "已保存到下载区：旧版.md（10 字节）。\n（该版本未通过校验，此产物已作废删除）" },
+        { tool: "save_download", args: { filename: "报告.md" },
+          result: "已保存到下载区：报告.md（10 字节）。〔下载ID:abc123〕" },
+      ] },
+    ]} /></MemoryRouter>);
+    expect(screen.getByRole("button", { name: /报告\.md/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /旧版\.md/ })).toBeNull();
+  });
 });

@@ -242,6 +242,21 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
     else if (e.type === "Progress" && e.data.scope === "quality") upd((a) => {
       try { a.quality = JSON.parse(e.data.text); } catch { /* 解析失败忽略，不显示质量分 */ }
     });
+    // 已清理的下载产物（scope=purged，text 为 id 数组 JSON）：校验不过重答时，服务端会把
+    // 被否那版生成的文件删掉。steps 是从 ToolFinished 攒的、仍带着〔下载ID:x〕，不剔掉就会
+    // 留一个指向已删文件的死按钮。特判、不入 progress 列。
+    else if (e.type === "Progress" && e.data.scope === "purged") upd((a) => {
+      let ids: string[] = [];
+      try { ids = JSON.parse(e.data.text); } catch { return; }
+      if (!Array.isArray(ids) || !ids.length || !a.steps) return;
+      a.steps = a.steps.map((s) => {
+        const hit = ids.find((id) => (s.result || "").includes(`〔下载ID:${id}〕`));
+        return hit
+          ? { ...s, result: (s.result || "").replace(`〔下载ID:${hit}〕`, "")
+              + "\n（该版本未通过校验，此产物已作废删除）" }
+          : s;
+      });
+    });
     else if (e.type === "Progress") upd((a) => { (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text, status: e.data.status, key: e.data.key, agent: e.data.agent }); });
     else if (e.type === "RunStarted") runIdRef.current = e.data.run_id;
     else if (e.type === "ApprovalRequired") setApproval({ approvalId: e.data.approval_id, command: e.data.command, reason: e.data.reason });
@@ -486,6 +501,12 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
               {m.role === "assistant" && (() => {
                 const files = generatedFiles(m.steps);
                 if (!files.length) return null;
+                // 开了校验门的轮次，交付前一律不显示：校验不过会带反馈重答，届时本轮产物会被
+                // 服务端清理掉，提前显示等于给用户一个马上会失效的下载按钮。服务端在轮次开头
+                // 就下发 scope=verify 信号，故整个生成/校验/重答期间都能盖住，不会闪一下。
+                const gating = m.status === "streaming"
+                  && (m.progress || []).some((p) => p.scope === "verify");
+                if (gating) return null;
                 return (
                   <Box sx={{ mt: 1, display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center" }}>
                     <Typography variant="caption" color="text.secondary">生成的文件：</Typography>
