@@ -21,6 +21,8 @@ from datetime import datetime, timedelta, timezone
 
 from harness.usage import tiered_cost
 
+from .verify import failed_layers_zh
+
 # 原始工具名 → 面向学习者的「能力」分组（图标, 标签, 归入的工具名集合）。
 # 未列出的工具归入「其他能力」。顺序即展示顺序的兜底（实际按调用次数倒排）。
 _ABILITY_GROUPS: list[tuple[str, str, set[str]]] = [
@@ -106,7 +108,8 @@ class StatsService:
         return {
             "range_days": days,
             "learn": self._learn_section(user_id, agg, series, app_counts),
-            "ops": self._ops_section(agg, series, app_counts),
+            "ops": self._ops_section(agg, series, app_counts,
+                                     self._gate_stats(user_id, cutoff.isoformat())),
         }
 
     # ---------- 轨迹聚合 ----------
@@ -307,6 +310,60 @@ class StatsService:
             "memory": self._count_user_memories(user_id),
         }
 
+    def _gate_stats(self, user_id: str | None, cutoff_iso: str) -> dict:
+        """交付门重答统计，读 conversation_messages.verify 列。
+
+        与 ops.totals.retries 是两回事：那个统计的是 LLM 网络重试（超时/限流后重发请求），
+        与交付门无关。这里统计的是「答案没过校验、带反馈重答」的次数。
+        """
+        empty = {"turns": 0, "retries": 0, "avg_retries": 0.0, "degraded": 0,
+                 "degraded_rate": 0.0, "first_pass_rate": 0.0, "gate_errors": 0,
+                 "layer_failures": []}
+        if self._app is None or not user_id:
+            return empty
+        try:
+            rows = self._app.execute(
+                "SELECT verify FROM conversation_messages"
+                " WHERE verify IS NOT NULL AND created_at >= ? AND conv_id IN"
+                " (SELECT id FROM conversations WHERE user_id=?)",
+                (cutoff_iso, user_id)).fetchall()
+        except sqlite3.Error:
+            return empty
+
+        turns = retries = degraded = first_pass = gate_errors = 0
+        layers: Counter = Counter()
+        for (raw,) in rows:
+            try:
+                vt = json.loads(raw)
+            except (TypeError, ValueError):
+                continue        # 脏数据不该让整个统计页 500
+            turns += 1
+            retries += vt.get("retries", 0) or 0
+            if vt.get("degraded"):
+                degraded += 1
+            if vt.get("gate_error"):   # 校验器故障跳过校验的轮数：这些「通过」并非真通过
+                gate_errors += 1
+            if (vt.get("attempts") or 0) == 1 and vt.get("ok"):
+                first_pass += 1
+            for h in vt.get("history") or []:
+                for name in h.get("failed") or []:
+                    layers[name] += 1
+        if turns == 0:
+            return empty
+        return {
+            "turns": turns,
+            "retries": retries,
+            "avg_retries": round(retries / turns, 3),
+            "degraded": degraded,
+            "degraded_rate": round(degraded / turns, 3),
+            "first_pass_rate": round(first_pass / turns, 3),
+            # 因校验器自身故障而跳过校验的轮数（fail-open）：>0 说明有回答其实没被真校验过
+            "gate_errors": gate_errors,
+            # 哪层最爱拦：按次数降序，用于判断该调哪个分项开关/阈值
+            "layer_failures": [{"layer": k, "zh": failed_layers_zh([k]), "count": v}
+                               for k, v in layers.most_common()],
+        }
+
     def _user_conv_ids(self, user_id: str | None) -> list[str]:
         """该用户的全部会话 id（对话记忆按 conv_id 归属，用它做用户隔离）。"""
         if self._app is None or not user_id:
@@ -417,7 +474,7 @@ class StatsService:
             "activity": series,
         }
 
-    def _ops_section(self, agg, series, app_counts) -> dict:
+    def _ops_section(self, agg, series, app_counts, gate) -> dict:
         return {
             "totals": {
                 "runs": agg["runs_started"],
@@ -432,6 +489,8 @@ class StatsService:
                 "p95_latency_ms": agg["p95_latency_ms"],
                 "avg_run_duration_ms": agg["avg_run_duration_ms"],
                 "total_run_duration_ms": agg["total_run_duration_ms"],
+                # 注意：这是 LLM 网络重试（超时/限流后重发请求），与交付门重答无关；
+                # 后者见下面的 gate.retries。两者口径完全不同，别混着看。
                 "retries": agg["retries"],
                 "cost_usd": agg["cost_usd"],
                 "cost_currency": self._currency,
@@ -441,4 +500,6 @@ class StatsService:
             "daily": series,
             "tools": self._tools_list(agg["tool_counts"], agg["tool_errors"]),
             "steps_histogram": self._steps_histogram(agg["steps_per_run"]),
+            # 交付门：答案没过校验带反馈重答的统计（读 conversation_messages.verify 列）
+            "gate": gate,
         }

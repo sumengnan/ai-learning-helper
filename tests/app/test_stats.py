@@ -54,12 +54,12 @@ def _app_conn():
         "CREATE TABLE questions(id TEXT, user_id TEXT);"
         "CREATE TABLE wrong_answers(id TEXT, user_id TEXT);"
         "CREATE TABLE conversations(id TEXT, user_id TEXT, title TEXT, created_at TEXT);"
-        "CREATE TABLE conversation_messages(conv_id TEXT, seq INTEGER, created_at TEXT);"
+        "CREATE TABLE conversation_messages(conv_id TEXT, seq INTEGER, created_at TEXT, verify TEXT);"
         "CREATE TABLE downloads(id TEXT, user_id TEXT, filename TEXT, size INTEGER, "
         "content_type TEXT, created_at TEXT, seq INTEGER);")
     conn.executemany("INSERT INTO documents VALUES (?,?)", [("d1", "u"), ("d2", "u")])
     conn.execute("INSERT INTO conversations VALUES ('cv1','u','二叉树','2026-07-10T09:00:00+00:00')")
-    conn.executemany("INSERT INTO conversation_messages VALUES (?,?,?)",
+    conn.executemany("INSERT INTO conversation_messages(conv_id, seq, created_at) VALUES (?,?,?)",
                      [("cv1", 0, "2026-07-11T08:00:00+00:00"), ("cv1", 1, "2026-07-11T08:05:00+00:00")])
     conn.execute("INSERT INTO downloads(id,user_id,filename,size,content_type,created_at,seq) "
                  "VALUES ('dl1','u','提纲.md',12,'text/markdown','2026-07-11T07:00:00+00:00',1)")
@@ -280,3 +280,98 @@ def test_empty_databases_do_not_crash():
     assert ov["learn"]["assets"]["memory"] == 0
     assert ov["learn"]["last_conversation"] is None
     assert ov["ops"]["tools"] == []
+
+
+# ---------- 交付门重答统计（读 conversation_messages.verify 列）----------
+
+def _vt(attempts, retries, ok, degraded, history):
+    return json.dumps({"attempts": attempts, "retries": retries, "ok": ok,
+                       "degraded": degraded, "history": history}, ensure_ascii=False)
+
+
+def _app_conn_with_gate(rows):
+    """rows: [(created_at, verify_json)]，都挂在用户 u 的会话 cv1 下。"""
+    conn = _app_conn()
+    conn.executemany(
+        "INSERT INTO conversation_messages(conv_id, seq, created_at, verify) "
+        "VALUES ('cv1', ?, ?, ?)",
+        [(10 + i, ts, v) for i, (ts, v) in enumerate(rows)])
+    conn.commit()
+    return conn
+
+
+def _gate_svc(rows):
+    tc = _traj_conn(); _seed_traj(tc)
+    return StatsService(trajectory_conn=tc, app_conn=_app_conn_with_gate(rows),
+                        memory_conn=_mem_conn(), now=lambda: FIXED_NOW)
+
+
+_IN_RANGE = "2026-07-11T08:00:00+00:00"
+
+
+def test_gate_stats_aggregates_retries_and_layers():
+    svc = _gate_svc([
+        # 一次过
+        (_IN_RANGE, _vt(1, 0, True, False, [{"attempt": 1, "ok": True, "failed": []}])),
+        # 重答一次后过：judge + grounding 两层各记一次
+        (_IN_RANGE, _vt(2, 1, True, False, [
+            {"attempt": 1, "ok": False, "failed": ["judge", "grounding"]},
+            {"attempt": 2, "ok": True, "failed": []}])),
+        # 用尽次数降级交付
+        (_IN_RANGE, _vt(2, 1, False, True, [
+            {"attempt": 1, "ok": False, "failed": ["judge"]},
+            {"attempt": 2, "ok": False, "failed": ["judge"]}])),
+    ])
+    g = svc.overview("u")["ops"]["gate"]
+    assert g["turns"] == 3 and g["retries"] == 2
+    assert g["avg_retries"] == round(2 / 3, 3)
+    assert g["degraded"] == 1 and g["degraded_rate"] == round(1 / 3, 3)
+    assert g["first_pass_rate"] == round(1 / 3, 3)     # 仅第 1 条一次过
+    layers = {x["layer"]: x["count"] for x in g["layer_failures"]}
+    assert layers == {"judge": 3, "grounding": 1}      # 哪层最爱拦
+    assert g["layer_failures"][0]["layer"] == "judge"  # 按次数降序
+    assert g["layer_failures"][0]["zh"]                # 带中文层名，供前端直接显示
+
+
+def test_gate_stats_is_separate_from_llm_network_retries():
+    # ops.totals.retries 统计的是 LLM 网络重试，与交付门重答是两个口径，别混
+    svc = _gate_svc([(_IN_RANGE, _vt(3, 2, True, False, [
+        {"attempt": 1, "ok": False, "failed": ["facts"]},
+        {"attempt": 2, "ok": False, "failed": ["facts"]},
+        {"attempt": 3, "ok": True, "failed": []}]))])
+    ops = svc.overview("u")["ops"]
+    # 两个数字同时不同值，正是「口径不同」的证明：
+    assert ops["gate"]["retries"] == 2          # 交付门重答 2 次（来自 verify 列）
+    assert ops["totals"]["retries"] == 1        # LLM 网络重试 1 次（来自轨迹 ModelUsage.attempts）
+
+
+def test_gate_stats_empty_when_no_verify_rows():
+    svc = _gate_svc([])
+    g = svc.overview("u")["ops"]["gate"]
+    assert g["turns"] == 0 and g["avg_retries"] == 0.0 and g["layer_failures"] == []
+
+
+def test_gate_stats_excludes_other_users_and_out_of_range():
+    conn = _app_conn_with_gate([(_IN_RANGE, _vt(2, 1, True, False, []))])
+    # 别的用户的会话
+    conn.execute("INSERT INTO conversations VALUES ('cvX','other','x','2026-07-10T09:00:00+00:00')")
+    conn.execute("INSERT INTO conversation_messages(conv_id, seq, created_at, verify) "
+                 "VALUES ('cvX', 0, ?, ?)", (_IN_RANGE, _vt(5, 4, True, False, [])))
+    # 本人但超出时间窗（默认 14 天）
+    conn.execute("INSERT INTO conversation_messages(conv_id, seq, created_at, verify) "
+                 "VALUES ('cv1', 99, '2020-01-01T00:00:00+00:00', ?)",
+                 (_vt(9, 8, True, False, []),))
+    conn.commit()
+    tc = _traj_conn(); _seed_traj(tc)
+    svc = StatsService(trajectory_conn=tc, app_conn=conn, memory_conn=_mem_conn(),
+                       now=lambda: FIXED_NOW)
+    g = svc.overview("u")["ops"]["gate"]
+    assert g["turns"] == 1 and g["retries"] == 1      # 只算本人、窗口内
+
+
+def test_gate_stats_survives_corrupt_json():
+    # 脏数据不该让整个统计页 500
+    svc = _gate_svc([(_IN_RANGE, "{不是合法 JSON"),
+                     (_IN_RANGE, _vt(2, 1, True, False, []))])
+    g = svc.overview("u")["ops"]["gate"]
+    assert g["turns"] == 1 and g["retries"] == 1      # 跳过坏行，好行照常算
