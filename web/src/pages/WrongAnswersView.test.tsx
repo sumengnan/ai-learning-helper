@@ -18,6 +18,7 @@ vi.mock("../api/client", () => ({
 const W = {
   id: "w1",
   user_answer: 0,
+  created_at: new Date(Date.now() - 3 * 86400 * 1000).toISOString(),   // 3 天前
   snapshot: {
     type: "single", stem: "光合作用在哪?",
     options: ["线粒体", "叶绿体"], answer: 1, explanation: "叶绿体是光合场所",
@@ -40,6 +41,19 @@ describe("WrongAnswersView", () => {
     const exact = (t: string) => (_: string, el: Element | null) => el?.textContent === t;
     expect(screen.getAllByText(exact("我的答案：A")).length).toBeGreaterThan(0);   // 我的作答用字母 A
     expect(screen.getAllByText(exact("正确答案：B")).length).toBeGreaterThan(0);   // 正确答案用字母 B
+  });
+
+  it("卡片显示入集时间（相对时间）", async () => {
+    render(<MemoryRouter><WrongAnswersView /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText("3 天前")).toBeTruthy());
+  });
+
+  it("详情弹框显示答错时间", async () => {
+    render(<MemoryRouter><WrongAnswersView /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText(/光合作用在哪/)).toBeTruthy());
+    fireEvent.click(screen.getByText(/光合作用在哪/));
+    await waitFor(() => expect(screen.getByText("错题详情")).toBeTruthy());
+    expect(screen.getByText("3 天前答错")).toBeTruthy();
   });
 
   it("没有批量删除按钮", async () => {

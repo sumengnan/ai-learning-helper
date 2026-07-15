@@ -157,6 +157,25 @@ def _side_effect_ids(steps: list[dict]) -> dict[str, list[str]]:
     return out
 
 
+def _drop_purged_marks(steps: list[dict], fx: dict[str, list[str]]) -> None:
+    """把已清理产物的机读标记从步骤结果里抹掉，并注明作废原因。
+
+    前端据 save_download 结果里的〔下载ID:x〕渲染下载按钮，而 steps 累积了本轮所有尝试
+    （含被否那些）。产物删了标记还留着 → 用户会看到一个指向已删文件的死按钮；重答后
+    尤其明显：新旧两版的按钮并排列出，点旧的必然 404。
+    """
+    marks = [f"〔下载ID:{i}〕" for i in fx["download"]]
+    marks += [f"〔知识ID:{i}〕" for i in fx["knowledge"]]
+    for s in steps or []:
+        r = s.get("result") or ""
+        hit = [m for m in marks if m in r]
+        if not hit:
+            continue
+        for m in hit:
+            r = r.replace(m, "")
+        s["result"] = r.rstrip() + "\n（该版本未通过校验，此产物已作废删除）"
+
+
 def emit_gate_span(tracer, vt: dict, t0_ns: int) -> None:
     """把交付门判定补发成一个 answer_gate span（每次尝试一个 verify.attempt event）。
 
@@ -471,6 +490,16 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                  "status": ev.status, "key": ev.key, "agent": ev.agent})
                 return ev
 
+            def _emit_purged(ids: list[str]):
+                """告诉在途客户端哪些下载产物已被清理（借 Progress 通道，scope=purged）。
+
+                前端在途的 steps 是从 ToolFinished 事件攒的，早已拿到〔下载ID:x〕；服务端
+                _drop_purged_marks 只改了落库那份，不发这条的话，在途界面会留着一个指向
+                已删文件的死按钮（刷新才好）。与 sources 一样特判、不入 progress 列。
+                """
+                if ids:
+                    yield Progress("purged", json.dumps(ids, ensure_ascii=False))
+
             def _emit_quality(tscore):
                 # 轨迹 judge 三层质量分 → 前端常驻徽章（scope=quality，text 为 JSON）
                 payload = json.dumps(
@@ -528,7 +557,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     # 未通过轮生成的副作用产物（下载/知识/题目），交付/降级时清理掉
                     stale_fx: dict[str, list[str]] = {"download": [], "knowledge": [], "questions": []}
 
-                    def _purge_side_effects(fx):
+                    def _purge_side_effects(fx) -> list[str]:
+                        """删掉未通过轮的产物，返回被删的下载 id（供告知在途客户端）。"""
                         _dl = getattr(harness, "download_store", None)
                         for _did in fx["download"]:
                             try:
@@ -547,6 +577,18 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                 question_store.delete_many(user_id, fx["questions"])
                             except Exception:
                                 pass
+                        # 产物没了，落库的步骤结果里那些机读标记也不能留 —— 否则前端照样
+                        # 渲染出下载按钮，点开是已删的文件（steps 累积了本轮全部尝试）
+                        _drop_purged_marks(steps, fx)
+                        return list(fx["download"])
+
+                    # 告诉在途客户端「本轮开了校验门」。必须赶在 agent 跑之前发：工具执行
+                    # 先于首个「校验中…」，前端要据此在交付前一直不显示生成的文件——未通过会
+                    # 重答、届时这些产物被 _purge_side_effects 清掉，提前显示等于给用户一个
+                    # 马上失效的下载按钮。
+                    # 刻意不落库（不走 _emit_verify）：刷新后由已存的终态记录决定展示即可；
+                    # 落库反而会在用户中途停止时留下一条永远转圈的「生成中…」。
+                    yield Progress("verify", "生成中…", status="running", key=uuid4().hex)
 
                     for attempt in range(max_attempts):
                         msg = model_message if corrective is None else corrective
@@ -571,9 +613,13 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         else:
                             stoken = set_sandbox_conv(req.conversation_id)
                             try:
-                                verdict = await verifier.verify(
-                                    question, draft, collect["grounding"], registry,
-                                    steps=collect["steps"])
+                                # 记源暂停：校验器跑答案里的代码块、核对引用链接，用的是同一个
+                                # 已包记源层的 registry，否则这些后台调用会冒充成模型的「参考
+                                # 来源」——用户从没看见 AI 执行过它们。
+                                with source_sink.paused():
+                                    verdict = await verifier.verify(
+                                        question, draft, collect["grounding"], registry,
+                                        steps=collect["steps"])
                             except Exception as e:   # noqa: BLE001
                                 # 校验器自身故障（非回答质量问题）→ fail-open：跳过校验照常交付。
                                 # 交付门是质量增强，它坏了不该连累用户丢掉一份好答案；且门本就
@@ -622,7 +668,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             yield _emit_verify("校验通过", status="ok", key=ekey)
                             delivered = draft
                             delivered_sources = source_sink.snapshot()
-                            _purge_side_effects(stale_fx)   # 交付本轮，删掉之前失败轮的副作用产物
+                            # 交付本轮，删掉之前失败轮的副作用产物
+                            for _ev in _emit_purged(_purge_side_effects(stale_fx)):
+                                yield _ev
                             break
                         # error 事件的 text 携带完整原因（critique），供前端展开显示
                         # error 事件 text：中文层名 + 完整原因，供前端展示「哪层没过 + 为什么」
@@ -638,7 +686,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             if verdict.summary:
                                 delivered = (f"⚠️ 此回答未通过自动校验（{verdict.summary}），"
                                              f"请谨慎参考。\n\n" + delivered)
-                            _purge_side_effects(stale_fx)   # 降级交付本轮，清理之前失败轮的副作用产物
+                            # 降级交付本轮，清理之前失败轮的副作用产物
+                            for _ev in _emit_purged(_purge_side_effects(stale_fx)):
+                                yield _ev
                             break
                         for _k in stale_fx:   # 本轮未通过、将重答，其副作用产物作废待清理
                             stale_fx[_k] += cur_fx[_k]

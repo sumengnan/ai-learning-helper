@@ -55,12 +55,17 @@ def _app_conn():
         "CREATE TABLE wrong_answers(id TEXT, user_id TEXT);"
         "CREATE TABLE conversations(id TEXT, user_id TEXT, title TEXT, created_at TEXT);"
         "CREATE TABLE conversation_messages(conv_id TEXT, seq INTEGER, created_at TEXT, verify TEXT);"
+        "CREATE TABLE conversation_runs(conv_id TEXT, run_id TEXT, created_at TEXT);"
         "CREATE TABLE downloads(id TEXT, user_id TEXT, filename TEXT, size INTEGER, "
         "content_type TEXT, created_at TEXT, seq INTEGER);")
     conn.executemany("INSERT INTO documents VALUES (?,?)", [("d1", "u"), ("d2", "u")])
     conn.execute("INSERT INTO conversations VALUES ('cv1','u','二叉树','2026-07-10T09:00:00+00:00')")
     conn.executemany("INSERT INTO conversation_messages(conv_id, seq, created_at) VALUES (?,?,?)",
                      [("cv1", 0, "2026-07-11T08:00:00+00:00"), ("cv1", 1, "2026-07-11T08:05:00+00:00")])
+    # 轨迹里的 r1/r2 归属用户 u 的会话 cv1 —— learn 按 user 隔离靠这条链反查
+    conn.executemany("INSERT INTO conversation_runs VALUES (?,?,?)",
+                     [("cv1", "r1", "2026-07-11T10:00:00+00:00"),
+                      ("cv1", "r2", "2026-07-11T10:00:00+00:00")])
     conn.execute("INSERT INTO downloads(id,user_id,filename,size,content_type,created_at,seq) "
                  "VALUES ('dl1','u','提纲.md',12,'text/markdown','2026-07-11T07:00:00+00:00',1)")
     conn.commit()
@@ -480,3 +485,71 @@ def test_gate_stats_survives_corrupt_json():
                      (_IN_RANGE, _vt(2, 1, True, False, []))])
     g = svc.overview("u")["ops"]["gate"]
     assert g["turns"] == 1 and g["retries"] == 1      # 跳过坏行，好行照常算
+
+
+# ---------- learn 按用户隔离（ops 仍全局）----------
+
+def _svc_two_users():
+    """在 u 的 r1/r2 之外，再造一个别的用户 other 的 r9（3 步、http_request×1、200 tok）。"""
+    tc = _traj_conn(); _seed_traj(tc)
+    _ev(tc, "r9", 0, "RunStarted", {"run_id": "r9"})
+    _ev(tc, "r9", 1, "StepStarted", {"step": 0})
+    _ev(tc, "r9", 2, "ModelUsage",
+        {"usage": {"prompt": 120, "completion": 80, "total": 200}, "cost_usd": 0.05,
+         "attempts": 1, "latency_ms": 500.0})
+    _ev(tc, "r9", 3, "ToolStarted",
+        {"tool_call": {"id": "c9", "name": "http_request", "arguments": {}}})
+    _ev(tc, "r9", 4, "ToolFinished",
+        {"result": {"tool_call_id": "c9", "content": "ok", "is_error": False}})
+    _ev(tc, "r9", 5, "RunFinished", {"message": {"role": "assistant", "content": "done"}})
+    tc.commit()
+
+    ac = _app_conn()
+    ac.execute("INSERT INTO conversations VALUES ('cvX','other','别人的','2026-07-10T09:00:00+00:00')")
+    ac.execute("INSERT INTO conversation_runs VALUES ('cvX','r9','2026-07-11T10:00:00+00:00')")
+    ac.commit()
+    return StatsService(trajectory_conn=tc, app_conn=ac, memory_conn=_mem_conn(),
+                        now=lambda: FIXED_NOW)
+
+
+def test_learn_abilities_exclude_other_users():
+    # 别人跑的 http_request 不该算进我的「它用过的能力」
+    learn = _svc_two_users().overview("u")["learn"]
+    abilities = {a["label"]: a["count"] for a in learn["abilities"]}
+    assert abilities["联网查资料"] == 1        # 只有 u 自己的 r1，不含 other 的 r9
+
+
+def test_learn_effort_excludes_other_users():
+    # 别人烧的 token / 跑的次数不该算进我的「它为你花的力气」
+    learn = _svc_two_users().overview("u")["learn"]
+    assert learn["effort"]["runs"] == 2            # r1 + r2，不含 r9
+    assert learn["effort"]["total_tokens"] == 150  # 100 + 50，不含 r9 的 200
+
+
+def test_ops_stays_global_across_users():
+    # 工程台是运维口径：同机器上别人的运行也是运维对象，不隔离
+    t = _svc_two_users().overview("u")["ops"]["totals"]
+    assert t["runs"] == 3 and t["total_tokens"] == 350     # 含 other 的 r9
+
+
+def test_other_user_sees_only_own_runs():
+    learn = _svc_two_users().overview("other")["learn"]
+    assert learn["effort"]["runs"] == 1 and learn["effort"]["total_tokens"] == 200
+    abilities = {a["label"]: a["count"] for a in learn["abilities"]}
+    assert abilities.get("运行代码") is None      # r2 的 run_shell 是 u 的，不该出现
+
+
+def test_learn_empty_for_user_without_runs():
+    tc = _traj_conn(); _seed_traj(tc)
+    svc = StatsService(trajectory_conn=tc, app_conn=_app_conn(), memory_conn=_mem_conn(),
+                       now=lambda: FIXED_NOW)
+    learn = svc.overview("查无此人")["learn"]
+    assert learn["effort"]["runs"] == 0 and learn["abilities"] == []
+
+
+def test_learn_activity_series_is_user_scoped():
+    # activity 同属 learn，与两块一致地按 user 隔离（否则 Sparkline 会画上别人的量）
+    svc = _svc_two_users()
+    mine = sum(d["runs"] for d in svc.overview("u")["learn"]["activity"])
+    theirs = sum(d["runs"] for d in svc.overview("other")["learn"]["activity"])
+    assert mine == 2 and theirs == 1

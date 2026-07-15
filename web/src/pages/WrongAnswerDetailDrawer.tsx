@@ -5,10 +5,12 @@ import { alpha } from "@mui/material/styles";
 import CloseIcon from "@mui/icons-material/Close";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
+import { fromNow } from "./statsShared";
 
 export interface WrongItem {
   id: string;
   user_answer: unknown;
+  created_at: string;      // 答错并入集的时间（后端一直有返回）
   snapshot: {
     type: string;
     stem: string;
@@ -82,6 +84,9 @@ export function WrongAnswerDetailDrawer({ item, onClose }: {
 
             <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1 }}>
               <Chip size="small" color={typeColor(type)} label={TYPE_LABEL[type] ?? type} />
+              <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                {fromNow(item.created_at)}答错
+              </Typography>
             </Stack>
             <Divider />
 

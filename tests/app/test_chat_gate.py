@@ -379,3 +379,217 @@ def test_healthy_verifier_has_no_gate_error(make_mock, text_turn):
     cid, _ = _run_chat(client, h, "问个问题")
     vt = [m for m in store.ui_messages(cid) if m["role"] == "assistant"][-1]["verify"]
     assert vt["gate_error"] is None      # 正常路径不该冒出噪音
+
+
+# ---------- 未交付的产物不该提前露出 / 重答后要清掉 ----------
+
+def test_gate_signals_before_agent_runs(make_mock, text_turn):
+    """校验门开启时，首个 verify 信号须早于工具执行。
+
+    前端据此在交付前一直盖住「生成的文件」——工具执行先于「校验中…」，若等到那时才发信号，
+    文件按钮会先冒出来再消失，闪一下。
+    """
+    client, _ = _client(make_mock, [text_turn("答案")], _StubVerifier([Verdict(ok=True)]))
+    h = _auth(client)
+    _cid, events = _run_chat(client, h, "问")
+    kinds = [e["type"] if e["type"] != "Progress" else f"Progress:{e['data']['scope']}"
+             for e in events]
+    assert "Progress:verify" in kinds
+    # 首个 verify 信号必须是 running（在途标记），且排在所有正文/终态事件之前
+    first_verify = kinds.index("Progress:verify")
+    for term in ("RunFinished", "TextDelta"):
+        if term in kinds:
+            assert first_verify < kinds.index(term), f"verify 信号应早于 {term}"
+    assert _verify_progress(events)[0] == "生成中…"
+
+
+class _FakeDownloadStore:
+    """内存版下载库：记录建/删。用真的 SaveDownloadTool 打它 —— create_app 会用
+    harness.download_store 重建该工具，注入桩工具反而会被覆盖掉。"""
+    def __init__(self):
+        self.created: list[str] = []
+        self.deleted: list[str] = []
+        self._n = 0
+
+    def create(self, user_id, filename, data, content_type):
+        self._n += 1
+        did = f"dl{self._n}"
+        self.created.append(did)
+        return {"id": did, "filename": filename, "size": len(data),
+                "content_type": content_type}
+
+    def delete(self, user_id, did):
+        self.deleted.append(did)
+        return True
+
+
+def _client_with_downloads(make_mock, turns, verifier, dl_store, **cfg_kw):
+    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,
+                    enable_answer_gate=True, **cfg_kw)
+    hn = _harness(make_mock, turns)
+    hn.download_store = dl_store
+    store = ConversationStore(":memory:")
+    app = create_app(config=cfg, harness=hn, store=store,
+                     doc_store=DocumentStore(":memory:"), verifier=verifier)
+    return TestClient(app), store
+
+
+def _dl_turns(tool_turn, text_turn):
+    """两版：各生成一个文件 + 一段正文。"""
+    return [tool_turn("save_download", '{"filename":"a.md","content":"x"}', call_id="c1"),
+            text_turn("第一版"),
+            tool_turn("save_download", '{"filename":"b.md","content":"y"}', call_id="c2"),
+            text_turn("第二版")]
+
+
+def test_retry_purges_previous_download(make_mock, tool_turn, text_turn):
+    """重答后，被否那版生成的文件必须删掉、交付那版的必须留下。
+
+    否则用户的下载列表里会多出一个对应着「已作废回答」的文件。
+    """
+    dl = _FakeDownloadStore()
+    verifier = _StubVerifier([Verdict(ok=False, failed=["judge"], critique="不行", summary="judge"),
+                              Verdict(ok=True)])
+    client, _ = _client_with_downloads(make_mock, _dl_turns(tool_turn, text_turn), verifier, dl,
+                                       answer_gate_max_retries=1)
+    h = _auth(client)
+    _cid, events = _run_chat(client, h, "生成个文件")
+    assert _final(events) == "第二版"
+    assert dl.created == ["dl1", "dl2"]          # 两版各建了一个
+    assert dl.deleted == ["dl1"], "被否那版的文件该删"
+
+
+def test_pass_first_try_keeps_download(make_mock, tool_turn, text_turn):
+    """一次就过 → 不该误删本轮产物。"""
+    dl = _FakeDownloadStore()
+    turns = [tool_turn("save_download", '{"filename":"a.md","content":"x"}', call_id="c1"),
+             text_turn("答案")]
+    client, _ = _client_with_downloads(make_mock, turns, _StubVerifier([Verdict(ok=True)]), dl)
+    h = _auth(client)
+    _cid, events = _run_chat(client, h, "生成个文件")
+    assert _final(events) == "答案"
+    assert dl.created == ["dl1"] and dl.deleted == []
+
+
+def test_degraded_delivery_keeps_last_download(make_mock, tool_turn, text_turn):
+    """用尽重答次数 → 降级交付最后一版：那版的文件要留给用户，之前被否的要删。"""
+    dl = _FakeDownloadStore()
+    verifier = _StubVerifier([Verdict(ok=False, failed=["judge"], critique="不行", summary="judge")])
+    client, _ = _client_with_downloads(make_mock, _dl_turns(tool_turn, text_turn), verifier, dl,
+                                       answer_gate_max_retries=1)
+    h = _auth(client)
+    _cid, _events = _run_chat(client, h, "生成个文件")
+    assert dl.deleted == ["dl1"], "只删被否那版；降级交付的那版要留"
+
+
+def _ui_steps(store, cid):
+    msgs = store.ui_messages(cid)
+    return [m["steps"] for m in msgs if m["role"] == "assistant"][-1] or []
+
+
+def test_retry_drops_purged_download_mark_from_steps(make_mock, tool_turn, text_turn):
+    """被否那版的文件删了，落库步骤里的〔下载ID:x〕标记也必须抹掉。
+
+    前端据这个标记渲染下载按钮、且 steps 累积了本轮所有尝试；留着标记 → 重答后并排出现
+    新旧两个按钮，点旧的必然 404（对应文件已被 _purge_side_effects 删掉）。
+    """
+    dl = _FakeDownloadStore()
+    verifier = _StubVerifier([Verdict(ok=False, failed=["judge"], critique="不行", summary="judge"),
+                              Verdict(ok=True)])
+    client, store = _client_with_downloads(make_mock, _dl_turns(tool_turn, text_turn), verifier, dl,
+                                           answer_gate_max_retries=1)
+    h = _auth(client)
+    cid, _ = _run_chat(client, h, "生成个文件")
+    assert dl.deleted == ["dl1"]
+
+    marks = [s.get("result") or "" for s in _ui_steps(store, cid)]
+    joined = "\n".join(marks)
+    assert "〔下载ID:dl1〕" not in joined, "被删文件的标记必须抹掉，否则前端渲染出死按钮"
+    assert "〔下载ID:dl2〕" in joined, "交付那版的标记要留着，用户得能下载"
+    assert "已作废" in joined, "抹掉标记的同时要说明原因，别让轨迹变得莫名其妙"
+
+
+def _purged_events(events):
+    return [json.loads(e["data"]["text"]) for e in events
+            if e["type"] == "Progress" and e["data"]["scope"] == "purged"]
+
+
+def test_retry_tells_client_which_downloads_were_purged(make_mock, tool_turn, text_turn):
+    """服务端得把「删了哪些下载」推给在途客户端。
+
+    前端在途的 steps 是从 ToolFinished 攒的、早拿到了〔下载ID:x〕；只改落库那份的话，
+    在途界面会留一个指向已删文件的死按钮（要刷新才好）—— 而在途正是用户主要看的路径。
+    """
+    dl = _FakeDownloadStore()
+    verifier = _StubVerifier([Verdict(ok=False, failed=["judge"], critique="不行", summary="judge"),
+                              Verdict(ok=True)])
+    client, _ = _client_with_downloads(make_mock, _dl_turns(tool_turn, text_turn), verifier, dl,
+                                       answer_gate_max_retries=1)
+    h = _auth(client)
+    _cid, events = _run_chat(client, h, "生成个文件")
+    assert _purged_events(events) == [["dl1"]], "被删的下载 id 要推给在途客户端"
+
+
+def test_no_purge_event_when_nothing_purged(make_mock, tool_turn, text_turn):
+    """一次就过 → 没东西可删 → 不发噪音事件。"""
+    dl = _FakeDownloadStore()
+    turns = [tool_turn("save_download", '{"filename":"a.md","content":"x"}', call_id="c1"),
+             text_turn("答案")]
+    client, _ = _client_with_downloads(make_mock, turns, _StubVerifier([Verdict(ok=True)]), dl)
+    h = _auth(client)
+    _cid, events = _run_chat(client, h, "生成个文件")
+    assert _purged_events(events) == []
+# ---- 交付门内部跑的代码不该出现在用户可见的「参考来源」里 ----
+
+class _CodeRunningVerifier:
+    """模拟 gate_check_code：从传入的 registry 取 run_python 跑答案里的代码块。"""
+    def __init__(self):
+        self.ran = False
+
+    async def verify(self, question, answer, grounding, registry, steps=None):
+        tool = registry.get("run_python")
+        if tool is not None:
+            await tool.run(tool.Params(code="print(6*7)"))
+            self.ran = True
+        return Verdict(ok=True)
+
+
+def _harness_with_py(make_mock, turns):
+    from pydantic import BaseModel
+    from harness.tools.base import Tool
+
+    class _Py(Tool):
+        name = "run_python"
+        description = "跑 python"
+
+        class Params(BaseModel):
+            code: str
+
+        async def run(self, params):
+            return "stdout:\n42\n(exit 0)"
+
+    reg = ToolRegistry(); reg.register(_Py())
+    traj = TrajectoryStore(":memory:")
+    return Harness(client=make_mock(turns), registry=reg,
+                   checkpoint_store=CheckpointStore(":memory:"),
+                   trajectory_store=traj, sink=TrajectorySink(traj), system_prompt="你是助手")
+
+
+def test_gate_code_execution_not_credited_as_source(make_mock, text_turn):
+    verifier = _CodeRunningVerifier()
+    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,
+                    enable_answer_gate=True)
+    store = ConversationStore(":memory:")
+    app = create_app(config=cfg, harness=_harness_with_py(make_mock, [text_turn("答案正文")]),
+                     store=store, doc_store=DocumentStore(":memory:"), verifier=verifier)
+    client = TestClient(app)
+    h = _auth(client)
+    cid, events = _run_chat(client, h, "问个问题")
+
+    assert verifier.ran is True                       # 交付门确实跑了代码
+    msg = [m for m in store.ui_messages(cid) if m["role"] == "assistant"][-1]
+    # 用户从没看见 AI 执行 python，来源里也不该冒出来
+    assert not (msg["sources"] or []), f"交付门内部调用泄漏进了参考来源：{msg['sources']}"
+    src_events = [e for e in events if e["type"] == "Progress"
+                  and e["data"].get("scope") == "sources"]
+    assert not src_events                             # SSE 也不该推

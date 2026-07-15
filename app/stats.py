@@ -5,11 +5,14 @@
 （app.db / memory.db）聚合成首页需要的指标 dict。纯读、无副作用、不碰 HTTP，
 可脱离 FastAPI 单测。
 
-产出同时服务两种视角，但用同一份聚合：
-- learn（学习主场）：把运行数据翻译成产品语言（AI 用过哪些能力、花了多少力气）+ 学习资产
-- ops（工程台）：运维口径（成功率、P95 延迟、工具成功率、步数分布）
+产出服务两种视角，作用域**不同**，故分别聚合：
+- learn（学习主场，「AI 在为我做什么」）：把运行数据翻译成产品语言（AI 用过哪些能力、
+  花了多少力气）+ 学习资产 —— 全部按 user_id 隔离，讲的是「我的」。
+- ops（工程台）：运维口径（成功率、P95 延迟、工具成功率、步数分布）—— 保持全库，
+  同一台机器上别人的运行也是运维对象。
 
-运行轨迹是全局的（harness.db 无 user_id，本应用单用户）；学习资产按 user_id 归属。
+轨迹库(harness.db)无 user_id，与应用库(app.db)是两个文件、无法 JOIN；learn 的隔离靠
+conversations → conversation_runs → run_id 反查（见 _user_run_ids）。学习资产按 user_id 归属。
 """
 from __future__ import annotations
 
@@ -119,15 +122,21 @@ class StatsService:
         days = max(1, min(days, 90))
         now = self._now()
         cutoff = now - timedelta(days=days)
+        # 一次读盘、两份聚合：learn（「AI 在为我做什么」）按 user 隔离，ops（工程台的运维
+        # 口径：全局成功率/延迟/工具健康度）仍看全库——同一台机器上别人的运行也是运维对象。
         events = self._load_events(cutoff.isoformat())
         agg = self._aggregate(events)
         series = self._daily_series(agg["daily"], now, days)
+        user_runs = self._user_run_ids(user_id)
+        user_events = [e for e in events if e[0] in user_runs]
+        user_agg = self._aggregate(user_events)
+        user_series = self._daily_series(user_agg["daily"], now, days)
         app_counts = self._app_counts(user_id)
         quality = self._quality_section(
             self._load_progress_rows(user_id, cutoff.isoformat()))
         return {
             "range_days": days,
-            "learn": self._learn_section(user_id, agg, series, app_counts),
+            "learn": self._learn_section(user_id, user_agg, user_series, app_counts),
             "ops": self._ops_section(agg, series, app_counts,
                                      self._gate_stats(user_id, cutoff.isoformat()),
                                      quality),
@@ -135,7 +144,29 @@ class StatsService:
 
     # ---------- 轨迹聚合 ----------
 
-    def _load_events(self, cutoff_iso: str) -> list[tuple[str, str, str, dict]]:
+    def _user_run_ids(self, user_id: str | None) -> set[str]:
+        """该用户全部会话的 run_id —— 轨迹事件按用户隔离的唯一抓手。
+
+        轨迹库(harness.db)无 user_id，且与应用库(app.db)是两个 SQLite 文件、无法 JOIN，
+        故先在应用库取 run_id 集合，再据此过滤轨迹事件（在 Python 侧过滤而非 SQL IN：
+        run_id 可能上千，会撞 SQLite 变量个数上限）。
+
+        覆盖完整、不会漏算：conversation_runs 由 chat.py 三处 add_run 写入，覆盖全部顶层
+        run；子 agent(dispatch) 的循环事件由 DispatchTool 内部消费、不进 trajectory_events。
+        """
+        if self._app is None or not user_id:
+            return set()
+        try:
+            rows = self._app.execute(
+                "SELECT run_id FROM conversation_runs WHERE conv_id IN "
+                "(SELECT id FROM conversations WHERE user_id=?)", (user_id,)).fetchall()
+        except sqlite3.Error:
+            return set()
+        return {r[0] for r in rows}
+
+    def _load_events(self, cutoff_iso: str,
+                     run_ids: set[str] | None = None) -> list[tuple[str, str, str, dict]]:
+        """区间内的轨迹事件。run_ids 非 None 时只保留这些 run（按用户隔离）。"""
         try:
             rows = self._traj.execute(
                 "SELECT run_id, type, created_at, data FROM trajectory_events "
@@ -144,6 +175,8 @@ class StatsService:
             return []
         out = []
         for run_id, typ, created_at, data in rows:
+            if run_ids is not None and run_id not in run_ids:
+                continue
             try:
                 d = json.loads(data) if data else {}
             except (json.JSONDecodeError, TypeError):
