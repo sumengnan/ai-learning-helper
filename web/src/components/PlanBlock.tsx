@@ -6,9 +6,15 @@ import RadioButtonUncheckedIcon from "@mui/icons-material/RadioButtonUnchecked";
 import StopCircleIcon from "@mui/icons-material/StopCircle";
 import PlaylistAddCheckIcon from "@mui/icons-material/PlaylistAddCheck";
 import { CollapsibleBlock } from "./CollapsibleBlock";
+import { fmtDuration } from "./duration";
 
 type PlanStatus = "pending" | "running" | "done" | "failed";
-type PlanStepData = { title: string; status: PlanStatus };
+// elapsed_ms 由后端跨 update_plan 快照计时后烤进 plan JSON（见 app/tools/plan_tool.py）；
+// plan 走 progress 通道落库，故刷新后耗时仍在。步骤没走过 running 则无耗时，留空。
+type PlanStepData = { title: string; status: PlanStatus; elapsed_ms?: number | null };
+
+// 步骤耗时多为秒级，fmtDuration 对不足 1 秒会显示「0 秒」，这里改用「<1 秒」避免误读
+const fmtStep = (ms: number) => (ms < 1000 ? "<1 秒" : fmtDuration(ms));
 
 function parseSteps(text?: string | null): PlanStepData[] {
   if (!text) return [];
@@ -79,6 +85,16 @@ export function PlanBlock({ text, live = false, stopped = false }: {
             >
               {s.title}{cancelled ? "（已取消）" : ""}
             </Typography>
+            {s.elapsed_ms != null && (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ flexShrink: 0, ml: "auto", pl: 1, opacity: 0.7,
+                      fontVariantNumeric: "tabular-nums" }}
+              >
+                {fmtStep(s.elapsed_ms)}
+              </Typography>
+            )}
           </Box>
         );
       })}

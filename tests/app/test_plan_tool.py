@@ -130,3 +130,117 @@ def test_chat_emits_and_persists_plan(make_mock, tool_turn, text_turn):
     msgs = client.get(f"/api/conversations/{cid}/messages", headers=h).json()
     assistant = next(m for m in msgs if m["role"] == "assistant")
     assert any(p["scope"] == "plan" for p in (assistant.get("progress") or []))
+
+
+# ---- 每步耗时 ----
+
+class _FakeTime:
+    """替掉 plan_tool 命名空间里的 time 模块，让计时可断言（不动全局 time）。"""
+    def __init__(self, t0: float = 100.0) -> None:
+        self.now = t0
+
+    def monotonic(self) -> float:
+        return self.now
+
+
+async def _emit_plan(tool, steps) -> list[dict]:
+    got = []
+    token = progress.set_emitter(got.append)
+    try:
+        await tool.run(tool.Params(steps=steps))
+    finally:
+        progress.reset_emitter(token)
+    return json.loads([e for e in got if isinstance(e, Progress)][-1].text)
+
+
+@pytest.fixture
+def plan_clock(monkeypatch):
+    """装好假时钟 + 本轮计时表，产出 (推进时间的钩子, 工具)。"""
+    from app.tools import plan_tool
+    clk = _FakeTime()
+    monkeypatch.setattr(plan_tool, "time", clk)
+    token = plan_tool.set_plan_clock()
+    try:
+        yield clk, UpdatePlanTool()
+    finally:
+        plan_tool.reset_plan_clock(token)
+
+
+async def test_step_elapsed_measured_from_running_to_done(plan_clock):
+    clk, tool = plan_clock
+    s1 = await _emit_plan(tool, [PlanStep(title="查资料", status="running")])
+    assert "elapsed_ms" not in s1[0]              # 还在跑：不给耗时，别编
+
+    clk.now += 3.5
+    s2 = await _emit_plan(tool, [PlanStep(title="查资料", status="done")])
+    assert s2[0]["elapsed_ms"] == 3500
+
+    clk.now += 900                                 # 后续快照里该步耗时须定格
+    s3 = await _emit_plan(tool, [PlanStep(title="查资料", status="done")])
+    assert s3[0]["elapsed_ms"] == 3500
+
+
+async def test_failed_step_also_timed(plan_clock):
+    clk, tool = plan_clock
+    await _emit_plan(tool, [PlanStep(title="算", status="running")])
+    clk.now += 2
+    s = await _emit_plan(tool, [PlanStep(title="算", status="failed")])
+    assert s[0]["elapsed_ms"] == 2000
+
+
+async def test_step_never_running_gets_no_elapsed(plan_clock):
+    """模型跳过 running 直接置 done → 没有起点，不编耗时。"""
+    clk, tool = plan_clock
+    clk.now += 5
+    s = await _emit_plan(tool, [PlanStep(title="汇总", status="done")])
+    assert "elapsed_ms" not in s[0]
+
+
+async def test_timing_follows_title_not_index(plan_clock):
+    """失败重试会在中间插入新步骤、下标整体错位 → 计时必须跟着 title 走。"""
+    clk, tool = plan_clock
+    await _emit_plan(tool, [PlanStep(title="A", status="running"),
+                            PlanStep(title="B", status="pending")])
+    clk.now += 2
+    # A 失败，其后插入重试步骤 → B 的下标从 1 变成 2
+    await _emit_plan(tool, [PlanStep(title="A", status="failed"),
+                            PlanStep(title="重试A", status="running"),
+                            PlanStep(title="B", status="pending")])
+    clk.now += 5
+    s = await _emit_plan(tool, [PlanStep(title="A", status="failed"),
+                                PlanStep(title="重试A", status="done"),
+                                PlanStep(title="B", status="running")])
+    by = {x["title"]: x for x in s}
+    assert by["A"]["elapsed_ms"] == 2000          # 定格在失败那刻，没被插入搅乱
+    assert by["重试A"]["elapsed_ms"] == 5000
+    assert "elapsed_ms" not in by["B"]            # 刚开跑
+
+
+async def test_no_clock_set_emits_untimed_snapshot():
+    """未设置计时表（纯 harness 用法）→ 不带 elapsed_ms，行为同旧版。"""
+    s = await _emit_plan(UpdatePlanTool(), [PlanStep(title="x", status="done")])
+    assert s == [{"title": "x", "status": "done"}]
+
+
+def test_chat_persists_step_elapsed_for_refresh(make_mock, tool_turn, text_turn):
+    """耗时必须随 plan 落进 progress 列：刷新重新拉 messages 时仍在，不会变没。"""
+    a1 = '{"steps":[{"title":"查资料","status":"running"},{"title":"汇总","status":"pending"}]}'
+    a2 = '{"steps":[{"title":"查资料","status":"done"},{"title":"汇总","status":"done"}]}'
+    client = _plan_client(make_mock, [tool_turn("update_plan", a1, call_id="p1"),
+                                      tool_turn("update_plan", a2, call_id="p2"),
+                                      text_turn("完成")])
+    r = client.post("/api/auth/register", json={"username": "u", "password": "pw1234"})
+    h = {"Authorization": f"Bearer {r.json()['token']}"}
+    cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
+    with client.stream("POST", "/api/chat",
+                       json={"conversation_id": cid, "message": "帮我查并汇总"}, headers=h) as resp:
+        _sse(resp)
+
+    # 模拟刷新：重新拉取该对话的消息，plan 快照里的耗时应当还在
+    msgs = client.get(f"/api/conversations/{cid}/messages", headers=h).json()
+    assistant = next(m for m in msgs if m["role"] == "assistant")
+    plans = [p for p in (assistant.get("progress") or []) if p["scope"] == "plan"]
+    steps = json.loads(plans[-1]["text"])
+    by = {s["title"]: s for s in steps}
+    assert by["查资料"].get("elapsed_ms") is not None   # 走过 running → 有耗时且已落库
+    assert "elapsed_ms" not in by["汇总"]               # 没走过 running → 不编

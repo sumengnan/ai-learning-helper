@@ -39,6 +39,7 @@ from ..summarizer import RollingSummarizer
 from ..sources import SOURCE_GUIDE, SourceSink, wrap_tool
 from ..url_blocklist import guard_fetch_tool
 from ..tools.attachment_tools import ListAttachmentsTool, ReadAttachmentTool
+from ..tools.plan_tool import reset_plan_clock, set_plan_clock
 from ..exam_flow import grade_exam_turn
 from ..tools.exam_tools import (
     AddQuestionsTool,
@@ -380,6 +381,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 token = set_emitter(queue.put_nowait)
                 atoken = set_context(run_id=run_id_a, timeout=config.sandbox_approval_timeout)
                 stoken = set_sandbox_conv(req.conversation_id)
+                ptoken = set_plan_clock()   # 本轮步骤计时表；重答的每次尝试各自重新计时
                 try:
                     # 本轮附件播种进会话沙箱 /workspace/uploads/，供模型直接执行（写盘≠给模型）
                     if attachment_metas and harness.sandbox is not None:
@@ -398,6 +400,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 except Exception as e:  # 兜底成 RunError，避免流卡死
                     queue.put_nowait(RunError(error=str(e)))
                 finally:
+                    reset_plan_clock(ptoken)
                     reset_sandbox_conv(stoken)
                     reset_context(atoken)
                     reset_emitter(token)
