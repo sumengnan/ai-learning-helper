@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -64,14 +65,18 @@ def _client():
                       checkpoint_store=CheckpointStore(":memory:"),
                       trajectory_store=traj, sink=TrajectorySink(traj),
                       system_prompt="s")
+    from app.db import migrate
     app_conn = sqlite3.connect(":memory:")
+    migrate(app_conn)               # 建 conversations / conversation_runs 等表
     store = ConversationStore(conn=app_conn)
     stats = StatsService(trajectory_conn=_traj_conn_with_run(), app_conn=app_conn, memory_conn=None)
     app = create_app(config=_cfg(), harness=harness,
                      store=store, doc_store=DocumentStore(conn=app_conn),
                      question_store=None, exam_store=None, wrong_store=None, quiz_service=None,
                      stats_service=stats)
-    return TestClient(app)
+    client = TestClient(app)
+    client.app_conn = app_conn      # 供 _link_run 建立 run→会话归属
+    return client
 
 
 def test_overview_requires_auth():
@@ -79,9 +84,24 @@ def test_overview_requires_auth():
     assert client.get("/api/stats/overview").status_code == 401
 
 
+def _link_run(client, headers, run_id="r1"):
+    """把轨迹里的 run 归属到当前用户的一个会话。
+
+    learn 按 user 隔离靠 conversations → conversation_runs → run_id 反查
+    （见 stats._user_run_ids）；生产里这条链由 chat.py 的 add_run 建立。
+    """
+    cid = client.post("/api/conversations", json={}, headers=headers).json()["id"]
+    client.app_conn.execute("INSERT INTO conversation_runs(conv_id, run_id, created_at) "
+                            "VALUES (?,?,?)",
+                            (cid, run_id, datetime.now(timezone.utc).isoformat()))
+    client.app_conn.commit()
+    return cid
+
+
 def test_overview_returns_both_sections():
     client = _client()
     headers, _uid = _auth_headers(client)
+    _link_run(client, headers, "r1")      # r1 归属当前用户，否则 learn 视角看不到它
     r = client.get("/api/stats/overview", headers=headers)
     assert r.status_code == 200
     body = r.json()
@@ -91,6 +111,16 @@ def test_overview_returns_both_sections():
     assert {t["name"] for t in body["ops"]["tools"]} == {"http_request"}
     assert body["learn"]["effort"]["runs"] == 1
     assert any(a["label"] == "联网查资料" for a in body["learn"]["abilities"])
+
+
+def test_learn_excludes_runs_not_owned_by_user():
+    # 不建立归属 → 同一条轨迹 ops 仍看得到（运维口径全局），learn 看不到（我的视角）
+    client = _client()
+    headers, _uid = _auth_headers(client)
+    body = client.get("/api/stats/overview", headers=headers).json()
+    assert body["ops"]["totals"]["runs"] == 1          # 工程台仍计
+    assert body["learn"]["effort"]["runs"] == 0        # 「它为你花的力气」不计别人的
+    assert body["learn"]["abilities"] == []            # 「它用过的能力」同理
 
 
 def test_overview_days_param_validated():
