@@ -10,12 +10,22 @@ const msg = (over: Partial<ChatMessage> = {}): ChatMessage =>
   ({ role: "assistant", content: "答案", ...over });
 
 describe("VerifyBadge 状态机", () => {
-  it("本轮进行中（live）→ 原地显示当前过程文案（校验中…/重答中…）", () => {
+  it("本轮进行中（live）→ 原地显示当前过程文案（结果校验中…/重答中…）", () => {
     render(<VerifyBadge live message={msg({
       status: "streaming",
-      progress: [{ scope: "verify", text: "校验中…", status: "running" }],
+      progress: [{ scope: "verify", text: "结果校验中…", status: "running" }],
     })} />);
-    expect(screen.getByText("校验中…")).toBeTruthy();
+    expect(screen.getByText("结果校验中…")).toBeTruthy();
+  });
+
+  it("进行中的兜底文案也带层级：写死「验证中…」会丢掉「转的是哪层」这唯一线索", () => {
+    // 文案缺失（服务端只发了 status，或事件被截断）→ 仍须说清是哪层在校验
+    render(<VerifyBadge live message={msg({
+      status: "streaming",
+      progress: [{ scope: "verify", text: "", status: "running" }],
+    })} />);
+    expect(screen.getByText("结果校验中…")).toBeTruthy();
+    expect(screen.queryByText("验证中…")).toBeNull();
   });
 
   it("verify running（非 live）→ 显示过程文案（如重答中…）", () => {
@@ -73,10 +83,10 @@ describe("VerifyBadge 状态机", () => {
     render(<VerifyBadge message={msg({
       status: "done",
       progress: [
-        { scope: "verify", text: "校验中…", status: "running", key: "k1" },
+        { scope: "verify", text: "结果校验中…", status: "running", key: "k1" },
         { scope: "verify", text: "judge 分数过低", status: "error", key: "k1" },
         { scope: "verify", text: "重答中…", status: "running" },
-        { scope: "verify", text: "校验中…", status: "running", key: "k2" },
+        { scope: "verify", text: "结果校验中…", status: "running", key: "k2" },
         { scope: "verify", text: "校验通过", status: "ok", key: "k2" },
       ],
     })} />);
@@ -97,15 +107,15 @@ describe("VerifyBadge 状态机", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("门已开信号后真的开始校验 → 徽章此时才出现，且显示「校验中…」而非「生成中…」", () => {
+  it("门已开信号后真的开始校验 → 徽章此时才出现，且显示「结果校验中…」而非「生成中…」", () => {
     render(<VerifyBadge live message={msg({
       status: "streaming",
       progress: [
         { scope: "verify", text: "生成中…", status: "running", key: GATE_OPEN_KEY },
-        { scope: "verify", text: "校验中…", status: "running", key: "k1" },
+        { scope: "verify", text: "结果校验中…", status: "running", key: "k1" },
       ],
     })} />);
-    expect(screen.getByText("校验中…")).toBeTruthy();
+    expect(screen.getByText("结果校验中…")).toBeTruthy();
     expect(screen.queryByText("生成中…")).toBeNull();
   });
 });

@@ -616,7 +616,10 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         cur_fx = _side_effect_ids(collect["steps"])   # 本轮生成的副作用产物
 
                         ekey = uuid4().hex
-                        yield _emit_verify("校验中…", status="running", key=ekey)
+                        # 文案须自报层级：徽章原样显示它，而终态行都写明了是哪层（「结果校验
+                        # 通过」/「步骤校验未通过」）——唯独进行中只说「校验中…」，用户就看不出
+                        # 转圈的是交付门还是每步校验。交付门属结果层，故这里明写「结果校验中…」。
+                        yield _emit_verify("结果校验中…", status="running", key=ekey)
                         if not draft:
                             verdict = Verdict(ok=False, failed=["empty"],
                                               critique=collect["error"] or "本轮未产出答案",

@@ -109,8 +109,11 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
   // 主行须降级说「步骤校验」——这正是结果校验开关关闭时的情形。
   const kind = verify.length > 0 || quality ? "结果校验" : "步骤校验";
 
-  // 状态以「最后一个 verify 事件」为准：running 显示当前过程（校验中…/重答中…，故未通过→重答中→
-  // 通过是连续过渡），ok/error 为终态。无 verify 事件时不谎称「验证中」，按每步校验有无失败定 ok/error。
+  // 状态以「最后一个 verify 事件」为准：running 显示当前过程（结果校验中…/重答中…，故未通过→
+  // 重答中→通过是连续过渡），ok/error 为终态。
+  // 只有交付门会发 running：每步校验（scope=check）在工具跑完时直接出 ok/error，没有进行中态
+  // （见 app/tools/validating.py）。故 state==="running" ⇒ kind 必为「结果校验」。
+  // 无 verify 事件时不谎称「验证中」，按每步校验有无失败定 ok/error。
   const state: "running" | "ok" | "error" =
     vLast?.status === "running" ? "running"
       : vLast?.status === "error" ? "error"
@@ -123,8 +126,10 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
       : state === "error" ? <CancelIcon sx={{ fontSize: 16 }} color="error" />
         : <CheckCircleIcon sx={{ fontSize: 16 }} color="success" />;
 
-  // 进行中：原地显示当前过程文案（校验中…/重答中…，均出自 verify 事件），出结果后替换为终态文案
-  const label = state === "running" ? (vLast?.text || "验证中…")
+  // 进行中：原地显示当前过程文案（结果校验中…/重答中…，均出自 verify 事件），出结果后替换为终态。
+  // 文案由服务端给出并自报层级；兜底串也必须带上 kind——写死「验证中…」等于把用户唯一能判断
+  // 「转的是哪层」的线索丢掉，而这正是终态行一直都标着的。
+  const label = state === "running" ? (vLast?.text || `${kind}中…`)
     : state === "error" ? `${kind}未通过` : `${kind}通过`;
   const qFinal = quality ? quality.final : undefined;
   const scoreRows = quality ? scoresOf(quality) : [];

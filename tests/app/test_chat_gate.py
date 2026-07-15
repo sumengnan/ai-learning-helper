@@ -398,6 +398,22 @@ def test_gate_signals_before_agent_runs(make_mock, text_turn):
     assert first["data"]["key"] == GATE_OPEN_KEY
 
 
+def test_gate_running_text_names_its_layer(make_mock, text_turn):
+    """交付门的「进行中」文案必须自报是结果校验。
+
+    徽章原样显示这条文案，且只有交付门会发 running（每步校验在工具跑完时直接出 ok/error，
+    没有进行中态）。终态行一直都写明层级（「结果校验通过」/「步骤校验未通过」），若进行中
+    只说「校验中…」，用户就看不出转圈的是交付门还是每步校验——两套机制彼此独立、可各自开关。
+    """
+    client, _ = _client(make_mock, [text_turn("答案")], _StubVerifier([Verdict(ok=True)]))
+    h = _auth(client)
+    _cid, events = _run_chat(client, h, "问")
+    running = [e["data"]["text"] for e in events
+               if e["type"] == "Progress" and e["data"]["scope"] == "verify"
+               and e["data"]["status"] == "running" and e["data"]["key"] != GATE_OPEN_KEY]
+    assert running and running[0] == "结果校验中…"
+
+
 class _FakeDownloadStore:
     """内存版下载库：记录建/删。用真的 SaveDownloadTool 打它 —— create_app 会用
     harness.download_store 重建该工具，注入桩工具反而会被覆盖掉。"""
