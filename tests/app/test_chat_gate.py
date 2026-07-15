@@ -11,6 +11,7 @@ from app.main import create_app
 from app.conversations import ConversationStore
 from app.documents import DocumentStore
 from app.verify import Verdict
+from app.api.chat import GATE_OPEN_KEY
 from harness.persistence.checkpoint import CheckpointStore
 from harness.persistence.trajectory import TrajectoryStore, TrajectorySink
 from harness.tools.base import ToolRegistry
@@ -390,6 +391,11 @@ def test_gate_signals_before_agent_runs(make_mock, text_turn):
         if term in kinds:
             assert first_verify < kinds.index(term), f"verify 信号应早于 {term}"
     assert _verify_progress(events)[0] == "生成中…"
+    # 它得带固定的 GATE_OPEN_KEY：前端靠这个 key 把它认出来并排除在校验徽章之外
+    # （它先于任何校验发生，起徽章就等于谎称在校验），同时仍据它盖住生成的文件。
+    first = next(e for e in events
+                 if e["type"] == "Progress" and e["data"]["scope"] == "verify")
+    assert first["data"]["key"] == GATE_OPEN_KEY
 
 
 class _FakeDownloadStore:

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ChatView, fmtDuration } from "./ChatView";
+import { GATE_OPEN_KEY } from "./VerifyBadge";
 import { streamChat, attachChat, stopRun, sendDecision } from "../api/client";
 
 // mock streamChat：依次回调 TextDelta "你" / TextDelta "好" / RunFinished
@@ -339,13 +340,23 @@ describe("ChatView", () => {
   });
 
   it("校验门轮次：工具已跑完但还没发校验事件时也不显示（否则会闪一下）", async () => {
-    // 服务端在轮次开头就发 scope=verify 信号，故此刻 progress 里已有它、文件仍被盖住
+    // 服务端在轮次开头就发门已开信号，故此刻 progress 里已有它、文件仍被盖住
     render(<MemoryRouter><ChatView conversationId="c1" initial={[
       { role: "user", content: "导出报告" },
       { role: "assistant", content: "", status: "streaming", steps: [_dlStep],
-        progress: [{ scope: "verify", text: "生成中…", status: "running", key: "g0" }] },
+        progress: [{ scope: "verify", text: "生成中…", status: "running", key: GATE_OPEN_KEY }] },
     ]} /></MemoryRouter>);
     expect(screen.queryByRole("button", { name: /报告\.md/ })).toBeNull();
+  });
+
+  it("门已开信号盖住文件，但不把校验徽章一起带出来（两者共用 verify 通道，别再耦合）", async () => {
+    render(<MemoryRouter><ChatView conversationId="c1" initial={[
+      { role: "user", content: "导出报告" },
+      { role: "assistant", content: "写着…", status: "streaming", steps: [_dlStep],
+        progress: [{ scope: "verify", text: "生成中…", status: "running", key: GATE_OPEN_KEY }] },
+    ]} /></MemoryRouter>);
+    expect(screen.queryByRole("button", { name: /报告\.md/ })).toBeNull();   // 文件仍盖住
+    expect(screen.queryByText("校验")).toBeNull();                            // 徽章尚未出现
   });
 
   it("校验通过交付后显示生成的文件", async () => {

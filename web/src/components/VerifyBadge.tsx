@@ -6,6 +6,15 @@ import { CollapsibleBlock } from "./CollapsibleBlock";
 import { EllipsisText } from "./EllipsisText";
 import type { ChatMessage } from "../types";
 
+// 轮次开头下发的「本轮开了校验门」信号（app/api/chat.py 同名常量，改这里必须同时改那里）。
+// 它借 scope=verify 通道，但不是一条校验进展——此刻模型连初稿都还没生成，没有任何东西可校验。
+// 唯一用途是让 ChatView 在交付前盖住本轮生成的文件（未通过会重答、产物届时被服务端清掉）。
+// 故校验徽章必须把它排除在外：否则回答刚起头徽章就转圈说「生成中…」，谎称正在校验，
+// 而真正的校验要等模型出完初稿（「校验中…」）才开始。
+export const GATE_OPEN_KEY = "verify:gate-open";
+export const isGateOpen = (p: { scope: string; key?: string | null }) =>
+  p.scope === "verify" && p.key === GATE_OPEN_KEY;
+
 // 轨迹 judge 只对「真发生过的环节」打分：模型没调 plan 工具就没有拆分可评，该项为 null
 // （见 verify.py TRAJECTORY_SYSTEM「无拆分或无步骤时对应字段给 null」）。
 // null 的项直接不显示——摆一个「拆分 —」只会让人追问横线是什么意思，而它并不代表 0 分。
@@ -75,7 +84,8 @@ const SectionLabel = ({ text }: { text: string }) => (
 // 展开明细按来源分组标注（步骤校验 / 结果校验 / 三层质量分），单看一行也知道它属于哪层。
 // 仅当本轮有 verify/check/quality 任一信号时渲染，否则返回 null。
 export function VerifyBadge({ message, live = false }: { message: ChatMessage; live?: boolean }) {
-  const verify = (message.progress || []).filter((p) => p.scope === "verify");
+  // 排除门已开信号：它虽走 verify 通道，却先于任何校验发生，算进来会让徽章一开场就转圈
+  const verify = (message.progress || []).filter((p) => p.scope === "verify" && !isGateOpen(p));
   // checks 实时由 ChatView 赋值、刷新后为空 → 回退到从 progress 重建（数据一直在那）。
   // 检索命中是正常情形，不作为校验状态展示（仅保留失败/未命中等有意义的每步校验）
   const checks = (message.checks || checksFromProgress(message.progress)).filter(

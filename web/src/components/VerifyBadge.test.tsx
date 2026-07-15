@@ -1,6 +1,6 @@
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { describe, it, expect, afterEach } from "vitest";
-import { VerifyBadge } from "./VerifyBadge";
+import { VerifyBadge, GATE_OPEN_KEY } from "./VerifyBadge";
 import type { ChatMessage } from "../types";
 
 afterEach(() => cleanup());
@@ -87,6 +87,26 @@ describe("VerifyBadge 状态机", () => {
   it("无 verify/check/quality 任一信号 → 不渲染（返回 null）", () => {
     const { container } = render(<VerifyBadge message={msg({ status: "done" })} />);
     expect(container.firstChild).toBeNull();
+  });
+
+  it("只有门已开信号（回答刚起头）→ 不渲染：此刻没有任何东西被校验过", () => {
+    const { container } = render(<VerifyBadge live message={msg({
+      status: "streaming", content: "",
+      progress: [{ scope: "verify", text: "生成中…", status: "running", key: GATE_OPEN_KEY }],
+    })} />);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("门已开信号后真的开始校验 → 徽章此时才出现，且显示「校验中…」而非「生成中…」", () => {
+    render(<VerifyBadge live message={msg({
+      status: "streaming",
+      progress: [
+        { scope: "verify", text: "生成中…", status: "running", key: GATE_OPEN_KEY },
+        { scope: "verify", text: "校验中…", status: "running", key: "k1" },
+      ],
+    })} />);
+    expect(screen.getByText("校验中…")).toBeTruthy();
+    expect(screen.queryByText("生成中…")).toBeNull();
   });
 });
 

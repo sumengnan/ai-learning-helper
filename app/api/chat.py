@@ -61,6 +61,10 @@ log = logging.getLogger("app.chat")
 # 交付门缓冲后补发终稿时，把文本切成小片以保留打字机效果
 _DELIVER_CHUNK = 40
 
+# 「本轮开了校验门」信号的固定 key（前端 VerifyBadge.tsx 有同名常量，改这里必须同时改那里）。
+# 借 scope=verify 通道下发，但它不是校验进展，前端不得把它渲染成校验徽章。详见发出处的注释。
+GATE_OPEN_KEY = "verify:gate-open"
+
 
 def _chunks(text: str, size: int = _DELIVER_CHUNK):
     for i in range(0, len(text), size):
@@ -590,9 +594,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     # 先于首个「校验中…」，前端要据此在交付前一直不显示生成的文件——未通过会
                     # 重答、届时这些产物被 _purge_side_effects 清掉，提前显示等于给用户一个
                     # 马上失效的下载按钮。
+                    # key 固定为 GATE_OPEN_KEY（前端 VerifyBadge.tsx 同名常量）：这只是个门已开
+                    # 的信号，不是一条校验进展——此刻模型连初稿都还没生成，没有任何东西可校验。
+                    # 前端据此把它排除在校验徽章之外，否则回答刚起头就转圈谎称「正在校验」。
                     # 刻意不落库（不走 _emit_verify）：刷新后由已存的终态记录决定展示即可；
                     # 落库反而会在用户中途停止时留下一条永远转圈的「生成中…」。
-                    yield Progress("verify", "生成中…", status="running", key=uuid4().hex)
+                    yield Progress("verify", "生成中…", status="running", key=GATE_OPEN_KEY)
 
                     for attempt in range(max_attempts):
                         msg = model_message if corrective is None else corrective
