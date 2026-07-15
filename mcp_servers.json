@@ -1,7 +1,7 @@
 {
   "servers": [
     {
-      "_comment": "阿里云百炼 WebSearch（通义实验室）：实时互联网全栈信息检索。基于 Text-Embedding、GTE-reRank、Query 改写、搜索判定等检索模型与语义理解，串接专业搜索工程框架及各类实时信息检索工具，提升回答的准确性与时效性。启用需两项，缺一即静默失效：HARNESS_ENABLE_MCP=true（否则 MCP 客户端不连）；环境变量 DASHSCOPE_API_KEY（否则 Authorization 头原样发出 ${DASHSCOPE_API_KEY} → 401，而连接失败仅一条 warning 日志）。工具名 mcp__websearch__*，结果自动进「参考来源」。",
+      "_comment": "阿里云百炼 WebSearch：实时互联网检索。需 HARNESS_ENABLE_MCP=true + 环境变量 DASHSCOPE_API_KEY，缺任一则静默失效。",
       "name": "websearch",
       "enabled": true,
       "transport": "http",
