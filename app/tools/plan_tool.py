@@ -29,26 +29,33 @@ def reset_plan_clock(token) -> None:
 
 
 def _apply_timing(steps: list[dict]) -> list[dict]:
-    """给每步补 elapsed_ms（原地）。
+    """给每步补计时字段（原地）：进行中的给 started_at_ms，已结束的给 elapsed_ms。
 
     running 首次出现即记起点，转 done/failed 时定格耗时、此后不再变。按 title 索引而非
     下标：失败重试会在中间插入新步骤，下标会整体错位。模型跳过 running 直接置 done 的步骤
-    没有起点，不编耗时、留空。耗时随 plan JSON 一起 emit，而 progress 是落库的，
-    所以刷新后依然在。
+    没有起点，不编耗时、留空。
+
+    两个时钟各司其职：elapsed_ms 用 monotonic 量（不受系统调时影响），started_at_ms 用
+    epoch 墙钟——前端要拿它和 Date.now() 相减来读秒，monotonic 只在本进程内有意义。
+    二者随 plan JSON 一起 emit，而 plan 走 progress 通道落库，所以刷新后仍能接着读秒。
     """
     clock = _clock.get()
     if clock is None:            # 未设置（纯 harness 用法）→ 不计时，行为同旧版
         return steps
     now = time.monotonic()
     for s in steps:
-        st = clock.setdefault(s["title"], {"start": None, "elapsed_ms": None})
+        st = clock.setdefault(s["title"],
+                              {"start": None, "started_at_ms": None, "elapsed_ms": None})
         if s["status"] == "running" and st["start"] is None:
             st["start"] = now
+            st["started_at_ms"] = int(time.time() * 1000)
         elif (s["status"] in ("done", "failed")
               and st["elapsed_ms"] is None and st["start"] is not None):
             st["elapsed_ms"] = int((now - st["start"]) * 1000)
         if st["elapsed_ms"] is not None:
-            s["elapsed_ms"] = st["elapsed_ms"]
+            s["elapsed_ms"] = st["elapsed_ms"]          # 已定格：不再需要起点
+        elif s["status"] == "running" and st["started_at_ms"] is not None:
+            s["started_at_ms"] = st["started_at_ms"]    # 进行中：交给前端读秒
     return steps
 
 

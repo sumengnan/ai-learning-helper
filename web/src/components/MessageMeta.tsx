@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { Box, CircularProgress, useTheme } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
@@ -8,17 +8,8 @@ import AccessTimeIcon from "@mui/icons-material/AccessTime";
 import TollIcon from "@mui/icons-material/Toll";
 import { RollingNumber } from "./RollingNumber";
 import { fmtDuration } from "./duration";
+import { LiveDuration } from "./LiveDuration";
 import type { ChatMessage } from "../types";
-
-// 生成中的实时耗时：每秒自增（图标已表达「耗时」语义，这里只给数字）
-function LiveDuration({ startedAt }: { startedAt: number }) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  return <>{fmtDuration(now - startedAt)}</>;
-}
 
 // 一枚彩色药丸：图标 + 内容，底色取自语义色的浅色调，辨识度高且与正文明显不同
 function Pill({ icon, color, title, children }: {

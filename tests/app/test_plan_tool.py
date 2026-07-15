@@ -135,12 +135,21 @@ def test_chat_emits_and_persists_plan(make_mock, tool_turn, text_turn):
 # ---- 每步耗时 ----
 
 class _FakeTime:
-    """替掉 plan_tool 命名空间里的 time 模块，让计时可断言（不动全局 time）。"""
+    """替掉 plan_tool 命名空间里的 time 模块，让计时可断言（不动全局 time）。
+
+    monotonic 与 time 同步推进，但基准不同——正如真实的两者：前者量耗时，
+    后者给前端读秒的 epoch 起点。
+    """
+    _EPOCH0 = 1_700_000_000.0
+
     def __init__(self, t0: float = 100.0) -> None:
         self.now = t0
 
     def monotonic(self) -> float:
         return self.now
+
+    def time(self) -> float:
+        return self._EPOCH0 + self.now
 
 
 async def _emit_plan(tool, steps) -> list[dict]:
@@ -244,3 +253,51 @@ def test_chat_persists_step_elapsed_for_refresh(make_mock, tool_turn, text_turn)
     by = {s["title"]: s for s in steps}
     assert by["查资料"].get("elapsed_ms") is not None   # 走过 running → 有耗时且已落库
     assert "elapsed_ms" not in by["汇总"]               # 没走过 running → 不编
+
+
+async def test_running_step_carries_epoch_start_for_live_ticking(plan_clock):
+    """进行中的步骤要带 started_at_ms（epoch 毫秒）：前端拿它和 Date.now() 相减读秒。
+    monotonic 只在本进程内有意义，给不了浏览器。"""
+    clk, tool = plan_clock
+    s = await _emit_plan(tool, [PlanStep(title="查资料", status="running")])
+    assert s[0]["started_at_ms"] == int(clk.time() * 1000)
+    assert "elapsed_ms" not in s[0]          # 还没结束，不给定格值
+
+
+async def test_running_step_start_is_stable_across_snapshots(plan_clock):
+    """起点不能每次快照都刷新，否则读秒会被一路清零。"""
+    clk, tool = plan_clock
+    s1 = await _emit_plan(tool, [PlanStep(title="查", status="running")])
+    clk.now += 30
+    s2 = await _emit_plan(tool, [PlanStep(title="查", status="running")])
+    assert s2[0]["started_at_ms"] == s1[0]["started_at_ms"]
+
+
+async def test_finished_step_drops_start_and_keeps_elapsed(plan_clock):
+    """结束后只留定格耗时：起点已无用，留着反而可能被误读成还在跑。"""
+    clk, tool = plan_clock
+    await _emit_plan(tool, [PlanStep(title="查", status="running")])
+    clk.now += 4
+    s = await _emit_plan(tool, [PlanStep(title="查", status="done")])
+    assert s[0]["elapsed_ms"] == 4000
+    assert "started_at_ms" not in s[0]
+
+
+def test_chat_persists_running_step_start_for_refresh(make_mock, tool_turn, text_turn):
+    """刷新时若某步仍在跑，落库的快照里要有 started_at_ms，前端才能接着读秒。"""
+    a1 = '{"steps":[{"title":"查资料","status":"running"},{"title":"汇总","status":"pending"}]}'
+    client = _plan_client(make_mock, [tool_turn("update_plan", a1, call_id="p1"),
+                                      text_turn("完成")])
+    r = client.post("/api/auth/register", json={"username": "u", "password": "pw1234"})
+    h = {"Authorization": f"Bearer {r.json()['token']}"}
+    cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
+    with client.stream("POST", "/api/chat",
+                       json={"conversation_id": cid, "message": "查一下"}, headers=h) as resp:
+        _sse(resp)
+
+    msgs = client.get(f"/api/conversations/{cid}/messages", headers=h).json()
+    assistant = next(m for m in msgs if m["role"] == "assistant")
+    plans = [p for p in (assistant.get("progress") or []) if p["scope"] == "plan"]
+    by = {s["title"]: s for s in json.loads(plans[-1]["text"])}
+    assert by["查资料"]["started_at_ms"] > 0          # 仍在跑 → 起点已落库
+    assert "started_at_ms" not in by["汇总"]          # 没开始 → 无起点

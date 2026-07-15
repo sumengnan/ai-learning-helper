@@ -1,5 +1,5 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import { render, screen, cleanup, act } from "@testing-library/react";
 import { PlanBlock } from "./PlanBlock";
 
 afterEach(cleanup);
@@ -72,5 +72,40 @@ describe("PlanBlock 每步耗时", () => {
     const snap = JSON.stringify([{ title: "查资料", status: "done", elapsed_ms: 4000 }]);
     render(<PlanBlock text={snap} live={false} />);
     expect(screen.getByText("4 秒")).toBeTruthy();
+  });
+});
+
+describe("PlanBlock 进行中读秒", () => {
+  beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+  afterEach(() => vi.useRealTimers());
+
+  const running = (startedAtMs: number) =>
+    JSON.stringify([{ title: "查资料", status: "running", started_at_ms: startedAtMs }]);
+
+  it("live 时按 started_at_ms 每秒读秒", async () => {
+    vi.setSystemTime(new Date("2024-01-01T00:00:04Z"));   // 已跑了 4 秒
+    const startedAt = new Date("2024-01-01T00:00:00Z").getTime();
+    render(<PlanBlock text={running(startedAt)} live />);
+    expect(screen.getByText("4 秒")).toBeTruthy();
+
+    await act(async () => { vi.advanceTimersByTime(3000); });
+    expect(screen.getByText("7 秒")).toBeTruthy();         // 数字确实在走
+  });
+
+  it("刷新后接着读秒——起点来自落库快照，不是从本次挂载起算", async () => {
+    // 页面刷新时该步已跑了 90 秒：必须显示 1 分 30 秒，而不是从 0 重新数
+    vi.setSystemTime(new Date("2024-01-01T00:01:30Z"));
+    const startedAt = new Date("2024-01-01T00:00:00Z").getTime();
+    render(<PlanBlock text={running(startedAt)} live />);
+    expect(screen.getByText("1 分 30 秒")).toBeTruthy();
+  });
+
+  it("非 live（已停止/已中断）不读秒——那步已按「已取消」呈现，跳动的秒数只会误导", async () => {
+    vi.setSystemTime(new Date("2024-01-01T00:00:04Z"));
+    const startedAt = new Date("2024-01-01T00:00:00Z").getTime();
+    render(<PlanBlock text={running(startedAt)} live={false} stopped />);
+    expect(screen.queryByText("4 秒")).toBeNull();
+    await act(async () => { vi.advanceTimersByTime(5000); });
+    expect(screen.queryByText(/秒/)).toBeNull();           // 始终不涨
   });
 });
