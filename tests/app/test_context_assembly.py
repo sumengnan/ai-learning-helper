@@ -189,3 +189,46 @@ async def test_layered_summary_failure_degrades_gracefully():
     mgr = await asm.build_manager("s", hist, "q", "c1")   # 不抛异常
     built = mgr.build(RunState(run_id="r"))
     assert built[0].role == Role.SYSTEM
+
+
+# ---- 输入总量的策略上限（分档计价场景）----
+
+class _CapCfg(_Cfg):
+    """窗口很大（塞得下），但用 max_prompt 把输入压在档位阈值内（超档贵数倍）。"""
+    context_strategy = "window"          # 只跑 L1，隔离掉摘要/检索的干扰
+    context_window_tokens = 1000000
+    context_response_reserve_tokens = 64000
+    context_working_ratio = 0.9
+    context_max_prompt_tokens = 0        # 由各用例覆盖
+
+
+async def test_max_prompt_tokens_evicts_more_than_physical_window_would():
+    """同样的历史：不设上限时全留；设了上限就该开始淘汰 —— 证明它真的透传到了窗口切割。"""
+    history = []
+    for i in range(60):
+        history += _turn(f"问题{i} " * 60, f"回答{i} " * 60)
+
+    class _NoCap(_CapCfg):
+        context_max_prompt_tokens = 0
+
+    class _Cap(_CapCfg):
+        context_max_prompt_tokens = 3000
+
+    m_nocap = await ContextAssembler(_NoCap(), "gpt-4o-mini").build_manager(
+        "系统", history, "q", "c1")
+    m_cap = await ContextAssembler(_Cap(), "gpt-4o-mini").build_manager(
+        "系统", history, "q", "c1")
+    kept_nocap = m_nocap.build(RunState(run_id="r", messages=[]))
+    kept_cap = m_cap.build(RunState(run_id="r", messages=[]))
+    # 物理窗口 100 万，这点历史绰绰有余 → 不设上限时一条不淘汰
+    assert len(kept_nocap) == len(history) + 1          # +1 是 system
+    # 设了 3000 的输入上限 → 必须开始淘汰
+    assert len(kept_cap) < len(kept_nocap)
+    assert count_message_tokens(kept_cap, "gpt-4o-mini") <= 3000
+
+
+async def test_no_cap_by_default_keeps_previous_behavior():
+    """不配 context_max_prompt_tokens（存量部署）→ 行为与加该字段前一致。"""
+    history = _turn("你好", "你好呀")
+    m = await ContextAssembler(_Cfg(), "gpt-4o-mini").build_manager("系统", history, "q", "c1")
+    assert isinstance(m, ConversationContextManager)    # full 策略原样直通

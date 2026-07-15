@@ -33,7 +33,8 @@ class ContextAssembler:
         budget = ContextBudget(
             context_window=self._config.context_window_tokens,
             response_reserve=self._config.context_response_reserve_tokens,
-            working_ratio=self._config.context_working_ratio)
+            working_ratio=self._config.context_working_ratio,
+            max_prompt_tokens=getattr(self._config, "context_max_prompt_tokens", 0))
         sys_tokens = count_message_tokens(
             [Message(role=Role.SYSTEM, content=system_prompt)], self._model)
         window = WindowStrategy(self._model).select(
