@@ -50,6 +50,65 @@ def _drain(resp):
         pass
 
 
+class _ToolRecordingClient:
+    """记录模型每轮实际收到的工具名，用于断言 save_wrong_answer 是否真的暴露给模型。"""
+
+    def __init__(self, turns):
+        self._turns = list(turns)
+        self._i = 0
+        self.seen_tools: list[list[str]] = []
+
+    async def stream(self, messages, tools):
+        self.seen_tools.append([t["function"]["name"] for t in tools])
+        turn = self._turns[self._i]
+        self._i += 1
+        for chunk in turn:
+            yield chunk
+
+
+def _app_recording(es, qs, ws):
+    turn = [StreamChunk(type="text", text="好的。"), StreamChunk(type="done")]
+    rec = _ToolRecordingClient([turn])
+    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None)
+    app = create_app(config=cfg, harness=_harness(lambda _t: rec, [turn]),
+                     store=ConversationStore(":memory:"), doc_store=DocumentStore(":memory:"),
+                     question_store=qs, wrong_store=ws, exam_session_store=es)
+    return TestClient(app), rec
+
+
+def _register(client):
+    r = client.post("/api/auth/register", json={"username": "u", "password": "pw1234"})
+    h = {"Authorization": f"Bearer {r.json()['token']}"}
+    cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
+    return r.json()["user"]["id"], h, cid
+
+
+def test_save_wrong_answer_tool_always_exposed_in_chat():
+    """零散练习（无 active 考试）：save_wrong_answer 无条件暴露给模型，没有开关能藏掉它。"""
+    client, rec = _app_recording(ExamSessionStore(":memory:"), QuestionStore(":memory:"),
+                                 WrongAnswerStore(":memory:"))
+    _uid, h, cid = _register(client)
+    with client.stream("POST", "/api/chat",
+                       json={"conversation_id": cid, "message": "出道题考我"}, headers=h) as resp:
+        _drain(resp)
+    assert rec.seen_tools and "save_wrong_answer" in rec.seen_tools[0]
+
+
+def test_save_wrong_answer_tool_hidden_during_active_exam():
+    """考试进行中反而不暴露：判分与保存已由服务端确定性完成，暴露会导致重复入库。"""
+    es = ExamSessionStore(":memory:")
+    client, rec = _app_recording(es, QuestionStore(":memory:"), WrongAnswerStore(":memory:"))
+    uid, h, cid = _register(client)
+    es.start(uid, cid, [{"type": "single", "stem": "q", "options": ["a", "b"],
+                         "answer": 1, "explanation": ""},
+                        {"type": "single", "stem": "q2", "options": ["a", "b"],
+                         "answer": 1, "explanation": ""}], "instant")
+    with client.stream("POST", "/api/chat",
+                       json={"conversation_id": cid, "message": "A"}, headers=h) as resp:
+        _drain(resp)
+    assert rec.seen_tools and "save_wrong_answer" not in rec.seen_tools[0]
+
+
 def test_active_exam_wrong_answer_saved_via_endpoint(make_mock):
     qs = QuestionStore(":memory:"); ws = WrongAnswerStore(":memory:"); es = ExamSessionStore(":memory:")
     client = _app(make_mock, es, qs, ws)
@@ -63,7 +122,7 @@ def test_active_exam_wrong_answer_saved_via_endpoint(make_mock):
                          "answer": 1, "explanation": "叶绿体"}], "instant")
 
     with client.stream("POST", "/api/chat",
-                       json={"conversation_id": cid, "message": "A", "save_wrong": True},
+                       json={"conversation_id": cid, "message": "A"},
                        headers=h) as resp:
         assert resp.status_code == 200
         _drain(resp)
@@ -76,7 +135,8 @@ def test_active_exam_wrong_answer_saved_via_endpoint(make_mock):
     assert es.get_active(uid, cid) is None
 
 
-def test_active_exam_toggle_off_not_saved_via_endpoint(make_mock):
+def test_stale_client_save_wrong_false_is_ignored(make_mock):
+    """save_wrong 开关已移除：老前端仍发 save_wrong=false 时该字段被忽略，答错照样入库。"""
     qs = QuestionStore(":memory:"); ws = WrongAnswerStore(":memory:"); es = ExamSessionStore(":memory:")
     client = _app(make_mock, es, qs, ws)
     r = client.post("/api/auth/register", json={"username": "u", "password": "pw1234"})
@@ -88,5 +148,6 @@ def test_active_exam_toggle_off_not_saved_via_endpoint(make_mock):
     with client.stream("POST", "/api/chat",
                        json={"conversation_id": cid, "message": "A", "save_wrong": False},
                        headers=h) as resp:
+        assert resp.status_code == 200               # 多余字段不致 422
         _drain(resp)
-    assert ws.list(uid) == []                        # 关开关：不存
+    assert len(ws.list(uid)) == 1                    # 无视该字段，答错必存
