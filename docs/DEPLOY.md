@@ -3,8 +3,8 @@
 `main` 分支有 push 时，`.github/workflows/deploy.yml` 会自动：
 1. 在 GitHub Actions 里**构建镜像并推送到 Docker Hub** `sumengnan/ai-learning-helper`
    （打两个 tag：`:latest` 与 `:<版本号>`）；
-2. 把 `docker-compose.yml` 拷到服务器 `/opt/ai-learning-helper`；
-3. SSH 进服务器 `docker compose up -d --pull always --no-build`，**拉取**该版本镜像滚动更新
+2. 把 `docker/docker-compose.yml` 拷到服务器 `/opt/ai-learning-helper/docker/`；
+3. SSH 进服务器 `cd /opt/ai-learning-helper/docker && docker compose up -d --pull always --no-build`，**拉取**该版本镜像滚动更新
    （服务器不构建、不需要源码）。
 
 ### 版本号（大.中 手动，小自增）
@@ -74,7 +74,7 @@ AUTH_SECRET=改成一段足够长的随机串
 
 所有运行时数据都落在挂载卷 `/opt/ai-learning-helper/data/`（`app.db` / `harness.db` /
 `memory.db` / `downloads/` / `attachments/`），重建/换镜像都不丢。部署只覆盖
-`docker-compose.yml`，不碰 `.env` 和 `data/`。
+`docker/docker-compose.yml`，不碰 `.env` 和 `data/`（二者仍在部署目录下，compose 用 `../` 指回）。
 
 ## 代码沙箱 / 浏览器工具
 
@@ -85,7 +85,7 @@ compose 挂载了宿主 `/var/run/docker.sock`，应用可调用宿主 Docker �
 
 ## 访问
 
-默认映射宿主 `8000` → 容器 `8000`。需要 80 端口把 `docker-compose.yml` 的端口改成
+默认映射宿主 `8000` → 容器 `8000`。需要 80 端口把 `docker/docker-compose.yml` 的端口改成
 `"80:8000"`，或在前面挂 Nginx 反代。
 
 ## 部署自检：前后端版本
@@ -103,6 +103,6 @@ compose 挂载了宿主 `/var/run/docker.sock`，应用可调用宿主 Docker �
 ## 手动触发 / 排障
 
 - Actions 页可用 **Run workflow** 手动部署（`workflow_dispatch`）。
-- 服务器上查看：`cd /opt/ai-learning-helper && docker compose logs -f` / `docker compose ps`。
+- 服务器上查看：`cd /opt/ai-learning-helper/docker && docker compose logs -f` / `docker compose ps`。
 - 首次连接跳过了 host key 校验（`StrictHostKeyChecking=no`）。如需更强安全性，改用 SSH 密钥
   并在 workflow 里固定 known_hosts。

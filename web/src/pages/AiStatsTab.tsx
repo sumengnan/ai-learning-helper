@@ -34,7 +34,7 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
           stripe={theme.palette.warning.main} />
         <StatTile label="成功率" value={fmtPct(ops.totals.success_rate)} hint={`${ops.totals.runs_finished} / ${ops.totals.runs}`} stripe={theme.palette.success.main} />
         <StatTile label="P95 延迟" value={fmtLatency(ops.totals.p95_latency_ms)} hint={`均值 ${fmtLatency(ops.totals.avg_latency_ms)}`} stripe={theme.palette.warning.main} />
-        <StatTile label="重试次数" value={String(ops.totals.retries)} hint={`活跃会话 ${ops.totals.conversations}`} stripe={theme.palette.primary.main} />
+        <StatTile label="重试次数" value={String(ops.totals.retries)} hint={`全站会话 ${ops.totals.conversations}`} stripe={theme.palette.primary.main} />
       </Box>
 
       {/* 趋势 + 步数 */}
@@ -62,32 +62,23 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
         </Card>
       </Box>
 
-      {/* 回答质量：轨迹 judge 分数 + 交付门拦截。两个门默认关，故常态可能为空。 */}
-      <Eyebrow note="仅本账号">回答质量</Eyebrow>
-      {q.scored_turns === 0 && gate.turns === 0 ? (
-        <Card sx={cardSx}>
-          <CardContent>
-            <Typography sx={{ fontSize: 13, color: "text.disabled" }}>
-              还没有质量评分记录。需在 .env 开启 <code>HARNESS_ENABLE_TRAJECTORY_JUDGE</code>
-              （质量分）与 <code>HARNESS_ENABLE_ANSWER_GATE</code>（校验门）——两者默认关闭。
-              轨迹 judge 仅在多步任务时才跑，简单问答会跳过以省成本。
-            </Typography>
-          </CardContent>
-        </Card>
-      ) : (
-        <>
+      {/* 回答质量：轨迹 judge 分数 + 交付门拦截。与本页其它指标同为全局口径、随时间范围变。
+          两个门默认关闭，常态可能全为空 —— 此时照常出表格、值显示「—」/0，不换成一段说明文案。 */}
+      <Eyebrow note={rangeLabel(days)}>回答质量</Eyebrow>
+      <>
           <Box sx={{ display: "grid", gap: 1.75, mb: 1.75,
             gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4,1fr)" } }}>
             <StatTile label="平均质量分"
               value={q.avg_final == null ? "—" : String(q.avg_final)}
-              hint={q.scored_turns ? `${q.scored_turns} 轮已评` : "未开启轨迹 judge"}
+              hint={`${q.scored_turns} 轮已评`}
               stripe={q.avg_final == null ? theme.palette.primary.main : scoreColor(q.avg_final)} />
             <StatTile label="拆分 / 步骤分"
               value={`${q.avg_plan ?? "—"} / ${q.avg_steps ?? "—"}`}
               hint="任务拆分 · 关键步执行" stripe={theme.palette.primary.main} />
             <StatTile label="一次过率" value={gate.turns ? fmtPct(gate.first_pass_rate) : "—"}
               hint={`${gate.turns} 轮经过交付门 · 共重答 ${gate.retries} 次`}
-              stripe={gate.first_pass_rate >= 0.8 ? theme.palette.success.main : theme.palette.warning.main} />
+              stripe={gate.turns === 0 ? theme.palette.primary.main
+                : gate.first_pass_rate >= 0.8 ? theme.palette.success.main : theme.palette.warning.main} />
             <StatTile label="降级交付" value={String(gate.degraded)}
               hint={gate.gate_errors > 0
                 ? `另有 ${gate.gate_errors} 轮因校验器故障未真校验`
@@ -111,9 +102,23 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
                   按次数排序 · 悬停查看具体数值
                 </Typography>
                 {gate.layer_failures.length === 0 ? (
-                  <Typography sx={{ fontSize: 13, color: "text.disabled" }}>
-                    没有被拦下的回答
-                  </Typography>
+                  // 无数据也出表：表头 + 一行「—」，与有数据时同构，不换成说明文案
+                  <Stack spacing={1.1}>
+                    <Box sx={{ display: "grid", gridTemplateColumns: "120px 1fr 92px",
+                      alignItems: "center", gap: 1.5, fontSize: 11, color: "text.disabled",
+                      fontWeight: 600 }}>
+                      <span>校验层</span>
+                      <span>未通过次数</span>
+                      <Box component="span" sx={{ textAlign: "right" }}>次数</Box>
+                    </Box>
+                    <Box sx={{ display: "grid", gridTemplateColumns: "120px 1fr 92px",
+                      alignItems: "center", gap: 1.5 }}>
+                      <Typography sx={{ fontSize: 12, color: "text.disabled" }}>—</Typography>
+                      <Box sx={{ height: 9, bgcolor: "action.selected", borderRadius: 1.5 }} />
+                      <Typography sx={{ textAlign: "right", fontFamily: "monospace",
+                        fontSize: 11.5, color: "text.disabled" }}>—</Typography>
+                    </Box>
+                  </Stack>
                 ) : (
                   <Stack spacing={1.1}>
                     {gate.layer_failures.map((l) => (
@@ -139,8 +144,7 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
               </CardContent>
             </Card>
           </Box>
-        </>
-      )}
+      </>
 
       {/* 工具调用 */}
       <Eyebrow>工具调用 &amp; 成功率</Eyebrow>

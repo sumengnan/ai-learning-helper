@@ -62,6 +62,10 @@ log = logging.getLogger("app.chat")
 # 交付门缓冲后补发终稿时，把文本切成小片以保留打字机效果
 _DELIVER_CHUNK = 40
 
+# 「本轮开了校验门」信号的固定 key（前端 VerifyBadge.tsx 有同名常量，改这里必须同时改那里）。
+# 借 scope=verify 通道下发，但它不是校验进展，前端不得把它渲染成校验徽章。详见发出处的注释。
+GATE_OPEN_KEY = "verify:gate-open"
+
 
 def _chunks(text: str, size: int = _DELIVER_CHUNK):
     for i in range(0, len(text), size):
@@ -347,8 +351,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         profile_block = ""
         if profile_store is not None:
             profile_block = render_profile_block(profile_store.get(user_id))
+        # 附件指引与附件工具同条件注入：has_attachments 为假时 list_attachments/
+        # read_attachment 根本没注册（见 _build_registry），此时还介绍它们的用法，等于
+        # 告诉模型一批它没有的工具——比浪费 token 更糟。
+        attachment_guide = ATTACHMENT_GUIDE if has_attachments else ""
         base_ctx = await _assembler.build_manager(
-            harness.system_prompt + profile_block + EXAM_GUIDE + ATTACHMENT_GUIDE
+            harness.system_prompt + profile_block + EXAM_GUIDE + attachment_guide
             + SOURCE_GUIDE + _today_guide(),
             history, req.message, req.conversation_id)
         log.info("上下文组装 conv=%s 历史%d条 耗时%dms",
@@ -594,9 +602,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     # 先于首个「校验中…」，前端要据此在交付前一直不显示生成的文件——未通过会
                     # 重答、届时这些产物被 _purge_side_effects 清掉，提前显示等于给用户一个
                     # 马上失效的下载按钮。
+                    # key 固定为 GATE_OPEN_KEY（前端 VerifyBadge.tsx 同名常量）：这只是个门已开
+                    # 的信号，不是一条校验进展——此刻模型连初稿都还没生成，没有任何东西可校验。
+                    # 前端据此把它排除在校验徽章之外，否则回答刚起头就转圈谎称「正在校验」。
                     # 刻意不落库（不走 _emit_verify）：刷新后由已存的终态记录决定展示即可；
                     # 落库反而会在用户中途停止时留下一条永远转圈的「生成中…」。
-                    yield Progress("verify", "生成中…", status="running", key=uuid4().hex)
+                    yield Progress("verify", "生成中…", status="running", key=GATE_OPEN_KEY)
 
                     for attempt in range(max_attempts):
                         msg = model_message if corrective is None else corrective
@@ -613,7 +624,10 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         cur_fx = _side_effect_ids(collect["steps"])   # 本轮生成的副作用产物
 
                         ekey = uuid4().hex
-                        yield _emit_verify("校验中…", status="running", key=ekey)
+                        # 文案须自报层级：徽章原样显示它，而终态行都写明了是哪层（「结果校验
+                        # 通过」/「步骤校验未通过」）——唯独进行中只说「校验中…」，用户就看不出
+                        # 转圈的是交付门还是每步校验。交付门属结果层，故这里明写「结果校验中…」。
+                        yield _emit_verify("结果校验中…", status="running", key=ekey)
                         if not draft:
                             verdict = Verdict(ok=False, failed=["empty"],
                                               critique=collect["error"] or "本轮未产出答案",

@@ -1,6 +1,6 @@
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { describe, it, expect, afterEach } from "vitest";
-import { VerifyBadge } from "./VerifyBadge";
+import { VerifyBadge, GATE_OPEN_KEY } from "./VerifyBadge";
 import type { ChatMessage } from "../types";
 
 afterEach(() => cleanup());
@@ -10,12 +10,22 @@ const msg = (over: Partial<ChatMessage> = {}): ChatMessage =>
   ({ role: "assistant", content: "答案", ...over });
 
 describe("VerifyBadge 状态机", () => {
-  it("本轮进行中（live）→ 原地显示当前过程文案（校验中…/重答中…）", () => {
+  it("本轮进行中（live）→ 原地显示当前过程文案（结果校验中…/重答中…）", () => {
     render(<VerifyBadge live message={msg({
       status: "streaming",
-      progress: [{ scope: "verify", text: "校验中…", status: "running" }],
+      progress: [{ scope: "verify", text: "结果校验中…", status: "running" }],
     })} />);
-    expect(screen.getByText("校验中…")).toBeTruthy();
+    expect(screen.getByText("结果校验中…")).toBeTruthy();
+  });
+
+  it("进行中的兜底文案也带层级：写死「验证中…」会丢掉「转的是哪层」这唯一线索", () => {
+    // 文案缺失（服务端只发了 status，或事件被截断）→ 仍须说清是哪层在校验
+    render(<VerifyBadge live message={msg({
+      status: "streaming",
+      progress: [{ scope: "verify", text: "", status: "running" }],
+    })} />);
+    expect(screen.getByText("结果校验中…")).toBeTruthy();
+    expect(screen.queryByText("验证中…")).toBeNull();
   });
 
   it("verify running（非 live）→ 显示过程文案（如重答中…）", () => {
@@ -73,10 +83,10 @@ describe("VerifyBadge 状态机", () => {
     render(<VerifyBadge message={msg({
       status: "done",
       progress: [
-        { scope: "verify", text: "校验中…", status: "running", key: "k1" },
+        { scope: "verify", text: "结果校验中…", status: "running", key: "k1" },
         { scope: "verify", text: "judge 分数过低", status: "error", key: "k1" },
         { scope: "verify", text: "重答中…", status: "running" },
-        { scope: "verify", text: "校验中…", status: "running", key: "k2" },
+        { scope: "verify", text: "结果校验中…", status: "running", key: "k2" },
         { scope: "verify", text: "校验通过", status: "ok", key: "k2" },
       ],
     })} />);
@@ -87,6 +97,26 @@ describe("VerifyBadge 状态机", () => {
   it("无 verify/check/quality 任一信号 → 不渲染（返回 null）", () => {
     const { container } = render(<VerifyBadge message={msg({ status: "done" })} />);
     expect(container.firstChild).toBeNull();
+  });
+
+  it("只有门已开信号（回答刚起头）→ 不渲染：此刻没有任何东西被校验过", () => {
+    const { container } = render(<VerifyBadge live message={msg({
+      status: "streaming", content: "",
+      progress: [{ scope: "verify", text: "生成中…", status: "running", key: GATE_OPEN_KEY }],
+    })} />);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("门已开信号后真的开始校验 → 徽章此时才出现，且显示「结果校验中…」而非「生成中…」", () => {
+    render(<VerifyBadge live message={msg({
+      status: "streaming",
+      progress: [
+        { scope: "verify", text: "生成中…", status: "running", key: GATE_OPEN_KEY },
+        { scope: "verify", text: "结果校验中…", status: "running", key: "k1" },
+      ],
+    })} />);
+    expect(screen.getByText("结果校验中…")).toBeTruthy();
+    expect(screen.queryByText("生成中…")).toBeNull();
   });
 });
 
@@ -118,15 +148,39 @@ describe("VerifyBadge 常驻性与展开明细", () => {
     expect(screen.getByText("步骤可再精简")).toBeTruthy();
   });
 
-  it("quality 分数为 null → 展开显示「—」", () => {
+  it("quality 分数全为 null → 不摆一排「—」（judge 只对真发生过的环节打分）", () => {
     render(<VerifyBadge message={msg({
       status: "done",
       quality: { plan: null, steps: null, final: null, feedback: "" },
     })} />);
     fireEvent.click(screen.getByText("结果校验通过"));
-    expect(screen.getByText("拆分 —")).toBeTruthy();
-    expect(screen.getByText("关键步 —")).toBeTruthy();
-    expect(screen.getByText("最终 —")).toBeTruthy();
+    expect(screen.queryByText(/拆分/)).toBeNull();
+    expect(screen.queryByText(/关键步/)).toBeNull();
+    expect(screen.queryByText(/最终/)).toBeNull();
+  });
+
+  it("模型没调 plan 工具 → 只显示实际打了分的项，不显示「拆分 —」", () => {
+    // plan 为 null 是设计（无拆分可评），但摆个横线会让人以为是 0 分或出错
+    render(<VerifyBadge message={msg({
+      status: "done",
+      quality: { plan: null, steps: 100, final: 100, feedback: "完成得不错" },
+    })} />);
+    fireEvent.click(screen.getByText("结果校验通过"));
+    expect(screen.queryByText(/拆分/)).toBeNull();
+    expect(screen.getByText("关键步 100")).toBeTruthy();
+    expect(screen.getByText("最终 100")).toBeTruthy();
+    expect(screen.getByText("完成得不错")).toBeTruthy();
+  });
+
+  it("0 分是真分数，不能被当成空值隐藏", () => {
+    render(<VerifyBadge message={msg({
+      status: "done",
+      quality: { plan: 0, steps: 0, final: 0, feedback: "很差" },
+    })} />);
+    // 徽章状态由交付门定，与 judge 分数无关；这里只关心 0 分有没有被显示出来
+    fireEvent.click(screen.getByText("结果校验通过"));
+    expect(screen.getByText("拆分 0")).toBeTruthy();
+    expect(screen.getByText("最终 0")).toBeTruthy();
   });
 });
 

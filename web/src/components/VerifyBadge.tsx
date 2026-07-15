@@ -6,8 +6,24 @@ import { CollapsibleBlock } from "./CollapsibleBlock";
 import { EllipsisText } from "./EllipsisText";
 import type { ChatMessage } from "../types";
 
-// 质量分展示：null/undefined → 「—」
-const fmtScore = (n?: number | null) => (n === null || n === undefined ? "—" : String(n));
+// 轮次开头下发的「本轮开了校验门」信号（app/api/chat.py 同名常量，改这里必须同时改那里）。
+// 它借 scope=verify 通道，但不是一条校验进展——此刻模型连初稿都还没生成，没有任何东西可校验。
+// 唯一用途是让 ChatView 在交付前盖住本轮生成的文件（未通过会重答、产物届时被服务端清掉）。
+// 故校验徽章必须把它排除在外：否则回答刚起头徽章就转圈说「生成中…」，谎称正在校验，
+// 而真正的校验要等模型出完初稿（「校验中…」）才开始。
+export const GATE_OPEN_KEY = "verify:gate-open";
+export const isGateOpen = (p: { scope: string; key?: string | null }) =>
+  p.scope === "verify" && p.key === GATE_OPEN_KEY;
+
+// 轨迹 judge 只对「真发生过的环节」打分：模型没调 plan 工具就没有拆分可评，该项为 null
+// （见 verify.py TRAJECTORY_SYSTEM「无拆分或无步骤时对应字段给 null」）。
+// null 的项直接不显示——摆一个「拆分 —」只会让人追问横线是什么意思，而它并不代表 0 分。
+function scoresOf(q: NonNullable<ChatMessage["quality"]>): [string, number][] {
+  const pairs: [string, number | null | undefined][] =
+    [["拆分", q.plan], ["关键步", q.steps], ["最终", q.final]];
+  return pairs.filter((p): p is [string, number] =>
+    typeof p[1] === "number") as [string, number][];
+}
 
 // 从 progress 里重建轨迹质量分（scope="quality"，text 为 JSON）。
 // message.quality 只在实时 SSE 时由 ChatView 赋值，刷新后走 ui_messages 加载则没有；
@@ -68,7 +84,8 @@ const SectionLabel = ({ text }: { text: string }) => (
 // 展开明细按来源分组标注（步骤校验 / 结果校验 / 三层质量分），单看一行也知道它属于哪层。
 // 仅当本轮有 verify/check/quality 任一信号时渲染，否则返回 null。
 export function VerifyBadge({ message, live = false }: { message: ChatMessage; live?: boolean }) {
-  const verify = (message.progress || []).filter((p) => p.scope === "verify");
+  // 排除门已开信号：它虽走 verify 通道，却先于任何校验发生，算进来会让徽章一开场就转圈
+  const verify = (message.progress || []).filter((p) => p.scope === "verify" && !isGateOpen(p));
   // checks 实时由 ChatView 赋值、刷新后为空 → 回退到从 progress 重建（数据一直在那）。
   // 检索命中是正常情形，不作为校验状态展示（仅保留失败/未命中等有意义的每步校验）
   const checks = (message.checks || checksFromProgress(message.progress)).filter(
@@ -92,8 +109,11 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
   // 主行须降级说「步骤校验」——这正是结果校验开关关闭时的情形。
   const kind = verify.length > 0 || quality ? "结果校验" : "步骤校验";
 
-  // 状态以「最后一个 verify 事件」为准：running 显示当前过程（校验中…/重答中…，故未通过→重答中→
-  // 通过是连续过渡），ok/error 为终态。无 verify 事件时不谎称「验证中」，按每步校验有无失败定 ok/error。
+  // 状态以「最后一个 verify 事件」为准：running 显示当前过程（结果校验中…/重答中…，故未通过→
+  // 重答中→通过是连续过渡），ok/error 为终态。
+  // 只有交付门会发 running：每步校验（scope=check）在工具跑完时直接出 ok/error，没有进行中态
+  // （见 app/tools/validating.py）。故 state==="running" ⇒ kind 必为「结果校验」。
+  // 无 verify 事件时不谎称「验证中」，按每步校验有无失败定 ok/error。
   const state: "running" | "ok" | "error" =
     vLast?.status === "running" ? "running"
       : vLast?.status === "error" ? "error"
@@ -106,10 +126,13 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
       : state === "error" ? <CancelIcon sx={{ fontSize: 16 }} color="error" />
         : <CheckCircleIcon sx={{ fontSize: 16 }} color="success" />;
 
-  // 进行中：原地显示当前过程文案（校验中…/重答中…，均出自 verify 事件），出结果后替换为终态文案
-  const label = state === "running" ? (vLast?.text || "验证中…")
+  // 进行中：原地显示当前过程文案（结果校验中…/重答中…，均出自 verify 事件），出结果后替换为终态。
+  // 文案由服务端给出并自报层级；兜底串也必须带上 kind——写死「验证中…」等于把用户唯一能判断
+  // 「转的是哪层」的线索丢掉，而这正是终态行一直都标着的。
+  const label = state === "running" ? (vLast?.text || `${kind}中…`)
     : state === "error" ? `${kind}未通过` : `${kind}通过`;
   const qFinal = quality ? quality.final : undefined;
+  const scoreRows = quality ? scoresOf(quality) : [];
 
   const summary = (
     <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, minWidth: 0, flex: 1 }}>
@@ -169,11 +192,15 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
         )}
         {quality && (
           <Box>
-            <Box sx={{ display: "flex", gap: 1.5, flexWrap: "wrap", py: 0.15 }}>
-              <Typography variant="caption" color="text.secondary">拆分 {fmtScore(quality.plan)}</Typography>
-              <Typography variant="caption" color="text.secondary">关键步 {fmtScore(quality.steps)}</Typography>
-              <Typography variant="caption" color="text.secondary">最终 {fmtScore(quality.final)}</Typography>
-            </Box>
+            {scoreRows.length > 0 && (
+              <Box sx={{ display: "flex", gap: 1.5, flexWrap: "wrap", py: 0.15 }}>
+                {scoreRows.map(([label, n]) => (
+                  <Typography key={label} variant="caption" color="text.secondary">
+                    {label} {n}
+                  </Typography>
+                ))}
+              </Box>
+            )}
             {quality.feedback && (
               <Typography variant="caption" color="text.secondary"
                 sx={{ display: "block", mt: 0.25, whiteSpace: "pre-wrap" }}>
