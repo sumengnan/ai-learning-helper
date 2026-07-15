@@ -6,8 +6,15 @@ import { CollapsibleBlock } from "./CollapsibleBlock";
 import { EllipsisText } from "./EllipsisText";
 import type { ChatMessage } from "../types";
 
-// 质量分展示：null/undefined → 「—」
-const fmtScore = (n?: number | null) => (n === null || n === undefined ? "—" : String(n));
+// 轨迹 judge 只对「真发生过的环节」打分：模型没调 plan 工具就没有拆分可评，该项为 null
+// （见 verify.py TRAJECTORY_SYSTEM「无拆分或无步骤时对应字段给 null」）。
+// null 的项直接不显示——摆一个「拆分 —」只会让人追问横线是什么意思，而它并不代表 0 分。
+function scoresOf(q: NonNullable<ChatMessage["quality"]>): [string, number][] {
+  const pairs: [string, number | null | undefined][] =
+    [["拆分", q.plan], ["关键步", q.steps], ["最终", q.final]];
+  return pairs.filter((p): p is [string, number] =>
+    typeof p[1] === "number") as [string, number][];
+}
 
 // 从 progress 里重建轨迹质量分（scope="quality"，text 为 JSON）。
 // message.quality 只在实时 SSE 时由 ChatView 赋值，刷新后走 ui_messages 加载则没有；
@@ -110,6 +117,7 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
   const label = state === "running" ? (vLast?.text || "验证中…")
     : state === "error" ? `${kind}未通过` : `${kind}通过`;
   const qFinal = quality ? quality.final : undefined;
+  const scoreRows = quality ? scoresOf(quality) : [];
 
   const summary = (
     <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, minWidth: 0, flex: 1 }}>
@@ -169,11 +177,15 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
         )}
         {quality && (
           <Box>
-            <Box sx={{ display: "flex", gap: 1.5, flexWrap: "wrap", py: 0.15 }}>
-              <Typography variant="caption" color="text.secondary">拆分 {fmtScore(quality.plan)}</Typography>
-              <Typography variant="caption" color="text.secondary">关键步 {fmtScore(quality.steps)}</Typography>
-              <Typography variant="caption" color="text.secondary">最终 {fmtScore(quality.final)}</Typography>
-            </Box>
+            {scoreRows.length > 0 && (
+              <Box sx={{ display: "flex", gap: 1.5, flexWrap: "wrap", py: 0.15 }}>
+                {scoreRows.map(([label, n]) => (
+                  <Typography key={label} variant="caption" color="text.secondary">
+                    {label} {n}
+                  </Typography>
+                ))}
+              </Box>
+            )}
             {quality.feedback && (
               <Typography variant="caption" color="text.secondary"
                 sx={{ display: "block", mt: 0.25, whiteSpace: "pre-wrap" }}>
