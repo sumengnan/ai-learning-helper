@@ -31,15 +31,15 @@ describe("VerifyBadge 状态机", () => {
       checks: [{ tool: "run_python", status: "ok", text: "run_python 执行通过" }],
     })} />);
     expect(screen.queryByText("验证中…")).toBeNull();
-    expect(screen.getByText("校验通过")).toBeTruthy();
+    expect(screen.getByText("步骤校验通过")).toBeTruthy();
   });
 
-  it("verify ok → 「校验通过」，有 quality.final 则并显示「质量 N」", () => {
+  it("verify ok → 「结果校验通过」，有 quality.final 则并显示「质量 N」", () => {
     render(<VerifyBadge message={msg({
       progress: [{ scope: "verify", text: "通过", status: "ok" }],
       quality: { plan: 80, steps: 70, final: 90, feedback: "不错" },
     })} />);
-    expect(screen.getByText("校验通过")).toBeTruthy();
+    expect(screen.getByText("结果校验通过")).toBeTruthy();
     expect(screen.getByText("· 质量 90")).toBeTruthy();
   });
 
@@ -48,7 +48,7 @@ describe("VerifyBadge 状态机", () => {
       status: "done",
       checks: [{ tool: "run_python", status: "ok", text: "run_python 执行通过" }],
     })} />);
-    expect(screen.getByText("校验通过")).toBeTruthy();
+    expect(screen.getByText("步骤校验通过")).toBeTruthy();
   });
 
   it("检索命中（成功）不作为校验状态展示；无其它信号则不渲染", () => {
@@ -59,12 +59,12 @@ describe("VerifyBadge 状态机", () => {
     expect(container.firstChild).toBeNull();   // 唯一信号是检索命中 ok → 被过滤 → 不渲染
   });
 
-  it("verify error → 红色「未通过」+ 末条 verify 文案", () => {
+  it("verify error → 红色「结果校验未通过」+ 末条 verify 文案", () => {
     render(<VerifyBadge message={msg({
       status: "done",
       progress: [{ scope: "verify", text: "grounding 未通过", status: "error" }],
     })} />);
-    expect(screen.getByText("未通过")).toBeTruthy();
+    expect(screen.getByText("结果校验未通过")).toBeTruthy();
     // summary 预览 + 展开明细行两处均含该文案
     expect(screen.getAllByText(/grounding 未通过/).length).toBeGreaterThanOrEqual(1);
   });
@@ -80,7 +80,7 @@ describe("VerifyBadge 状态机", () => {
         { scope: "verify", text: "校验通过", status: "ok", key: "k2" },
       ],
     })} />);
-    expect(screen.getByText("校验通过")).toBeTruthy();            // 主行：最终通过
+    expect(screen.getByText("结果校验通过")).toBeTruthy();        // 主行：最终通过
     expect(screen.getByText(/judge 分数过低/)).toBeTruthy();      // 历史：失败轮原因仍在
   });
 
@@ -97,7 +97,7 @@ describe("VerifyBadge 常驻性与展开明细", () => {
       status: "done",
       quality: { plan: 1, steps: 2, final: 3, feedback: "" },
     })} />);
-    expect(screen.getByText("校验通过")).toBeTruthy();
+    expect(screen.getByText("结果校验通过")).toBeTruthy();
   });
 
   it("展开面板显示 checks 每步一行 + quality 三层分与 feedback", () => {
@@ -109,8 +109,8 @@ describe("VerifyBadge 常驻性与展开明细", () => {
       ],
       quality: { plan: 80, steps: 65, final: 90, feedback: "步骤可再精简" },
     })} />);
-    // 点击展开 Accordion（有 verify ok → 主行「校验通过」）
-    fireEvent.click(screen.getByText("校验通过"));
+    // 点击展开 Accordion（有 verify ok → 主行「结果校验通过」）
+    fireEvent.click(screen.getByText("结果校验通过"));
     expect(screen.getByText("run_python 执行未通过")).toBeTruthy();
     expect(screen.getByText("拆分 80")).toBeTruthy();
     expect(screen.getByText("关键步 65")).toBeTruthy();
@@ -123,10 +123,57 @@ describe("VerifyBadge 常驻性与展开明细", () => {
       status: "done",
       quality: { plan: null, steps: null, final: null, feedback: "" },
     })} />);
-    fireEvent.click(screen.getByText("校验通过"));
+    fireEvent.click(screen.getByText("结果校验通过"));
     expect(screen.getByText("拆分 —")).toBeTruthy();
     expect(screen.getByText("关键步 —")).toBeTruthy();
     expect(screen.getByText("最终 —")).toBeTruthy();
+  });
+});
+
+// 两套校验机制共用徽章，主行必须说清是哪一层——否则关掉「结果校验」开关的用户看到
+// 「校验通过」会以为结果被校验过（实际只是 run_shell 执行成功的每步标记）。
+describe("VerifyBadge 区分步骤校验与结果校验", () => {
+  it("关闭结果校验（无 verify/quality）+ run_shell 执行通过 → 主行说「步骤校验通过」，不谎称结果已校验", () => {
+    render(<VerifyBadge message={msg({
+      status: "done",
+      checks: [{ tool: "run_shell", status: "ok", text: "run_shell 执行通过" }],
+    })} />);
+    expect(screen.getByText("步骤校验通过")).toBeTruthy();
+    expect(screen.queryByText("结果校验通过")).toBeNull();
+  });
+
+  it("关闭结果校验 + run_shell 执行失败 → 「步骤校验未通过」（失败仍须告知，不静音）", () => {
+    render(<VerifyBadge message={msg({
+      status: "done",
+      checks: [{ tool: "run_shell", status: "error", text: "run_shell 执行未通过" }],
+    })} />);
+    expect(screen.getByText("步骤校验未通过")).toBeTruthy();
+  });
+
+  it("仅有 quality（轨迹质量分属结果层）→ 算结果校验", () => {
+    render(<VerifyBadge message={msg({
+      status: "done",
+      checks: [{ tool: "run_shell", status: "ok", text: "run_shell 执行通过" }],
+      quality: { plan: 80, steps: 70, final: 90, feedback: "" },
+    })} />);
+    expect(screen.getByText("结果校验通过")).toBeTruthy();
+  });
+
+  it("两层信号并存 → 展开明细按来源分组标注，各行不会被误读", () => {
+    render(<VerifyBadge message={msg({
+      status: "done",
+      progress: [
+        { scope: "verify", text: "judge 分数过低", status: "error", key: "k1" },
+        { scope: "verify", text: "校验通过", status: "ok", key: "k2" },
+      ],
+      checks: [{ tool: "run_shell", status: "ok", text: "run_shell 执行通过" }],
+    })} />);
+    expect(screen.getByText("结果校验通过")).toBeTruthy();    // 主行：以结果层为准
+    fireEvent.click(screen.getByText("结果校验通过"));
+    expect(screen.getByText("步骤校验")).toBeTruthy();        // 分组标题：步骤层明细
+    expect(screen.getByText("结果校验")).toBeTruthy();        // 分组标题：交付门历史
+    expect(screen.getByText("run_shell 执行通过")).toBeTruthy();
+    expect(screen.getByText(/judge 分数过低/)).toBeTruthy();
   });
 });
 
@@ -139,8 +186,9 @@ describe("VerifyBadge 容错", () => {
       quality: null,
       checks: [{ tool: "run_python", status: "ok", text: "run_python 执行通过" }],
     })} />);
-    expect(screen.getByText("校验通过")).toBeTruthy();
-    fireEvent.click(screen.getByText("校验通过"));
+    // quality 解析失败 → 结果层无信号，降级为步骤校验（不因 quality 字段在场就算结果已校验）
+    expect(screen.getByText("步骤校验通过")).toBeTruthy();
+    fireEvent.click(screen.getByText("步骤校验通过"));
     expect(screen.getByText("run_python 执行通过")).toBeTruthy();
     // 无 quality 段：不应出现三层分标签
     expect(screen.queryByText(/拆分/)).toBeNull();
