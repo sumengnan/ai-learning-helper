@@ -109,12 +109,13 @@ describe("HomeView · 回答质量", () => {
     expect(screen.getByText("知识库依据")).toBeTruthy();
   });
 
-  it("两个门都没开时给出可操作的空态提示，而不是空白或 0 分", async () => {
+  it("没有数据时照常出表格、值显示「—」，不换成说明文案", async () => {
     (statsApi.overview as any).mockResolvedValue({
       ...OV,
       ops: {
         ...OV.ops,
-        gate: { ...OV.ops.gate, turns: 0, layer_failures: [] },
+        gate: { ...OV.ops.gate, turns: 0, retries: 0, degraded: 0, first_pass_rate: 0,
+                layer_failures: [] },
         quality: {
           scored_turns: 0, avg_final: null, avg_plan: null, avg_steps: null,
           distribution: [
@@ -125,10 +126,24 @@ describe("HomeView · 回答质量", () => {
       },
     });
     renderOps();
-    await waitFor(() => expect(screen.getByText(/还没有质量评分记录/)).toBeTruthy());
-    // 默认配置下这块本就是空的，必须说清怎么开，否则会被当成 bug
-    expect(screen.getByText("HARNESS_ENABLE_TRAJECTORY_JUDGE")).toBeTruthy();
-    expect(screen.queryByText("平均质量分")).toBeNull();
+    // 表格照出：标题与格子都在，只是值为 —/0
+    await waitFor(() => expect(screen.getByText("平均质量分")).toBeTruthy());
+    expect(screen.getByText("质量分分布")).toBeTruthy();
+    expect(screen.getByText("哪一层拦下的")).toBeTruthy();
+    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+    expect(screen.getByText("0 轮已评")).toBeTruthy();
+    // 不再用一段说明文案顶替表格
+    expect(screen.queryByText(/还没有质量评分记录/)).toBeNull();
+    expect(screen.queryByText(/没有被拦下的回答/)).toBeNull();
+  });
+
+  it("回答质量是全局口径，标注跟随右上角时间范围", async () => {
+    (statsApi.overview as any).mockResolvedValue(OV);
+    renderOps();
+    await waitFor(() => expect(screen.getByText("回答质量")).toBeTruthy());
+    // 不再标「仅本账号」——整页都是全局口径
+    expect(screen.queryByText("仅本账号")).toBeNull();
+    expect(screen.getAllByText("近 3 天").length).toBeGreaterThan(0);   // 默认范围
   });
 
   it("校验器自身故障（fail-open）的轮数要显形——那些「通过」并非真校验过", async () => {

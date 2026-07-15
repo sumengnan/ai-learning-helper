@@ -368,12 +368,32 @@ def test_quality_distribution_buckets_are_stable():
 
 
 
-def test_quality_is_scoped_to_user():
+def test_quality_is_global_across_users():
+    """「AI 运行统计」是运维口径，质量分要汇总全站 —— 只算本人会和同页其它指标对不上。"""
     app = _quality_app_conn()
     _turn(app, [_quality(final=90)], conv="cv1", seq=0)
-    _turn(app, [_quality(final=10)], conv="cv9", seq=0)   # 别人的会话
+    _turn(app, [_quality(final=10)], conv="cv9", seq=0)   # 别人的会话，也要算进来
+    q = _quality_svc(app).overview("u")["ops"]["quality"]
+    assert q["scored_turns"] == 2 and q["avg_final"] == 50.0
+
+
+def test_quality_respects_time_range():
+    """右上角的时间范围必须生效（默认按 14 天算，超窗的不计）。"""
+    app = _quality_app_conn()
+    _turn(app, [_quality(final=90)], seq=0, created_at="2026-07-11T08:00:00+00:00")  # 窗口内
+    _turn(app, [_quality(final=10)], seq=1, created_at="2020-01-01T00:00:00+00:00")  # 超窗
     q = _quality_svc(app).overview("u")["ops"]["quality"]
     assert q["scored_turns"] == 1 and q["avg_final"] == 90.0
+
+
+def test_quality_time_range_narrows_with_days():
+    """把范围收窄到 1 天 → 更早的那轮被排除掉，说明 days 参数真的透传到了质量聚合。"""
+    app = _quality_app_conn()
+    _turn(app, [_quality(final=90)], seq=0, created_at="2026-07-11T08:00:00+00:00")  # 今天
+    _turn(app, [_quality(final=10)], seq=1, created_at="2026-07-05T08:00:00+00:00")  # 6 天前
+    svc = _quality_svc(app)
+    assert svc.overview("u", days=14)["ops"]["quality"]["scored_turns"] == 2
+    assert svc.overview("u", days=1)["ops"]["quality"]["scored_turns"] == 1
 
 
 def test_quality_empty_when_judge_never_ran():
@@ -461,13 +481,14 @@ def test_gate_stats_empty_when_no_verify_rows():
     assert g["turns"] == 0 and g["avg_retries"] == 0.0 and g["layer_failures"] == []
 
 
-def test_gate_stats_excludes_other_users_and_out_of_range():
+def test_gate_stats_is_global_but_respects_time_range():
+    """「AI 运行统计」是运维口径：全站汇总、不按用户切；但时间范围必须生效。"""
     conn = _app_conn_with_gate([(_IN_RANGE, _vt(2, 1, True, False, []))])
-    # 别的用户的会话
+    # 别的用户的会话 —— 全局口径下要算进来
     conn.execute("INSERT INTO conversations VALUES ('cvX','other','x','2026-07-10T09:00:00+00:00')")
     conn.execute("INSERT INTO conversation_messages(conv_id, seq, created_at, verify) "
                  "VALUES ('cvX', 0, ?, ?)", (_IN_RANGE, _vt(5, 4, True, False, [])))
-    # 本人但超出时间窗（默认 14 天）
+    # 超出时间窗 —— 不算
     conn.execute("INSERT INTO conversation_messages(conv_id, seq, created_at, verify) "
                  "VALUES ('cv1', 99, '2020-01-01T00:00:00+00:00', ?)",
                  (_vt(9, 8, True, False, []),))
@@ -476,7 +497,7 @@ def test_gate_stats_excludes_other_users_and_out_of_range():
     svc = StatsService(trajectory_conn=tc, app_conn=conn, memory_conn=_mem_conn(),
                        now=lambda: FIXED_NOW)
     g = svc.overview("u")["ops"]["gate"]
-    assert g["turns"] == 1 and g["retries"] == 1      # 只算本人、窗口内
+    assert g["turns"] == 2 and g["retries"] == 5     # 两个用户都算；超窗那条不算
 
 
 def test_gate_stats_survives_corrupt_json():
@@ -487,6 +508,15 @@ def test_gate_stats_survives_corrupt_json():
     assert g["turns"] == 1 and g["retries"] == 1      # 跳过坏行，好行照常算
 
 
+def test_ops_conversations_are_global_while_learn_stays_personal():
+    """「AI 运行统计」的会话/消息数是全站的；「学习主场」的仍是本人的 —— 两处口径不同，别混。"""
+    app = _quality_app_conn()      # 已含 cv1(用户 u) 与 cv9(用户 other)
+    _turn(app, [_quality(final=90)], conv="cv1", seq=0)
+    _turn(app, [_quality(final=80)], conv="cv9", seq=0)
+    ov = _quality_svc(app).overview("u")
+    assert ov["ops"]["totals"]["conversations"] == 2      # 全站两个会话
+    assert ov["ops"]["totals"]["messages"] == 2
+    assert ov["learn"]["conversations"] == 1             # 学习主场只算本人的
 # ---------- learn 按用户隔离（ops 仍全局）----------
 
 def _svc_two_users():

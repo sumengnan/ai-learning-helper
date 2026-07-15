@@ -8,8 +8,9 @@
 产出服务两种视角，作用域**不同**，故分别聚合：
 - learn（学习主场，「AI 在为我做什么」）：把运行数据翻译成产品语言（AI 用过哪些能力、
   花了多少力气）+ 学习资产 —— 全部按 user_id 隔离，讲的是「我的」。
-- ops（工程台）：运维口径（成功率、P95 延迟、工具成功率、步数分布）—— 保持全库，
-  同一台机器上别人的运行也是运维对象。
+- ops（工程台 / AI 运行统计）：运维口径（成功率、P95 延迟、工具成功率、步数分布、交付门
+  一次过率、轨迹 judge 质量分、全站会话数）—— **整片保持全库**，同一台机器上别人的运行
+  也是运维对象；其中任何一项若按 user 切，就会和同页其它指标对不上。
 
 轨迹库(harness.db)无 user_id，与应用库(app.db)是两个文件、无法 JOIN；learn 的隔离靠
 conversations → conversation_runs → run_id 反查（见 _user_run_ids）。学习资产按 user_id 归属。
@@ -132,14 +133,15 @@ class StatsService:
         user_agg = self._aggregate(user_events)
         user_series = self._daily_series(user_agg["daily"], now, days)
         app_counts = self._app_counts(user_id)
-        quality = self._quality_section(
-            self._load_progress_rows(user_id, cutoff.isoformat()))
         return {
             "range_days": days,
+            # 学习主场：本人的运行 + 本人的资产
             "learn": self._learn_section(user_id, user_agg, user_series, app_counts),
-            "ops": self._ops_section(agg, series, app_counts,
-                                     self._gate_stats(user_id, cutoff.isoformat()),
-                                     quality),
+            # AI 运行统计：运维口径，整片全局、不按用户切（含 gate/quality/会话数）
+            "ops": self._ops_section(agg, series, self._global_counts(),
+                                     self._gate_stats(cutoff.isoformat()),
+                                     self._quality_section(
+                                         self._load_progress_rows(cutoff.isoformat()))),
         }
 
     # ---------- 轨迹聚合 ----------
@@ -190,23 +192,24 @@ class StatsService:
 
     # ---------- 回答质量聚合 ----------
 
-    def _load_progress_rows(self, user_id: str | None,
-                            cutoff_iso: str) -> list[tuple[str, list]]:
-        """取该用户区间内每轮助手消息的 progress 列表。
+    def _load_progress_rows(self, cutoff_iso: str) -> list[tuple[str, list]]:
+        """取区间内每轮助手消息的 progress 列表。**全局**，不按用户切。
+
+        「AI 运行统计」整页是运维口径（轨迹库 trajectory_events 本就没有 user_id 列，切不了），
+        质量分若按用户切会和同页其它指标对不上，故这里也不带 user 条件。
 
         用 Python 解析而非 SQLite json_each：progress 是 list-of-dict 的 JSON 串，其中
         quality 项的 text **又是**一层 JSON 串，SQL 要写 json_extract 套 json_extract 套
         json_each，可读性崩塌；且 json_each 遇到一行非法 JSON 会抛 OperationalError 把整个
-        查询打挂，Python 侧能逐行跳过（照 _load_events 的既有约定）。单用户量级毫秒可完成。
+        查询打挂，Python 侧能逐行跳过（照 _load_events 的既有约定）。
         """
-        if self._app is None or not user_id:
+        if self._app is None:
             return []
         try:
             rows = self._app.execute(
-                "SELECT m.created_at, m.progress FROM conversation_messages m "
-                "JOIN conversations c ON c.id = m.conv_id "
-                "WHERE c.user_id = ? AND m.created_at >= ? AND m.progress IS NOT NULL "
-                "ORDER BY m.created_at", (user_id, cutoff_iso)).fetchall()
+                "SELECT created_at, progress FROM conversation_messages "
+                "WHERE created_at >= ? AND progress IS NOT NULL "
+                "ORDER BY created_at", (cutoff_iso,)).fetchall()
         except sqlite3.Error:
             return []
         out: list[tuple[str, list]] = []
@@ -415,6 +418,14 @@ class StatsService:
         except sqlite3.Error:
             return 0
 
+    def _global_counts(self) -> dict:
+        """全站会话/消息数，供「AI 运行统计」用 —— 该页是运维口径，全页不按用户切。
+        学习主场那边要的是本人的，走 _app_counts。"""
+        return {
+            "conversations": self._scalar(self._app, "SELECT COUNT(*) FROM conversations"),
+            "messages": self._scalar(self._app, "SELECT COUNT(*) FROM conversation_messages"),
+        }
+
     def _app_counts(self, user_id: str | None) -> dict:
         return {
             "documents": self._scalar(
@@ -432,8 +443,9 @@ class StatsService:
             "memory": self._count_user_memories(user_id),
         }
 
-    def _gate_stats(self, user_id: str | None, cutoff_iso: str) -> dict:
-        """交付门重答统计，读 conversation_messages.verify 列。
+    def _gate_stats(self, cutoff_iso: str) -> dict:
+        """交付门重答统计，读 conversation_messages.verify 列。**全局**，不按用户切
+        （与同页其它运维指标同口径，见 _load_progress_rows）。
 
         与 ops.totals.retries 是两回事：那个统计的是 LLM 网络重试（超时/限流后重发请求），
         与交付门无关。这里统计的是「答案没过校验、带反馈重答」的次数。
@@ -441,14 +453,13 @@ class StatsService:
         empty = {"turns": 0, "retries": 0, "avg_retries": 0.0, "degraded": 0,
                  "degraded_rate": 0.0, "first_pass_rate": 0.0, "gate_errors": 0,
                  "layer_failures": []}
-        if self._app is None or not user_id:
+        if self._app is None:
             return empty
         try:
             rows = self._app.execute(
                 "SELECT verify FROM conversation_messages"
-                " WHERE verify IS NOT NULL AND created_at >= ? AND conv_id IN"
-                " (SELECT id FROM conversations WHERE user_id=?)",
-                (cutoff_iso, user_id)).fetchall()
+                " WHERE verify IS NOT NULL AND created_at >= ?",
+                (cutoff_iso,)).fetchall()
         except sqlite3.Error:
             return empty
 
@@ -596,11 +607,10 @@ class StatsService:
             "activity": series,
         }
 
-    def _ops_section(self, agg, series, app_counts, gate, quality) -> dict:
-        # ⚠️ 口径不一致，看数时留意：totals/daily/tools/steps_histogram 是**全局**的
-        # （harness.db 的 trajectory_events 没有 user_id 列，无法按人切），而 gate 与 quality
-        # 都来自 conversation_messages，是**按当前用户隔离**的。
-        # 故「运行次数 100 / 已评轮次 12」并不矛盾。
+    def _ops_section(self, agg, series, counts, gate, quality) -> dict:
+        # 本区（AI 运行统计）**整片全局、不按用户切**：轨迹库 trajectory_events 本就没有
+        # user_id 列切不了，gate/quality 若按用户切就会和同页其它指标对不上。
+        # counts 须传 _global_counts() 的产物，别误传 _app_counts()（那是学习主场用的本人口径）。
         return {
             "totals": {
                 "runs": agg["runs_started"],
@@ -620,8 +630,8 @@ class StatsService:
                 "retries": agg["retries"],
                 "cost_usd": agg["cost_usd"],
                 "cost_currency": self._currency,
-                "conversations": app_counts["conversations"],
-                "messages": app_counts["messages"],
+                "conversations": counts["conversations"],
+                "messages": counts["messages"],
             },
             "daily": series,
             "tools": self._tools_list(agg["tool_counts"], agg["tool_errors"]),
