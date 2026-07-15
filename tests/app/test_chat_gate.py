@@ -11,6 +11,7 @@ from app.main import create_app
 from app.conversations import ConversationStore
 from app.documents import DocumentStore
 from app.verify import Verdict
+from app.api.chat import GATE_OPEN_KEY
 from harness.persistence.checkpoint import CheckpointStore
 from harness.persistence.trajectory import TrajectoryStore, TrajectorySink
 from harness.tools.base import ToolRegistry
@@ -390,6 +391,27 @@ def test_gate_signals_before_agent_runs(make_mock, text_turn):
         if term in kinds:
             assert first_verify < kinds.index(term), f"verify 信号应早于 {term}"
     assert _verify_progress(events)[0] == "生成中…"
+    # 它得带固定的 GATE_OPEN_KEY：前端靠这个 key 把它认出来并排除在校验徽章之外
+    # （它先于任何校验发生，起徽章就等于谎称在校验），同时仍据它盖住生成的文件。
+    first = next(e for e in events
+                 if e["type"] == "Progress" and e["data"]["scope"] == "verify")
+    assert first["data"]["key"] == GATE_OPEN_KEY
+
+
+def test_gate_running_text_names_its_layer(make_mock, text_turn):
+    """交付门的「进行中」文案必须自报是结果校验。
+
+    徽章原样显示这条文案，且只有交付门会发 running（每步校验在工具跑完时直接出 ok/error，
+    没有进行中态）。终态行一直都写明层级（「结果校验通过」/「步骤校验未通过」），若进行中
+    只说「校验中…」，用户就看不出转圈的是交付门还是每步校验——两套机制彼此独立、可各自开关。
+    """
+    client, _ = _client(make_mock, [text_turn("答案")], _StubVerifier([Verdict(ok=True)]))
+    h = _auth(client)
+    _cid, events = _run_chat(client, h, "问")
+    running = [e["data"]["text"] for e in events
+               if e["type"] == "Progress" and e["data"]["scope"] == "verify"
+               and e["data"]["status"] == "running" and e["data"]["key"] != GATE_OPEN_KEY]
+    assert running and running[0] == "结果校验中…"
 
 
 class _FakeDownloadStore:

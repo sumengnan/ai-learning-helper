@@ -19,7 +19,7 @@ import { MessageMeta } from "./MessageMeta";
 import { linkifyCitations, citeId } from "./citations";
 import { EmptyHint } from "./EmptyHint";
 import { ProgressBlock } from "./ProgressBlock";
-import { VerifyBadge } from "./VerifyBadge";
+import { VerifyBadge, isGateOpen } from "./VerifyBadge";
 import { PlanBlock } from "./PlanBlock";
 import { Markdown } from "./Markdown";
 import { RollingNumber } from "./RollingNumber";
@@ -504,6 +504,8 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                 // 开了校验门的轮次，交付前一律不显示：校验不过会带反馈重答，届时本轮产物会被
                 // 服务端清理掉，提前显示等于给用户一个马上会失效的下载按钮。服务端在轮次开头
                 // 就下发 scope=verify 信号，故整个生成/校验/重答期间都能盖住，不会闪一下。
+                // 这里必须把门已开信号(isGateOpen)算在内 —— 它正是轮次开头唯一那条 verify 事件，
+                // 是「不闪一下」的全部依据。别为了跟徽章的过滤保持一致而把它排掉。
                 const gating = m.status === "streaming"
                   && (m.progress || []).some((p) => p.scope === "verify");
                 if (gating) return null;
@@ -529,8 +531,11 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                 // 校验是系统级信息，与状态/耗时/tokens 同处虚线下方（不受 showTools 开关影响）
                 // quality 刷新后不在 m.quality 上（只实时赋值），但 progress 里有
                 // scope="quality"，故一并认；否则「只有质量分、无 verify」的轮刷新后不渲染徽章
+                // 门已开信号（isGateOpen）不算校验信号：它在轮次开头就到，用它起徽章等于
+                // 回答刚起头就转圈谎称在校验。徽章要等真正的校验事件（「校验中…」）才出现。
                 const hasVerify = !!((m.progress || []).some(
-                  (p) => p.scope === "verify" || p.scope === "check" || p.scope === "quality")
+                  (p) => (p.scope === "verify" && !isGateOpen(p))
+                    || p.scope === "check" || p.scope === "quality")
                   || m.quality);
                 const hasStatus = live || m.status === "done" || m.status === "error"
                   || m.status === "stopped" || m.status === "interrupted";
