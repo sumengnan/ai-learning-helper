@@ -6,6 +6,16 @@ export interface ToolStat { name: string; count: number; errors: number; success
 export interface StepBucket { bucket: string; count: number }
 export interface RecentDownload { id: string; filename: string; content_type: string; size: number; created_at: string }
 export interface MemoryItem { id: string; text: string; collection: string; created_at: string }
+export interface GateLayer { layer: string; label: string; count: number }
+/** 回答质量（轨迹 judge 分数 + 交付门拦截）。两个门默认关闭，故常态可能全为空/0。 */
+export interface QualityStat {
+  scored_turns: number;
+  avg_final: number | null;
+  avg_plan: number | null;
+  avg_steps: number | null;
+  distribution: StepBucket[];      // 与步数直方图同形状，复用 StepsHistogram 渲染
+  gate: { turns: number; blocked: number; block_rate: number; layers: GateLayer[] };
+}
 
 export interface StatsOverview {
   range_days: number;
@@ -30,6 +40,8 @@ export interface StatsOverview {
     daily: DailyPoint[];
     tools: ToolStat[];
     steps_histogram: StepBucket[];
+    // 注意口径：ops 其余指标是全局的（轨迹库无 user_id），quality 是按当前用户隔离的
+    quality: QualityStat;
   };
 }
 

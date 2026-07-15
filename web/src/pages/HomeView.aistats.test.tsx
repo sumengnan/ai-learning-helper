@@ -35,6 +35,20 @@ const OV: StatsOverview = {
       { bucket: "1", count: 9 }, { bucket: "2", count: 22 }, { bucket: "3", count: 26 },
       { bucket: "4", count: 14 }, { bucket: "5-6", count: 9 }, { bucket: "7+", count: 7 },
     ],
+    quality: {
+      scored_turns: 12, avg_final: 78.4, avg_plan: 81, avg_steps: 74.2,
+      distribution: [
+        { bucket: "0-59", count: 2 }, { bucket: "60-79", count: 4 },
+        { bucket: "80-89", count: 4 }, { bucket: "90-100", count: 2 },
+      ],
+      gate: {
+        turns: 20, blocked: 3, block_rate: 0.15,
+        layers: [
+          { layer: "judge", label: "质量评分", count: 2 },
+          { layer: "grounding", label: "知识库依据", count: 1 },
+        ],
+      },
+    },
   },
 };
 
@@ -76,5 +90,54 @@ describe("HomeView · AI 运行统计页签", () => {
     fireEvent.mouseDown(screen.getByLabelText("时间范围"));
     fireEvent.click(await screen.findByRole("option", { name: "近 30 天" }));
     await waitFor(() => expect(statsApi.overview).toHaveBeenCalledWith(30));
+  });
+});
+
+describe("HomeView · 回答质量", () => {
+  it("有评分时展示质量分、拦截率与失败层", async () => {
+    (statsApi.overview as any).mockResolvedValue(OV);
+    renderOps();
+    await waitFor(() => expect(screen.getByText("平均质量分")).toBeTruthy());
+    expect(screen.getByText("78.4")).toBeTruthy();
+    expect(screen.getByText("校验拦截率")).toBeTruthy();
+    expect(screen.getByText("15%")).toBeTruthy();          // block_rate 0.15
+    expect(screen.getByText("3 / 20 轮被拦下重答")).toBeTruthy();
+    // 失败层用中文标签展示（后端翻好再传，前端不另抄一份映射）
+    expect(screen.getByText("质量评分")).toBeTruthy();
+    expect(screen.getByText("知识库依据")).toBeTruthy();
+  });
+
+  it("两个门都没开时给出可操作的空态提示，而不是空白或 0 分", async () => {
+    (statsApi.overview as any).mockResolvedValue({
+      ...OV,
+      ops: {
+        ...OV.ops,
+        quality: {
+          scored_turns: 0, avg_final: null, avg_plan: null, avg_steps: null,
+          distribution: [
+            { bucket: "0-59", count: 0 }, { bucket: "60-79", count: 0 },
+            { bucket: "80-89", count: 0 }, { bucket: "90-100", count: 0 },
+          ],
+          gate: { turns: 0, blocked: 0, block_rate: 0, layers: [] },
+        },
+      },
+    });
+    renderOps();
+    await waitFor(() => expect(screen.getByText(/还没有质量评分记录/)).toBeTruthy());
+    // 默认配置下这块本就是空的，必须说清怎么开，否则会被当成 bug
+    expect(screen.getByText("HARNESS_ENABLE_TRAJECTORY_JUDGE")).toBeTruthy();
+    expect(screen.queryByText("平均质量分")).toBeNull();
+  });
+
+  it("有拦截但无结构化层名（该字段上线前的历史数据）时如实说明", async () => {
+    (statsApi.overview as any).mockResolvedValue({
+      ...OV,
+      ops: {
+        ...OV.ops,
+        quality: { ...OV.ops.quality, gate: { turns: 5, blocked: 2, block_rate: 0.4, layers: [] } },
+      },
+    });
+    renderOps();
+    await waitFor(() => expect(screen.getByText(/未记录具体层/)).toBeTruthy());
   });
 });

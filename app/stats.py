@@ -21,6 +21,8 @@ from datetime import datetime, timedelta, timezone
 
 from harness.usage import tiered_cost
 
+from .verify import failed_layers_zh
+
 # 原始工具名 → 面向学习者的「能力」分组（图标, 标签, 归入的工具名集合）。
 # 未列出的工具归入「其他能力」。顺序即展示顺序的兜底（实际按调用次数倒排）。
 _ABILITY_GROUPS: list[tuple[str, str, set[str]]] = [
@@ -72,6 +74,24 @@ def _step_bucket(n: int) -> str:
 
 _STEP_ORDER = ["1", "2", "3", "4", "5-6", "7+"]
 
+# 质量分分桶。桶名即前端展示的标签；空桶也保留，否则分布图会随数据忽长忽短。
+_SCORE_ORDER = ["0-59", "60-79", "80-89", "90-100"]
+
+
+def _score_bucket(n: int) -> str:
+    if n < 60:
+        return "0-59"
+    if n < 80:
+        return "60-79"
+    if n < 90:
+        return "80-89"
+    return "90-100"
+
+
+def _score_buckets(scores: list[int]) -> list[dict]:
+    c = Counter(_score_bucket(s) for s in scores)
+    return [{"bucket": b, "count": c.get(b, 0)} for b in _SCORE_ORDER]
+
 
 class StatsService:
     def __init__(self, *, trajectory_conn: sqlite3.Connection,
@@ -103,10 +123,12 @@ class StatsService:
         agg = self._aggregate(events)
         series = self._daily_series(agg["daily"], now, days)
         app_counts = self._app_counts(user_id)
+        quality = self._quality_section(
+            self._load_progress_rows(user_id, cutoff.isoformat()))
         return {
             "range_days": days,
             "learn": self._learn_section(user_id, agg, series, app_counts),
-            "ops": self._ops_section(agg, series, app_counts),
+            "ops": self._ops_section(agg, series, app_counts, quality),
         }
 
     # ---------- 轨迹聚合 ----------
@@ -130,6 +152,113 @@ class StatsService:
                 d = d["data"]
             out.append((run_id, typ, created_at, d if isinstance(d, dict) else {}))
         return out
+
+    # ---------- 回答质量聚合 ----------
+
+    def _load_progress_rows(self, user_id: str | None,
+                            cutoff_iso: str) -> list[tuple[str, list]]:
+        """取该用户区间内每轮助手消息的 progress 列表。
+
+        用 Python 解析而非 SQLite json_each：progress 是 list-of-dict 的 JSON 串，其中
+        quality 项的 text **又是**一层 JSON 串，SQL 要写 json_extract 套 json_extract 套
+        json_each，可读性崩塌；且 json_each 遇到一行非法 JSON 会抛 OperationalError 把整个
+        查询打挂，Python 侧能逐行跳过（照 _load_events 的既有约定）。单用户量级毫秒可完成。
+        """
+        if self._app is None or not user_id:
+            return []
+        try:
+            rows = self._app.execute(
+                "SELECT m.created_at, m.progress FROM conversation_messages m "
+                "JOIN conversations c ON c.id = m.conv_id "
+                "WHERE c.user_id = ? AND m.created_at >= ? AND m.progress IS NOT NULL "
+                "ORDER BY m.created_at", (user_id, cutoff_iso)).fetchall()
+        except sqlite3.Error:
+            return []
+        out: list[tuple[str, list]] = []
+        for created_at, raw in rows:
+            try:
+                items = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(items, list):
+                out.append((created_at or "", items))
+        return out
+
+    def _quality_agg(self, rows: list[tuple[str, list]]) -> dict:
+        """从 progress 抽 scope=quality（轨迹 judge 分数）与 scope=verify（交付门结果）。
+
+        质量分：_emit_quality 存的 text 是 {"plan","steps","final","feedback"} 的 JSON。
+        拦截率：一次 attempt 发一对同 key 的 running→ok/error（chat.py:520-567），故按 key
+        折叠取终态；"重答中…" 无 key 不计。一轮里只要有 ≥1 个 error 终态即判该轮被拦截
+        （含用尽重答次数后的降级交付——用户看到 ⚠️ 前缀，正是要监控的）。
+        """
+        finals: list[int] = []
+        plans: list[int] = []
+        steps_: list[int] = []
+        daily_finals: dict[str, list[int]] = {}
+        gate_turns = gate_blocked = 0
+        layers: Counter = Counter()
+
+        for created_at, items in rows:
+            day = (created_at or "")[:10]
+            verify_states: dict[str, str] = {}      # key -> 最后一次的 status
+            has_verify = False
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                scope = it.get("scope")
+                if scope == "quality":
+                    try:
+                        v = json.loads(it.get("text") or "{}")
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    if isinstance(v.get("final"), int):
+                        finals.append(v["final"])
+                        daily_finals.setdefault(day, []).append(v["final"])
+                    if isinstance(v.get("plan"), int):
+                        plans.append(v["plan"])
+                    if isinstance(v.get("steps"), int):
+                        steps_.append(v["steps"])
+                elif scope == "verify":
+                    st, key = it.get("status"), it.get("key")
+                    if st in ("ok", "error") and key:
+                        has_verify = True
+                        verify_states[key] = st
+                        if st == "error":
+                            # data 是后加的结构化字段；更早的历史数据没有它，此时只知道
+                            # 「被拦了」但不知是哪层——如实少计，不去反解中文文案（脆且易错）。
+                            for name in (it.get("data") or {}).get("failed", []):
+                                layers[name] += 1
+            if has_verify:
+                gate_turns += 1
+                gate_blocked += any(s == "error" for s in verify_states.values())
+
+        return {"finals": finals, "plans": plans, "steps": steps_,
+                "daily_finals": daily_finals, "gate_turns": gate_turns,
+                "gate_blocked": gate_blocked, "layers": layers}
+
+    def _quality_section(self, rows: list[tuple[str, list]]) -> dict:
+        agg = self._quality_agg(rows)
+        finals = agg["finals"]
+        return {
+            "scored_turns": len(finals),
+            "avg_final": round(sum(finals) / len(finals), 1) if finals else None,
+            "avg_plan": (round(sum(agg["plans"]) / len(agg["plans"]), 1)
+                         if agg["plans"] else None),
+            "avg_steps": (round(sum(agg["steps"]) / len(agg["steps"]), 1)
+                          if agg["steps"] else None),
+            # {bucket,count} 形状 —— 前端 StepsHistogram 直接吃，无需新图表组件
+            "distribution": _score_buckets(finals),
+            "gate": {
+                "turns": agg["gate_turns"],
+                "blocked": agg["gate_blocked"],
+                "block_rate": (round(agg["gate_blocked"] / agg["gate_turns"], 3)
+                               if agg["gate_turns"] else 0.0),
+                # 层名→中文走 verify 的公开函数，中文文案单一来源、不在此另抄一份映射
+                "layers": [{"layer": k, "label": failed_layers_zh([k]), "count": v}
+                           for k, v in agg["layers"].most_common()],
+            },
+        }
 
     def _aggregate(self, events) -> dict:
         runs_started: set[str] = set()
@@ -417,7 +546,10 @@ class StatsService:
             "activity": series,
         }
 
-    def _ops_section(self, agg, series, app_counts) -> dict:
+    def _ops_section(self, agg, series, app_counts, quality) -> dict:
+        # ⚠️ 口径不一致，看数时留意：本区其余指标是**全局**的（harness.db 的 trajectory_events
+        # 没有 user_id 列，无法按人切），只有 quality 来自 conversation_messages JOIN
+        # conversations，是**按当前用户隔离**的。故「运行次数 100 / 已评轮次 12」不矛盾。
         return {
             "totals": {
                 "runs": agg["runs_started"],
@@ -441,4 +573,5 @@ class StatsService:
             "daily": series,
             "tools": self._tools_list(agg["tool_counts"], agg["tool_errors"]),
             "steps_histogram": self._steps_histogram(agg["steps_per_run"]),
+            "quality": quality,
         }

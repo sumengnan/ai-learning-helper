@@ -426,10 +426,16 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         store.flush_partial(req.conversation_id, turn_run_id, "".join(parts))
                 return ev
 
-            def _emit_verify(text, status=None, key=None):
+            def _emit_verify(text, status=None, key=None, data=None):
+                # text 是给人看的中文文案；data 是给机器看的结构化结果（未通过的层名等）。
+                # 只落库、不进 SSE 事件——前端展示用 text 就够，data 供 stats 聚合「各层失败
+                # 占比」。不这样存的话，verdict.failed 会被 failed_layers_zh 压成散文而丢失结构。
                 ev = Progress("verify", text, status=status, key=key)
-                progress.append({"scope": ev.scope, "text": ev.text,
-                                 "status": ev.status, "key": ev.key, "agent": ev.agent})
+                item = {"scope": ev.scope, "text": ev.text,
+                        "status": ev.status, "key": ev.key, "agent": ev.agent}
+                if data:
+                    item["data"] = data
+                progress.append(item)
                 return ev
 
             def _emit_quality(tscore):
@@ -564,7 +570,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         layers = failed_layers_zh(verdict.failed) or "校验"
                         reason = (f"{layers}未通过"
                                   + (f"：{verdict.critique}" if verdict.critique else ""))
-                        yield _emit_verify(reason, status="error", key=ekey)
+                        yield _emit_verify(reason, status="error", key=ekey,
+                                           data={"failed": verdict.failed,
+                                                 "hard_failed": verdict.hard_failed})
                         if attempt == max_attempts - 1:      # 用尽次数 → 降级交付
                             delivered = draft or "（本轮未完成）"
                             delivered_sources = source_sink.snapshot()
