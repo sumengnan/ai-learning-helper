@@ -14,6 +14,7 @@ import { EmptyState } from "../components/EmptyState";
 import {
   WrongAnswerDetailDrawer, answerText, typeColor, type WrongItem,
 } from "./WrongAnswerDetailDrawer";
+import { fromNow } from "./statsShared";
 
 const PAGE_SIZE = 10;
 const TYPES = [
@@ -144,13 +145,17 @@ export default function WrongAnswersView() {
                         </Typography>
                       </Box>
 
-                      {/* 底部：题型标签，分隔线与上方隔开 */}
+                      {/* 底部：题型标签 + 入集时间，分隔线与上方隔开 */}
                       <Stack direction="row" spacing={1} sx={{
                         mt: 1, pt: 1, alignItems: "center", flexWrap: "wrap",
                         borderTop: "1px dashed", borderColor: "divider",
                       }}>
                         <Chip size="small" variant="outlined"
                           label={typeLabel(w.snapshot.type)} color={typeColor(w.snapshot.type)} />
+                        {/* 相对时间：复习场景下「多久以前错的」比具体日期更有用 */}
+                        <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                          {fromNow(w.created_at)}
+                        </Typography>
                       </Stack>
                     </Box>
                     <IconButton size="small" color="error" aria-label="删除错题"
