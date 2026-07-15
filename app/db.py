@@ -10,9 +10,13 @@ _SCHEMA = (
          password_hash TEXT NOT NULL, salt TEXT NOT NULL, created_at TEXT NOT NULL)""",
     """CREATE TABLE IF NOT EXISTS conversations(
          id TEXT PRIMARY KEY, user_id TEXT, title TEXT, created_at TEXT)""",
+    # verify：交付门结构化判定轨迹（JSON）。progress 列存的是渲染用中文文案，
+    # 统计「哪层失败率高/平均重答几次」需要未拍扁的 failed[]/hard_failed[]/attempts，故单列。
+    # 每条 history 带 run_id，可据此去 harness 库 trajectory_events 捞出该次被否的草稿原文。
     """CREATE TABLE IF NOT EXISTS conversation_messages(
          conv_id TEXT, seq INTEGER, role TEXT, content TEXT, tool_calls TEXT,
-         tool_call_id TEXT, steps TEXT, progress TEXT, sources TEXT, created_at TEXT,
+         tool_call_id TEXT, steps TEXT, progress TEXT, sources TEXT, verify TEXT,
+         created_at TEXT,
          PRIMARY KEY(conv_id, seq))""",
     """CREATE TABLE IF NOT EXISTS documents(
          id TEXT PRIMARY KEY, user_id TEXT, filename TEXT, size INTEGER, num_chunks INTEGER,
@@ -43,6 +47,13 @@ _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS user_profiles(
          user_id TEXT PRIMARY KEY, identity TEXT, goal TEXT,
          explain_prefs TEXT, tone TEXT, notes TEXT, updated_at TEXT)""",
+    # 抓取失败的网址登记：下次抓前查此表，命中则跳过并让模型换来源。
+    # key 是规范化 URL 或域名（scope 区分），until 为到期时间——过期即失效，不永久拉黑。
+    # 全局不分用户：网址抓不抓得到是网站的属性，不是用户的属性。
+    """CREATE TABLE IF NOT EXISTS url_blocklist(
+         key TEXT PRIMARY KEY, scope TEXT NOT NULL, reason TEXT NOT NULL, status INTEGER,
+         until TEXT NOT NULL, hits INTEGER NOT NULL DEFAULT 1,
+         created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""",
     # 服务端托管的模拟考试：一会话一条 active。questions/results 为 JSON，cursor 指向当前待作答题。
     # 判分与「答错必存」由服务端在 /api/chat 判分中间件里确定性执行，不依赖模型调用工具。
     """CREATE TABLE IF NOT EXISTS exam_sessions(
@@ -57,7 +68,7 @@ _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
     "conversation_messages": {"steps": "TEXT", "progress": "TEXT", "attachments": "TEXT",
                               "run_id": "TEXT", "status": "TEXT", "sources": "TEXT",
                               "tokens": "INTEGER", "cost": "REAL", "elapsed_ms": "INTEGER",
-                              "reasoning": "TEXT"},
+                              "reasoning": "TEXT", "verify": "TEXT"},
     "documents": {"user_id": "TEXT", "excerpt": "TEXT"},
     "questions": {"user_id": "TEXT"},
     "wrong_answers": {"user_id": "TEXT"},

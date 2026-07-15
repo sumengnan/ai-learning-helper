@@ -21,7 +21,10 @@ from harness.llm.openai_compat import set_extra_body_override
 from harness.loop.agent_loop import AgentLoop
 from harness.persistence.serialize import event_to_dict
 from harness.progress import reset_emitter, set_emitter
+from opentelemetry.trace import Status, StatusCode
+
 from harness.reliability.budget import BudgetTracker
+from harness.telemetry.tracer import get_tracer
 from harness.tools.base import ToolRegistry
 from harness.types import Message, Role
 
@@ -34,6 +37,7 @@ from ..sandbox_manager import reset_sandbox_conv, set_sandbox_conv
 from ..summaries import SummaryStore
 from ..summarizer import RollingSummarizer
 from ..sources import SOURCE_GUIDE, SourceSink, wrap_tool
+from ..url_blocklist import guard_fetch_tool
 from ..tools.attachment_tools import ListAttachmentsTool, ReadAttachmentTool
 from ..exam_flow import grade_exam_turn
 from ..tools.exam_tools import (
@@ -154,6 +158,31 @@ def _side_effect_ids(steps: list[dict]) -> dict[str, list[str]]:
     return out
 
 
+def emit_gate_span(tracer, vt: dict, t0_ns: int) -> None:
+    """把交付门判定补发成一个 answer_gate span（每次尝试一个 verify.attempt event）。
+
+    循环跑完后据 t0_ns 显式补发，而非用 start_as_current_span 包住循环：产出这些判定的是个
+    async generator，其中的 yield 会把 span 的 contextvar 泄漏进消费者上下文。
+    未装 OTel provider 时 tracer 为 no-op，全是空操作。
+    """
+    sp = tracer.start_span("answer_gate", start_time=t0_ns)
+    try:
+        sp.set_attribute("app.gate.attempts", vt["attempts"])
+        sp.set_attribute("app.gate.retries", vt["retries"])
+        sp.set_attribute("app.gate.ok", vt["ok"])
+        sp.set_attribute("app.gate.degraded", vt["degraded"])
+        for h in vt["history"]:
+            sp.add_event("verify.attempt", {
+                "attempt": h["attempt"], "run_id": h["run_id"], "ok": h["ok"],
+                "failed": h["failed"], "hard_failed": h["hard_failed"],
+                "critique": h["critique"][:200]})
+        if vt["degraded"]:      # 用尽重答次数仍未过 → 标红，便于在追踪后端筛出来
+            last = vt["history"][-1]["summary"] if vt["history"] else "未知"
+            sp.set_status(Status(StatusCode.ERROR, f"交付门未通过：{last}"))
+    finally:
+        sp.end()
+
+
 def _plan_text(progress: list[dict]) -> str:
     """从进度事件里取最后一次任务拆分（scope=plan 的 JSON 文本），供轨迹 judge 回看。"""
     plans = [p["text"] for p in progress if p.get("scope") == "plan"]
@@ -164,7 +193,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                      verifier=None, attachment_store=None, run_manager=None,
                      knowledge_service=None, quiz_service=None,
                      profile_store=None, trajectory_judge=None,
-                     exam_session_store=None) -> APIRouter:
+                     exam_session_store=None, url_block_store=None) -> APIRouter:
     router = APIRouter()
     # 简答题判分用 judge completer（考试判分中间件用；客观题不需要模型）
     from ..completion import build_judge_completer
@@ -193,15 +222,18 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 sample_rate=config.memory_write_sample_rate)
     _assembler = ContextAssembler(config, config.model,
                                   summarizer=_summarizer, conv_memory=_conv_memory)
+    # 交付门插桩：未装 OTel provider 时 get_tracer 返回 no-op tracer，零开销
+    _tracer = get_tracer("app.chat")
 
     def _build_registry(user_id: str, save_wrong: bool, conv_id: str,
                         has_attachments: bool,
                         exam_active: bool = False) -> tuple[ToolRegistry, SourceSink]:
         reg = ToolRegistry()
         sink = SourceSink()
-        # 来源工具包一层记源（wrap_tool 只包「产生来源」的工具，其余原样）
+        # 两层包装，顺序有讲究：guard 在内、记源在外。guard 命中登记时抛 ToolError，
+        # 该异常先于记源逻辑抛出，故被跳过的网址不会被记成「参考来源」。
         def _reg(t):
-            reg.register(wrap_tool(t, sink))
+            reg.register(wrap_tool(guard_fetch_tool(t, url_block_store), sink))
         for t in harness.registry.tools():
             _reg(t)
         # 用用户级 save_download 覆盖全局那个（同名），使下载文件按用户隔离
@@ -417,6 +449,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             delivered = None
             delivered_sources: list[dict] = []   # 交付那次尝试的权威来源
             errored = False
+            # 交付门结构化判定轨迹（门未开则保持 None，不落库）：progress 列只存渲染用中文，
+            # 统计「哪层失败率高/平均重答几次」要的是这里未拍扁的 failed[]/hard_failed[]。
+            verify_trace: dict | None = None
             parts: list[str] = []        # 累积客户端面 TextDelta，供 stop/重启保留已生成部分
             first_token_at: list[float] = []   # 首个 TextDelta 时刻（记一次），用于算首字延迟
 
@@ -487,6 +522,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     # 交付门：缓冲 → 校验 → 不过则回灌重答，最多 answer_gate_max_retries 次
                     corrective = None
                     max_attempts = config.answer_gate_max_retries + 1
+                    verify_trace = {"attempts": 0, "retries": 0, "ok": False,
+                                    "degraded": False, "history": []}
+                    gate_t0 = time.time_ns()     # span 起点：循环跑完后据此补发（见 _emit_gate_span）
                     # 未通过轮生成的副作用产物（下载/知识/题目），交付/降级时清理掉
                     stale_fx: dict[str, list[str]] = {"download": [], "knowledge": [], "questions": []}
 
@@ -557,6 +595,18 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                     critique=tscore.feedback or f"整体质量 {tscore.final} 偏低",
                                     summary="trajectory")
 
+                        # 结构化记这次判定（须在轨迹 judge 可能改写 verdict 之后）。run_id 是与
+                        # harness 库 trajectory_events 的接缝：据此可捞出该次尝试（含被否草稿）
+                        # 的逐字原始输出——此前每次重答虽各有 run_id，却无处得知它是第几次、被谁否的。
+                        verify_trace["history"].append(
+                            {"attempt": attempt + 1, "run_id": run_id_a, "ok": verdict.ok,
+                             "failed": list(verdict.failed),
+                             "hard_failed": list(verdict.hard_failed),
+                             "summary": verdict.summary, "critique": verdict.critique})
+                        verify_trace["attempts"] = attempt + 1
+                        verify_trace["retries"] = attempt      # 重答次数 = 尝试数 - 1
+                        verify_trace["ok"] = verdict.ok
+
                         if verdict.ok:
                             yield _emit_verify("校验通过", status="ok", key=ekey)
                             delivered = draft
@@ -570,6 +620,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                   + (f"：{verdict.critique}" if verdict.critique else ""))
                         yield _emit_verify(reason, status="error", key=ekey)
                         if attempt == max_attempts - 1:      # 用尽次数 → 降级交付
+                            verify_trace["degraded"] = True
                             delivered = draft or "（本轮未完成）"
                             delivered_sources = source_sink.snapshot()
                             errored = not draft
@@ -584,6 +635,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         corrective = (f"你上一版回答未通过自动校验。问题：{verdict.critique}。"
                                       f"请针对性修正后，重新完整回答原问题：{question}")
 
+                    emit_gate_span(_tracer, verify_trace, gate_t0)
                     # 交付：终稿以 TextDelta 补发（保留打字机）+ 合成 RunFinished
                     delivered = delivered or "（本轮未完成）"
                     for chunk in _chunks(delivered):
@@ -601,10 +653,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                   steps=steps or None, progress=progress or None,
                                   status=status, sources=delivered_sources or None,
                                   tokens=_usage.get("tokens"), cost=_usage.get("cost"),
-                                  elapsed_ms=_elapsed, reasoning=collect.get("reasoning") or None)
-                log.info("聊天完成 status=%s 耗时%dms tokens=%s 工具%d次 来源%d条",
+                                  elapsed_ms=_elapsed, reasoning=collect.get("reasoning") or None,
+                                  verify=verify_trace)
+                log.info("聊天完成 status=%s 耗时%dms tokens=%s 工具%d次 来源%d条 重答%s次",
                          status, _elapsed, _usage.get("tokens"), len(steps),
-                         len(delivered_sources))
+                         len(delivered_sources),
+                         verify_trace["retries"] if verify_trace else "-")
                 # L3：把对话文本写入向量库供后续语义召回（best-effort，不阻断）
                 if _conv_memory is not None and not errored and final_content:
                     try:
@@ -619,14 +673,16 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     req.conversation_id, turn_run_id,
                     delivered or "".join(parts) or "（已停止）",
                     steps=steps or None, progress=progress or None, status="stopped",
-                    elapsed_ms=round((time.time() - turn_start) * 1000))
+                    elapsed_ms=round((time.time() - turn_start) * 1000),
+                    verify=verify_trace)   # 中断时保留已发生的重答记录
                 raise
             except Exception as e:  # noqa: BLE001  意外异常也要把占位落成 error，别永远 streaming
                 store.finish_turn(
                     req.conversation_id, turn_run_id,
                     delivered or "".join(parts) or "（本轮未能完成，请重试）",
                     steps=steps or None, progress=progress or None, status="error",
-                    elapsed_ms=round((time.time() - turn_start) * 1000))
+                    elapsed_ms=round((time.time() - turn_start) * 1000),
+                    verify=verify_trace)   # 出错时保留已发生的重答记录
                 yield RunError(error=str(e))
 
         turn_run_id = uuid4().hex

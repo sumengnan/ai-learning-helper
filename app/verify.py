@@ -29,6 +29,7 @@ from harness.llm.openai_compat import (
 from harness.tools.base import ToolError
 
 from .quiz_service import _strip_fence
+from .url_blocklist import UrlBlockedError
 
 _log = logging.getLogger("app.verify")
 
@@ -333,7 +334,7 @@ class AnswerVerifier:
         """抽取答案中的 http(s) 链接，用 http_request 工具判可达（2xx/3xx）。
 
         工具不存在、参数不匹配、抓取抛错等基础设施问题一律跳过（放行不拦截）；
-        仅当明确取到 4xx/5xx 状态码时记为不可达。
+        仅当明确取到 4xx/5xx 状态码、或链接命中失败登记时记为不可达。
         """
         tool = registry.get("http_request")
         if tool is None:
@@ -342,6 +343,9 @@ class AnswerVerifier:
         for url in _extract_urls(answer)[:5]:      # 至多核查前 5 个，控成本
             try:
                 out = await tool.run(tool.Params(url=url))
+            except UrlBlockedError as e:           # 已知坏链：登记过就是证据，不是基建抖动
+                bad.append(f"{url}({e.record['reason']})")
+                continue
             except Exception as e:                 # 抓取失败/被拒/参数不符 → 放行不判
                 _log.warning("facts 校验抓取 %s 失败，跳过：%s", url, e)
                 continue

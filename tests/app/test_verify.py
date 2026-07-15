@@ -4,6 +4,7 @@ import json
 import pytest
 
 from app.config import AppConfig
+from app.url_blocklist import UrlBlockedError
 from app.verify import AnswerVerifier, TrajectoryJudge, _tool_exec_summary
 from harness.tools.base import ToolError
 
@@ -215,6 +216,40 @@ async def test_facts_unreachable_link_fails():
 
 async def test_facts_reachable_link_passes():
     reg = _StubRegistry({"http_request": _HttpStub("HTTP 200\n标题：OK\n")})
+    v = AnswerVerifier(_pass_complete(), _cfg(
+        gate_check_grounding=False, gate_check_judge=False, gate_check_code=False,
+        gate_check_facts=True))
+    verdict = await v.verify("问", "详见 https://example.com/x 。", [], reg)
+    assert verdict.ok is True
+
+
+class _BlockedHttpStub(_HttpStub):
+    """命中失败登记 → 抓前短路（模拟 guard_fetch_tool 的行为）。"""
+    async def run(self, params):
+        raise UrlBlockedError(f"跳过抓取 {params.url}：近期抓取失败过",
+                              {"reason": "HTTP 404（页面不存在）", "scope": "url"})
+
+
+class _FlakyHttpStub(_HttpStub):
+    async def run(self, params):
+        raise TimeoutError("网络抖了一下")
+
+
+async def test_facts_flags_link_known_dead_from_blocklist():
+    # 登记过就是「我们知道它坏」的证据，不能当基建故障放行——否则加了失败登记反而
+    # 让 facts 门对最确定的死链失明
+    reg = _StubRegistry({"http_request": _BlockedHttpStub("")})
+    v = AnswerVerifier(_pass_complete(), _cfg(
+        gate_check_grounding=False, gate_check_judge=False, gate_check_code=False,
+        gate_check_facts=True))
+    verdict = await v.verify("问", "详见 https://example.com/x 。", [], reg)
+    assert "facts" in verdict.failed
+    assert "页面不存在" in verdict.critique
+
+
+async def test_facts_still_passes_on_infra_flake():
+    # 对比：普通抓取异常仍放行，不因基建抖动误拦回答
+    reg = _StubRegistry({"http_request": _FlakyHttpStub("")})
     v = AnswerVerifier(_pass_complete(), _cfg(
         gate_check_grounding=False, gate_check_judge=False, gate_check_code=False,
         gate_check_facts=True))
