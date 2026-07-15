@@ -16,7 +16,7 @@ def make_mcp_router(harness) -> APIRouter:
 
     @router.post("/api/mcp/reload")
     async def reload(user_id: str = Depends(current_user)):
-        """重读 mcp_servers.json 并重连，把远程工具在全局 registry 里增删。
+        """重读 mcp/mcp_servers.json 并重连，把远程工具在全局 registry 里增删。
 
         因为请求期 _build_registry 每次全量复制全局 registry，reload 后下一条消息即生效。
         """

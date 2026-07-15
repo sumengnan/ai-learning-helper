@@ -51,7 +51,7 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
     # exam_store 参数保留仅为向后兼容（模拟考试已迁入聊天工具，不再有独立考试端点）
     if config is None:
         # 生产路径（python -m app → uvicorn factory，不传 config）：先把 .env 补进
-        # os.environ，否则 mcp_servers.json 里的 ${VAR} 解析不出来——pydantic-settings
+        # os.environ，否则 mcp/mcp_servers.json 里的 ${VAR} 解析不出来——pydantic-settings
         # 只填配置对象、不写环境。调用方自带 config（测试/嵌入式）时不碰 os.environ。
         injected = load_env_file(AppConfig.model_config.get("env_file") or ".env")
         if injected:

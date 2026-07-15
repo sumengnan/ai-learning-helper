@@ -39,7 +39,7 @@ def _expand(value: str) -> str:
 
 
 def load_server_configs(path: str) -> list[_ServerCfg]:
-    """读 mcp_servers.json。文件不存在视为空列表；非法条目跳过并 warning。"""
+    """读 MCP server 清单（默认 mcp/mcp_servers.json）。文件不存在视为空列表；非法条目跳过并 warning。"""
     if not path or not os.path.isfile(path):
         return []
     try:
@@ -133,7 +133,7 @@ class MCPManager:
     """按配置连接一组 MCP server，把远程工具暴露为 McpTool，供注册进 registry。"""
 
     def __init__(self, config) -> None:
-        self._config_path = getattr(config, "mcp_config_path", "mcp_servers.json")
+        self._config_path = getattr(config, "mcp_config_path", "mcp/mcp_servers.json")
         self._timeout = getattr(config, "mcp_connect_timeout", 15.0)
         self._conns: dict[str, _ServerConn] = {}
 
