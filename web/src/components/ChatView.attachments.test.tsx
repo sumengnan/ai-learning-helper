@@ -5,8 +5,13 @@ import { streamChat, api } from "../api/client";
 
 vi.mock("../api/client", () => ({
   streamChat: vi.fn(async () => undefined),
+  attachChat: vi.fn(async () => undefined),
+  stopRun: vi.fn(async () => undefined),
   sendDecision: vi.fn(async () => undefined),
   api: {
+    messages: vi.fn(async () => []),
+    autotitle: vi.fn(async () => ({ title: null })),
+    downloads: { save: vi.fn(async () => undefined) },
     attachments: {
       upload: vi.fn(async (_cid: string, file: File) => ({
         id: "srv-1", filename: file.name, size: file.size, content_type: file.type,
