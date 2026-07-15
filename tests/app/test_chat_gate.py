@@ -368,3 +368,59 @@ def test_healthy_verifier_has_no_gate_error(make_mock, text_turn):
     cid, _ = _run_chat(client, h, "问个问题")
     vt = [m for m in store.ui_messages(cid) if m["role"] == "assistant"][-1]["verify"]
     assert vt["gate_error"] is None      # 正常路径不该冒出噪音
+
+
+# ---- 交付门内部跑的代码不该出现在用户可见的「参考来源」里 ----
+
+class _CodeRunningVerifier:
+    """模拟 gate_check_code：从传入的 registry 取 run_python 跑答案里的代码块。"""
+    def __init__(self):
+        self.ran = False
+
+    async def verify(self, question, answer, grounding, registry, steps=None):
+        tool = registry.get("run_python")
+        if tool is not None:
+            await tool.run(tool.Params(code="print(6*7)"))
+            self.ran = True
+        return Verdict(ok=True)
+
+
+def _harness_with_py(make_mock, turns):
+    from pydantic import BaseModel
+    from harness.tools.base import Tool
+
+    class _Py(Tool):
+        name = "run_python"
+        description = "跑 python"
+
+        class Params(BaseModel):
+            code: str
+
+        async def run(self, params):
+            return "stdout:\n42\n(exit 0)"
+
+    reg = ToolRegistry(); reg.register(_Py())
+    traj = TrajectoryStore(":memory:")
+    return Harness(client=make_mock(turns), registry=reg,
+                   checkpoint_store=CheckpointStore(":memory:"),
+                   trajectory_store=traj, sink=TrajectorySink(traj), system_prompt="你是助手")
+
+
+def test_gate_code_execution_not_credited_as_source(make_mock, text_turn):
+    verifier = _CodeRunningVerifier()
+    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,
+                    enable_answer_gate=True)
+    store = ConversationStore(":memory:")
+    app = create_app(config=cfg, harness=_harness_with_py(make_mock, [text_turn("答案正文")]),
+                     store=store, doc_store=DocumentStore(":memory:"), verifier=verifier)
+    client = TestClient(app)
+    h = _auth(client)
+    cid, events = _run_chat(client, h, "问个问题")
+
+    assert verifier.ran is True                       # 交付门确实跑了代码
+    msg = [m for m in store.ui_messages(cid) if m["role"] == "assistant"][-1]
+    # 用户从没看见 AI 执行 python，来源里也不该冒出来
+    assert not (msg["sources"] or []), f"交付门内部调用泄漏进了参考来源：{msg['sources']}"
+    src_events = [e for e in events if e["type"] == "Progress"
+                  and e["data"].get("scope") == "sources"]
+    assert not src_events                             # SSE 也不该推

@@ -571,9 +571,13 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         else:
                             stoken = set_sandbox_conv(req.conversation_id)
                             try:
-                                verdict = await verifier.verify(
-                                    question, draft, collect["grounding"], registry,
-                                    steps=collect["steps"])
+                                # 记源暂停：校验器跑答案里的代码块、核对引用链接，用的是同一个
+                                # 已包记源层的 registry，否则这些后台调用会冒充成模型的「参考
+                                # 来源」——用户从没看见 AI 执行过它们。
+                                with source_sink.paused():
+                                    verdict = await verifier.verify(
+                                        question, draft, collect["grounding"], registry,
+                                        steps=collect["steps"])
                             except Exception as e:   # noqa: BLE001
                                 # 校验器自身故障（非回答质量问题）→ fail-open：跳过校验照常交付。
                                 # 交付门是质量增强，它坏了不该连累用户丢掉一份好答案；且门本就

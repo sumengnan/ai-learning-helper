@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import contextmanager
 from urllib.parse import urlparse
 
 from harness.tools.base import Tool
@@ -213,13 +214,32 @@ class SourceSink:
     def __init__(self) -> None:
         self._items: list[dict] = []
         self._seen: dict[str, int] = {}
+        self._paused = False
 
     def reset(self) -> None:
         self._items = []
         self._seen = {}
 
-    def record(self, desc: dict) -> int:
-        """记入一条来源，返回其编号（1 起）。重复来源复用既有编号。"""
+    @contextmanager
+    def paused(self):
+        """暂停记源。
+
+        交付门校验器（跑答案里的代码块、核对引用链接可达性）用的是同一个已包记源层的
+        registry，其工具调用会被当成模型的「参考来源」——但用户从没看见 AI 执行过这些，
+        它们是后台基建行为。核链接尤其糟：模型只是在正文写了个 URL（可能是编的），从没
+        读过它，却因为交付门去核实了一下反被「认证」成来源。
+        """
+        prev = self._paused
+        self._paused = True
+        try:
+            yield
+        finally:
+            self._paused = prev
+
+    def record(self, desc: dict) -> int | None:
+        """记入一条来源，返回其编号（1 起）。重复来源复用既有编号。暂停中返回 None。"""
+        if self._paused:
+            return None
         key = _dedupe_key(desc)
         if key in self._seen:
             return self._seen[key]
@@ -257,6 +277,8 @@ class _SourceTaggedTool(Tool):
         if desc is None:
             return raw
         n = self._sink.record(desc)
+        if n is None:      # 记源已暂停（交付门校验期）：既不记源，也不追加标注——
+            return raw     # 那段标注会混进校验器要解析的工具结果里
         marker = (f"\n\n〔本结果对应参考来源 [{n}]：{desc['label']}，"
                   f"正文引用此来源请写 [{n}]〕")
         if isinstance(raw, ToolOutput):
