@@ -341,8 +341,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         profile_block = ""
         if profile_store is not None:
             profile_block = render_profile_block(profile_store.get(user_id))
+        # 附件指引与附件工具同条件注入：has_attachments 为假时 list_attachments/
+        # read_attachment 根本没注册（见 _build_registry），此时还介绍它们的用法，等于
+        # 告诉模型一批它没有的工具——比浪费 token 更糟。
+        attachment_guide = ATTACHMENT_GUIDE if has_attachments else ""
         base_ctx = await _assembler.build_manager(
-            harness.system_prompt + profile_block + EXAM_GUIDE + ATTACHMENT_GUIDE
+            harness.system_prompt + profile_block + EXAM_GUIDE + attachment_guide
             + SOURCE_GUIDE + _today_guide(),
             history, req.message, req.conversation_id)
         log.info("上下文组装 conv=%s 历史%d条 耗时%dms",
