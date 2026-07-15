@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ChatView, fmtDuration } from "./ChatView";
-import { streamChat, attachChat, stopRun, sendDecision } from "../api/client";
+import { streamChat, attachChat, stopRun, sendDecision, api } from "../api/client";
 
 // mock streamChat：依次回调 TextDelta "你" / TextDelta "好" / RunFinished
 vi.mock("../api/client", () => ({
@@ -29,8 +29,58 @@ describe("ChatView", () => {
     vi.mocked(attachChat).mockClear();
     vi.mocked(stopRun).mockClear();
     vi.mocked(sendDecision).mockClear();
+    vi.mocked(api.messages).mockClear();
+    vi.mocked(api.messages).mockResolvedValue([] as any);
   });
   afterEach(() => cleanup());
+
+  it("首页推荐问题被 StrictMode 假卸载掐断（还没拿到 X-Run-Id）→ 回后端捞句柄接回", async () => {
+    // 用户实测场景：新建对话/点首页推荐问题 → autoSend 在挂载 effect 里发起，StrictMode 的
+    // 假卸载立刻 abort 掉它。此时响应头还没到、onRunId 从未回调 → 本地没有 run 句柄。
+    // 后端 start_turn 已把带 run_id 的 streaming 占位落了库，须据此接回；否则既不接回也不
+    // 落终态，气泡永远停在空的「…」，而后台任务照跑到完并落库——只有刷新才看得见。
+    vi.mocked(streamChat).mockImplementationOnce(
+      (_cid: string, _msg: string, _onEvent: (e: any) => void, signal?: AbortSignal) =>
+        new Promise((_resolve, reject) => {          // 注意：全程不调用 onRunId
+          signal?.addEventListener("abort", () =>
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+        }));
+    vi.mocked(api.messages).mockResolvedValue([
+      { role: "user", content: "推荐问题" },
+      { role: "assistant", content: "", status: "streaming", run_id: "R7" },
+    ] as any);
+    vi.mocked(attachChat).mockImplementationOnce(async (_rid: string, onEvent: (e: any) => void) => {
+      onEvent({ type: "TextDelta", data: { text: "后台跑完的答案" } });
+      onEvent({ type: "RunFinished", data: {} });
+    });
+    render(
+      <React.StrictMode>
+        <ChatView conversationId="c1" initial={[]} autoSend="推荐问题" />
+      </React.StrictMode>,
+    );
+    await waitFor(() => expect(vi.mocked(attachChat)).toHaveBeenCalledWith(
+      "R7", expect.anything(), expect.anything()));
+    await waitFor(() => expect(screen.getByText("后台跑完的答案")).toBeTruthy());
+    expect(screen.queryByText("…")).toBeNull();       // 不再停在空的「…」
+  });
+
+  it("流被掐断且后端并无在途 run → 落可重试终态，不停在空的「…」", async () => {
+    // 请求压根没到后端（无占位可捞）：此时必须收尾成失败态，而不是把气泡吊死在「…」。
+    vi.mocked(streamChat).mockImplementationOnce(
+      (_cid: string, _msg: string, _onEvent: (e: any) => void, signal?: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () =>
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+        }));
+    vi.mocked(api.messages).mockResolvedValue([] as any);   // 后端没有在途 run
+    render(
+      <React.StrictMode>
+        <ChatView conversationId="c1" initial={[]} autoSend="推荐问题" />
+      </React.StrictMode>,
+    );
+    await waitFor(() => expect(screen.getByText("（连接中断，请重试）")).toBeTruthy());
+    expect(vi.mocked(attachChat)).not.toHaveBeenCalled();
+  });
 
   it("刷新后：最后一条助手消息 streaming → 自动接回续流至完成", async () => {
     vi.mocked(attachChat).mockImplementationOnce(

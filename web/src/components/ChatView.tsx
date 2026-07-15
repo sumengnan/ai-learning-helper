@@ -304,10 +304,16 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
     } finally {
       setBusy(false); busyRef.current = false;
       if (outcome === null) {
-        // 非用户主动中断：后端后台任务仍在跑，若组件仍挂载且已拿到 run 句柄 → 自动接回续流
-        const rid = turnRunIdRef.current;
-        if (mountedRef.current && rid) void reattach(rid);
-        return;
+        // 非用户主动中断：后端后台任务仍在跑（断开只取消订阅），接回续流即可。
+        // turnRunIdRef 可能还是空的——X-Run-Id 要等响应头，而 abort 常发生在那之前
+        // （StrictMode 假卸载掐断 autoSend 尤其快）。这时必须回后端捞句柄：否则既不接回也不
+        // 落终态，气泡就永远停在空的「…」，而后台任务照跑到完并落库——只有刷新才看得见。
+        if (!mountedRef.current) return;          // 真卸载：组件已走，无需收尾
+        const rid = turnRunIdRef.current ?? await activeRunId();
+        if (rid) { void reattach(rid); return; }
+        // 确实没有在途 run（请求没到后端）→ 落可重试的终态
+        upd((a) => { if (!a.content.trim()) a.content = "（连接中断，请重试）"; });
+        outcome = "error";
       }
       const status = outcome;   // 早返回后已排除 null
       upd((a) => {   // 收尾状态：完成/失败/已停止；冻结本轮耗时
@@ -330,6 +336,17 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
     const tid = turnRunIdRef.current;
     if (tid) void stopRun(tid);
     abortRef.current?.abort();
+  }
+
+  // 向后端捞回本轮的 run 句柄：后端在 start_turn 时就把 streaming 占位 assistant 连同
+  // run_id 落了库，所以流被掐断得太早、本地还没拿到 X-Run-Id 时，仍能据此接回。
+  async function activeRunId(): Promise<string | null> {
+    try {
+      const msgs = await api.messages(conversationId);
+      const last = msgs[msgs.length - 1];
+      return last?.role === "assistant" && last.status === "streaming" && last.run_id
+        ? last.run_id : null;
+    } catch { return null; }   // 捞不到就走终态兜底，不能把气泡吊死
   }
 
   // 刷新/切换对话后接回一个在途 run：先清空该气泡（attach 会从头回放全部事件，避免与占位
