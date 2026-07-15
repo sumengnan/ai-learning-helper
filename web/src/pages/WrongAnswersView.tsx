@@ -1,7 +1,11 @@
-import { useEffect, useState } from "react";
-import { Box, Typography, Card, CardContent, Chip, IconButton, Stack } from "@mui/material";
+import { useCallback, useEffect, useState } from "react";
+import {
+  Box, Typography, Card, CardContent, Chip, IconButton, Stack, TextField,
+  InputAdornment, Pagination, Alert, MenuItem, Select, FormControl, InputLabel,
+} from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import DeleteIcon from "@mui/icons-material/Delete";
+import SearchIcon from "@mui/icons-material/Search";
 import SentimentSatisfiedAltOutlinedIcon from "@mui/icons-material/SentimentSatisfiedAltOutlined";
 import { AnimatePresence, motion } from "framer-motion";
 import { api } from "../api/client";
@@ -11,10 +15,14 @@ import {
   WrongAnswerDetailDrawer, answerText, typeColor, type WrongItem,
 } from "./WrongAnswerDetailDrawer";
 
-const TYPE_LABEL: Record<string, string> = {
-  single: "单选", multiple: "多选", truefalse: "判断", short: "简答",
-};
-const typeLabel = (t: string) => TYPE_LABEL[t] ?? t;
+const PAGE_SIZE = 10;
+const TYPES = [
+  { key: "single", label: "单选" },
+  { key: "multiple", label: "多选" },
+  { key: "truefalse", label: "判断" },
+  { key: "short", label: "简答" },
+];
+const typeLabel = (t: string) => TYPES.find((x) => x.key === t)?.label ?? t;
 
 // 多行截断（答案过长显示 …）
 const clampSx = {
@@ -24,27 +32,75 @@ const clampSx = {
 
 export default function WrongAnswersView() {
   const [items, setItems] = useState<WrongItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [q, setQ] = useState("");
+  const [type, setType] = useState("");
   const [preview, setPreview] = useState<WrongItem | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const refresh = () => api.wrong.list().then(setItems);
-  useEffect(() => { refresh(); }, []);
+  const load = useCallback((p: number, filters: { q: string; type: string }) => {
+    return api.wrong.list({ page: p, size: PAGE_SIZE, q: filters.q, type: filters.type })
+      .then((r: { items: WrongItem[]; total: number }) => { setItems(r.items); setTotal(r.total); });
+  }, []);
+
+  // 筛选变化（含防抖搜索）→ 回第 1 页并加载
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setPage(1);
+      setError(null);
+      load(1, { q: q.trim(), type }).catch((e: any) => setError(String(e?.message || e)));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [q, type, load]);
+
+  // 翻页
+  useEffect(() => {
+    load(page, { q: q.trim(), type }).catch((e: any) => setError(String(e?.message || e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
 
   async function removeOne(id: string) {
     await api.wrong.removeMany([id]);
-    await refresh();
+    // 删掉本页最后一条时退回上一页（翻页 effect 负责重载），避免停在空页
+    if (items.length === 1 && page > 1) setPage(page - 1);
+    else await load(page, { q: q.trim(), type });
   }
+
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
     <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2, maxWidth: 880, mx: "auto" }}>
       {/* 头部：标题 + 计数 */}
       <Box>
         <Typography variant="h5" sx={{ fontWeight: 700 }}>错题集</Typography>
-        <Typography color="text.secondary" variant="body2">共 {items.length} 道错题</Typography>
+        <Typography color="text.secondary" variant="body2">共 {total} 道错题</Typography>
       </Box>
 
+      {/* 筛选工具条：题名 + 题型 */}
+      <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+        <TextField fullWidth size="small" placeholder="搜索题名…"
+          value={q} onChange={(e) => setQ(e.target.value)}
+          slotProps={{ input: {
+            startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>,
+          } }} />
+        <FormControl size="small" sx={{ minWidth: 120 }}>
+          <InputLabel>题型</InputLabel>
+          <Select label="题型" value={type} onChange={(e) => setType(e.target.value)}>
+            <MenuItem value="">全部题型</MenuItem>
+            {TYPES.map((t) => <MenuItem key={t.key} value={t.key}>{t.label}</MenuItem>)}
+          </Select>
+        </FormControl>
+      </Stack>
+
+      {error && <Alert severity="error" onClose={() => setError(null)}>{error}</Alert>}
+
       {items.length === 0 ? (
-        <EmptyState icon={<SentimentSatisfiedAltOutlinedIcon />} title="暂无错题"
-          hint="答错的题会自动收集到这里，方便你复习巩固" />
+        (q || type)
+          ? <EmptyState icon={<SentimentSatisfiedAltOutlinedIcon />} title="未找到符合条件的错题"
+              hint="试试调整搜索词或筛选条件" />
+          : <EmptyState icon={<SentimentSatisfiedAltOutlinedIcon />} title="暂无错题"
+              hint="答错的题会自动收集到这里，方便你复习巩固" />
       ) : (
         <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
           <AnimatePresence initial={false}>
@@ -106,6 +162,12 @@ export default function WrongAnswersView() {
               </motion.div>
             ))}
           </AnimatePresence>
+        </Box>
+      )}
+
+      {pageCount > 1 && (
+        <Box sx={{ display: "flex", justifyContent: "center", mt: 1 }}>
+          <Pagination color="primary" count={pageCount} page={page} onChange={(_, p) => setPage(p)} />
         </Box>
       )}
 

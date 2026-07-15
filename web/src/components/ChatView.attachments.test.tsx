@@ -5,8 +5,13 @@ import { streamChat, api } from "../api/client";
 
 vi.mock("../api/client", () => ({
   streamChat: vi.fn(async () => undefined),
+  attachChat: vi.fn(async () => undefined),
+  stopRun: vi.fn(async () => undefined),
   sendDecision: vi.fn(async () => undefined),
   api: {
+    messages: vi.fn(async () => []),
+    autotitle: vi.fn(async () => ({ title: null })),
+    downloads: { save: vi.fn(async () => undefined) },
     attachments: {
       upload: vi.fn(async (_cid: string, file: File) => ({
         id: "srv-1", filename: file.name, size: file.size, content_type: file.type,
@@ -43,7 +48,7 @@ describe("ChatView 附件", () => {
     await waitFor(() => expect(vi.mocked(streamChat)).toHaveBeenCalled());
     const calls = vi.mocked(streamChat).mock.calls;
     const call = calls[calls.length - 1];
-    expect(call[5]).toEqual(["srv-1"]);   // 第 6 个参数为 attachment ids
+    expect(call[4]).toEqual(["srv-1"]);   // 第 5 个参数为 attachment ids
     // 发送后气泡仍渲染附件名
     await waitFor(() => expect(screen.getAllByText("note.txt").length).toBeGreaterThan(0));
   });

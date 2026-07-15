@@ -27,7 +27,7 @@ const W = {
 describe("WrongAnswersView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (api.wrong.list as any).mockResolvedValue([W]);
+    (api.wrong.list as any).mockResolvedValue({ items: [W], total: 1 });
     (api.wrong.removeMany as any).mockResolvedValue(undefined);
   });
 
@@ -62,5 +62,39 @@ describe("WrongAnswersView", () => {
     await waitFor(() => screen.getByText(/光合作用在哪/));
     fireEvent.click(screen.getByLabelText("删除错题"));
     await waitFor(() => expect(api.wrong.removeMany).toHaveBeenCalledWith(["w1"]));
+  });
+
+  it("输入题名后按关键词查询（防抖）", async () => {
+    render(<MemoryRouter><WrongAnswersView /></MemoryRouter>);
+    await waitFor(() => screen.getByText(/光合作用在哪/));
+    fireEvent.change(screen.getByPlaceholderText("搜索题名…"), { target: { value: "光合" } });
+    await waitFor(() => expect(api.wrong.list).toHaveBeenCalledWith(
+      expect.objectContaining({ q: "光合", page: 1 })));
+  });
+
+  it("选题型后按题型筛选", async () => {
+    render(<MemoryRouter><WrongAnswersView /></MemoryRouter>);
+    await waitFor(() => screen.getByText(/光合作用在哪/));
+    fireEvent.mouseDown(screen.getByRole("combobox"));
+    fireEvent.click(screen.getByRole("option", { name: "判断" }));
+    await waitFor(() => expect(api.wrong.list).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "truefalse", page: 1 })));
+  });
+
+  it("筛选无结果时提示调整条件，而非「暂无错题」", async () => {
+    render(<MemoryRouter><WrongAnswersView /></MemoryRouter>);
+    await waitFor(() => screen.getByText(/光合作用在哪/));
+    (api.wrong.list as any).mockResolvedValue({ items: [], total: 0 });
+    fireEvent.change(screen.getByPlaceholderText("搜索题名…"), { target: { value: "不存在的题" } });
+    await waitFor(() => expect(screen.getByText("未找到符合条件的错题")).toBeTruthy());
+    expect(screen.queryByText("暂无错题")).toBeNull();
+  });
+
+  it("错题数超过一页时显示分页控件", async () => {
+    (api.wrong.list as any).mockResolvedValue({ items: [W], total: 25 });
+    render(<MemoryRouter><WrongAnswersView /></MemoryRouter>);
+    await waitFor(() => screen.getByText(/光合作用在哪/));
+    // 25/10 = 3 页
+    expect(screen.getByRole("button", { name: /Go to page 3/i })).toBeTruthy();
   });
 });

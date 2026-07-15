@@ -1,0 +1,13 @@
+{
+  "suite": "retrieval",
+  "metrics": {
+    "hit@k": {
+      "mean": 1.0,
+      "n": 4
+    },
+    "mrr": {
+      "mean": 1.0,
+      "n": 4
+    }
+  }
+}

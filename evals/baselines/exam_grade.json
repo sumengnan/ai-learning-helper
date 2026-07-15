@@ -1,0 +1,9 @@
+{
+  "suite": "exam_grade",
+  "metrics": {
+    "exam_grade": {
+      "mean": 1.0,
+      "n": 32
+    }
+  }
+}

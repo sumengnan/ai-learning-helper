@@ -87,11 +87,11 @@ EXAM_GUIDE = (
     "- save_wrong_answer 的调用方式：即席出题（题目不在题库）时【必须】直接传该题的 "
     "stem/type/answer（可含 options）以及用户作答 user_answer，不要只传 question_id；"
     "若该题来自 sample_questions，也可传其 question_id。\n"
-    "- 【务必真的调用该工具】：在你实际调用 save_wrong_answer 并看到成功结果之前，"
-    "绝不能说「已存入错题集」「已保存」之类的话；没有发起工具调用就一个字都不要提保存。"
-    "保存成功后，【务必明确告诉用户】「这道题已加入你的错题集，方便以后复习」，让用户清楚知道，不要含糊略过；"
-    "若你的工具列表里没有该工具（用户关了开关），就直接跳过保存，"
-    "不要向用户解释开关是否开启、也不要反复提示「功能未开启」。\n"
+    "- 【务必真的调用该工具，不能只是嘴上说】：用户每答错一道题就必须存入错题集，这是无条件的，"
+    "不看用户是否要求、不问用户是否需要、也没有任何开关可以跳过。在你实际调用 save_wrong_answer "
+    "并看到成功结果之前，绝不能说「已存入错题集」「已加入错题集」「已保存」之类的话——"
+    "没有发起工具调用就一个字都不要提保存，那是欺骗用户。"
+    "保存成功后，【务必明确告诉用户】「这道题已加入你的错题集，方便以后复习」，让用户清楚知道，不要含糊略过。\n"
     "\n题库管理：\n"
     "- 用户让你「把这些知识/资料整理成题存进题库」时，用 add_questions 直接把你整理好的"
     "题目写入题库；若用户希望「就某主题从我的知识库出题」，用 generate_questions（依赖知识库检索）。\n"
@@ -121,7 +121,6 @@ def _today_guide() -> str:
 class _ChatRequest(BaseModel):
     conversation_id: str
     message: str
-    save_wrong: bool = True         # 「考试答错自动保存错题集」开关（默认开）
     think: bool = True              # 「思考模式」开关（默认开）；透传 enable_thinking，可手动关
     verify: bool = True             # 「结果校验」开关（默认开）；关则本轮跳过交付门校验
     attachment_ids: list[str] = []  # 本轮随消息发送的附件（已先经上传接口拿到 id）
@@ -225,8 +224,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
     # 交付门插桩：未装 OTel provider 时 get_tracer 返回 no-op tracer，零开销
     _tracer = get_tracer("app.chat")
 
-    def _build_registry(user_id: str, save_wrong: bool, conv_id: str,
-                        has_attachments: bool,
+    def _build_registry(user_id: str, conv_id: str, has_attachments: bool,
                         exam_active: bool = False) -> tuple[ToolRegistry, SourceSink]:
         reg = ToolRegistry()
         sink = SourceSink()
@@ -253,9 +251,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             if quiz_service is not None:
                 _reg(GenerateQuestionsTool(quiz_service, user_id))
             # 考试激活时不暴露 save_wrong_answer：判分与保存已由服务端确定性完成，防重复入库
-            if save_wrong and wrong_store is not None and not exam_active:
+            if wrong_store is not None and not exam_active:
                 _reg(SaveWrongAnswerTool(question_store, wrong_store, user_id))
-        # 错题集捞题/删题是独立能力，不受「答错自动保存」开关限制
         if wrong_store is not None:
             _reg(SampleWrongAnswersTool(wrong_store, user_id))
             _reg(DeleteWrongAnswersTool(wrong_store, user_id))
@@ -300,10 +297,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             exam_note, exam_active = await grade_exam_turn(
                 exam_session_store, wrong_store, _exam_judge,
                 user_id=user_id, conv_id=req.conversation_id,
-                message=req.message, save_wrong=req.save_wrong)
-        registry, source_sink = _build_registry(user_id, req.save_wrong,
-                                                 req.conversation_id, has_attachments,
-                                                 exam_active)
+                message=req.message)
+        registry, source_sink = _build_registry(user_id, req.conversation_id,
+                                                 has_attachments, exam_active)
         # 交付门开启需三者皆备：装配了 verifier + 服务端总开关 + 本轮用户开关（默认开，可手动关）
         gate_on = verifier is not None and config.enable_answer_gate and req.verify
         # 喂给模型的消息：带附件时追加只含文件名的名单提示（不含内容），入库仍用原文
