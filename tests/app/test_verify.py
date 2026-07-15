@@ -323,3 +323,23 @@ def test_judge_prompt_allows_multiturn_clarification():
     from app.verify import JUDGE_SYSTEM
     for kw in ("多轮", "无效", "澄清", "追问"):
         assert kw in JUDGE_SYSTEM, f"judge 提示词缺少多轮语境词：{kw}"
+
+
+def test_trajectory_prompt_forbids_leaking_schema_into_feedback():
+    """feedback 是直接展示给用户的，不该出现字段名/null——曾出现「拆分字段为null，
+    步骤和最终答案均高质有效」这种评语：judge 在讲自己的 JSON，不是在评价回答。"""
+    from app.verify import TRAJECTORY_SYSTEM
+    assert "直接展示给用户看" in TRAJECTORY_SYSTEM
+    assert "不要提 null" in TRAJECTORY_SYSTEM
+    assert "字段名" in TRAJECTORY_SYSTEM
+    # 保留：无拆分/无步骤时该字段仍须给 null（前端据此不显示该项，而非显示 0 分）
+    assert "对应字段给 null" in TRAJECTORY_SYSTEM
+
+
+async def test_null_plan_passes_through_as_none():
+    # 模型没调 plan 工具 → 无拆分可评 → plan 为 null，不能被强转成 0
+    async def _judge(system, user):
+        return '{"plan": null, "steps": 100, "final": 100, "feedback": "完成得不错"}'
+    j = TrajectoryJudge(_judge, _cfg())
+    s = await j.score("问", "", "步骤摘要", "答案")
+    assert s.plan is None and s.steps == 100 and s.final == 100

@@ -118,15 +118,39 @@ describe("VerifyBadge 常驻性与展开明细", () => {
     expect(screen.getByText("步骤可再精简")).toBeTruthy();
   });
 
-  it("quality 分数为 null → 展开显示「—」", () => {
+  it("quality 分数全为 null → 不摆一排「—」（judge 只对真发生过的环节打分）", () => {
     render(<VerifyBadge message={msg({
       status: "done",
       quality: { plan: null, steps: null, final: null, feedback: "" },
     })} />);
     fireEvent.click(screen.getByText("结果校验通过"));
-    expect(screen.getByText("拆分 —")).toBeTruthy();
-    expect(screen.getByText("关键步 —")).toBeTruthy();
-    expect(screen.getByText("最终 —")).toBeTruthy();
+    expect(screen.queryByText(/拆分/)).toBeNull();
+    expect(screen.queryByText(/关键步/)).toBeNull();
+    expect(screen.queryByText(/最终/)).toBeNull();
+  });
+
+  it("模型没调 plan 工具 → 只显示实际打了分的项，不显示「拆分 —」", () => {
+    // plan 为 null 是设计（无拆分可评），但摆个横线会让人以为是 0 分或出错
+    render(<VerifyBadge message={msg({
+      status: "done",
+      quality: { plan: null, steps: 100, final: 100, feedback: "完成得不错" },
+    })} />);
+    fireEvent.click(screen.getByText("结果校验通过"));
+    expect(screen.queryByText(/拆分/)).toBeNull();
+    expect(screen.getByText("关键步 100")).toBeTruthy();
+    expect(screen.getByText("最终 100")).toBeTruthy();
+    expect(screen.getByText("完成得不错")).toBeTruthy();
+  });
+
+  it("0 分是真分数，不能被当成空值隐藏", () => {
+    render(<VerifyBadge message={msg({
+      status: "done",
+      quality: { plan: 0, steps: 0, final: 0, feedback: "很差" },
+    })} />);
+    // 徽章状态由交付门定，与 judge 分数无关；这里只关心 0 分有没有被显示出来
+    fireEvent.click(screen.getByText("结果校验通过"));
+    expect(screen.getByText("拆分 0")).toBeTruthy();
+    expect(screen.getByText("最终 0")).toBeTruthy();
   });
 });
 
