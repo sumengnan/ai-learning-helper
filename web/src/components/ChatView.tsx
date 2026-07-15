@@ -506,8 +506,11 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                 const live = busy && i === messages.length - 1 && m.status === "streaming";
                 const hasSources = !!(showSources && m.sources && m.sources.length > 0);
                 // 校验是系统级信息，与状态/耗时/tokens 同处虚线下方（不受 showTools 开关影响）
+                // quality 刷新后不在 m.quality 上（只实时赋值），但 progress 里有
+                // scope="quality"，故一并认；否则「只有质量分、无 verify」的轮刷新后不渲染徽章
                 const hasVerify = !!((m.progress || []).some(
-                  (p) => p.scope === "verify" || p.scope === "check") || m.quality);
+                  (p) => p.scope === "verify" || p.scope === "check" || p.scope === "quality")
+                  || m.quality);
                 const hasStatus = live || m.status === "done" || m.status === "error"
                   || m.status === "stopped" || m.status === "interrupted";
                 const hasElapsed = (live && m.startedAt != null) || (showTools && m.elapsedMs != null);

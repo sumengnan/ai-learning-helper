@@ -9,6 +9,21 @@ import type { ChatMessage } from "../types";
 // 质量分展示：null/undefined → 「—」
 const fmtScore = (n?: number | null) => (n === null || n === undefined ? "—" : String(n));
 
+// 从 progress 里重建轨迹质量分（scope="quality"，text 为 JSON）。
+// message.quality 只在实时 SSE 时由 ChatView 赋值，刷新后走 ui_messages 加载则没有；
+// 但 _emit_quality 同时把这条写进了 progress 列，故可从那里还原。解析失败当作没有。
+function qualityFromProgress(progress: ChatMessage["progress"]): ChatMessage["quality"] {
+  const items = (progress || []).filter((p) => p.scope === "quality");
+  const last = items[items.length - 1];
+  if (!last?.text) return null;
+  try {
+    const q = JSON.parse(last.text);
+    return q && typeof q === "object" ? q : null;
+  } catch {
+    return null;      // 脏数据不该让整个气泡崩掉
+  }
+}
+
 // 结果校验常驻徽章：脱离「展示工具调用」开关，恒在 assistant 气泡底部展示本轮校验/质量状态。
 // - 进行中（本轮 streaming 或收到 verify running）→ spinner「验证中…」
 // - 通过（verify ok，或流结束且无 verify error）→「校验通过」+ 若有 quality.final 显示「质量 N」
@@ -20,7 +35,10 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
   // 检索命中是正常情形，不作为校验状态展示（仅保留失败/未命中等有意义的每步校验）
   const checks = (message.checks || []).filter(
     (c) => !(c.tool === "search_memory" && c.status === "ok"));
-  const quality = message.quality || null;
+  // quality 只在实时 SSE 时被 ChatView 赋值；刷新后从 progress 里的 scope="quality"
+  // 条目重建（_emit_quality 把同一份 JSON 既推事件也写进 progress 列），否则质量分
+  // 徽章刷新即消失，而数据其实一直在。
+  const quality = message.quality || qualityFromProgress(message.progress);
 
   // 无任何校验信号 → 不渲染徽章
   if (verify.length === 0 && checks.length === 0 && !quality) return null;
