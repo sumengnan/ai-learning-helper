@@ -1,23 +1,7 @@
 {
   "servers": [
     {
-      "name": "example",
-      "enabled": true,
-      "transport": "stdio",
-      "command": "python",
-      "args": ["-m", "app.mcp_servers.example_server"],
-      "env": {}
-    },
-    {
-      "name": "weather",
-      "enabled": false,
-      "transport": "http",
-      "url": "https://mcp.example.com/mcp",
-      "headers": {"Authorization": "Bearer ${WEATHER_TOKEN}"},
-      "timeout": 30
-    },
-    {
-      "_comment": "阿里云百炼 WebSearch：实时互联网检索，补上模型「只能猜网址」的缺口。需环境变量 DASHSCOPE_API_KEY，且 HARNESS_ENABLE_MCP=true。",
+      "_comment": "阿里云百炼 WebSearch：实时互联网检索。",
       "name": "websearch",
       "enabled": true,
       "transport": "http",
