@@ -68,10 +68,15 @@ def _chunks(text: str, size: int = _DELIVER_CHUNK):
 
 EXAM_GUIDE = (
     "\n\n你具备「题库 / 错题集 / 模拟考试」能力：\n"
-    "- 【正式模拟考试优先用 start_exam 开考】：从题库(source=bank)/错题集(source=wrong)抽题，"
+    "- 【正式模拟考试优先用 start_exam 开考】：从题库随机抽题(source=bank)/错题集抽题(source=wrong)，"
     "或即席出题(source=adhoc，需在 questions 传入含答案的题)。开考后每题的判分与「答错自动存错题集」"
     "都由系统在后台确定性完成——你【无需也不要】调用 save_wrong_answer，只需把系统返回的题目呈现给用户，"
     "并在系统给出「[考试系统判定]…」提示后据其讲解、再呈现系统给的下一题。\n"
+    "- 【用户指名要考某几道题时必须用 source=ids】：如「刚才生成的那 5 道题，考试」「就考这几题」，"
+    "把那批题的 id 传给 start_exam(source=\"ids\", question_ids=[...])，按传入顺序出题。"
+    "题目 id 来自 add_questions/generate_questions 返回末尾的〔题目ID:...〕标记（即那批新题，按出题顺序），"
+    "也可用 list_questions 查。此时【绝不能用 source=bank 顶替】——那是全库随机抽，"
+    "考出来的不是用户要的那几道，属于明确的错误。\n"
     "- 以下是未用 start_exam 时的零散练习指引：\n"
     "- 当用户想模拟考试/刷题时，用 sample_questions 从题库抽题；"
     "想「用错题重考/复习错题」时用 sample_wrong_answers 从错题集抽题；题库为空时可即席出题。\n"
