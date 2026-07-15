@@ -117,6 +117,12 @@ class HarnessConfig(BaseSettings):
     http_timeout: float = 30.0
     http_max_response_bytes: int = 5_000_000
     http_max_redirects: int = 5
+    # 空 UA 是最典型的爬虫特征之一，不少站点据此直接 403——此前本工具一个 UA 都不发。
+    # 默认按「行为良好的爬虫」惯例如实标明身份（Googlebot 也是这个格式），能解决「仅因为
+    # 没有 UA 而被拒」的那批站点。设为空字符串则退回不发 UA。
+    # 注：这不会绕过 Cloudflare 之类的 bot 检测——那条路本就走浏览器兜底。若确需伪装成
+    # 浏览器，自行用 HARNESS_HTTP_USER_AGENT 覆盖（是否合规由使用者自行判断）。
+    http_user_agent: str = "Mozilla/5.0 (compatible; AI-Learning-Helper/1.0; +harness)"
     # 浏览器
     browser_headless: bool = True
     browser_nav_timeout: float = 30.0

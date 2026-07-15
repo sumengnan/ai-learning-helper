@@ -15,9 +15,10 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
     : r >= 0.9 ? theme.palette.warning.main : theme.palette.error.main);
   const cur = ops.totals.cost_currency || "¥";
   const q = ops.quality;
+  const gate = ops.gate;
   const scoreColor = (s: number) => (s >= 80 ? theme.palette.success.main
     : s >= 60 ? theme.palette.warning.main : theme.palette.error.main);
-  const layerMax = Math.max(1, ...q.gate.layers.map((l) => l.count));
+  const layerMax = Math.max(1, ...gate.layer_failures.map((l) => l.count));
 
   return (
     <>
@@ -63,7 +64,7 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
 
       {/* 回答质量：轨迹 judge 分数 + 交付门拦截。两个门默认关，故常态可能为空。 */}
       <Eyebrow note="仅本账号">回答质量</Eyebrow>
-      {q.scored_turns === 0 && q.gate.turns === 0 ? (
+      {q.scored_turns === 0 && gate.turns === 0 ? (
         <Card sx={cardSx}>
           <CardContent>
             <Typography sx={{ fontSize: 13, color: "text.disabled" }}>
@@ -84,11 +85,14 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
             <StatTile label="拆分 / 步骤分"
               value={`${q.avg_plan ?? "—"} / ${q.avg_steps ?? "—"}`}
               hint="任务拆分 · 关键步执行" stripe={theme.palette.primary.main} />
-            <StatTile label="校验拦截率" value={fmtPct(q.gate.block_rate)}
-              hint={`${q.gate.blocked} / ${q.gate.turns} 轮被拦下重答`}
-              stripe={q.gate.block_rate > 0.2 ? theme.palette.error.main : theme.palette.success.main} />
-            <StatTile label="已校验轮次" value={String(q.gate.turns)}
-              hint="经过交付门的回答" stripe={theme.palette.primary.main} />
+            <StatTile label="一次过率" value={gate.turns ? fmtPct(gate.first_pass_rate) : "—"}
+              hint={`${gate.turns} 轮经过交付门 · 共重答 ${gate.retries} 次`}
+              stripe={gate.first_pass_rate >= 0.8 ? theme.palette.success.main : theme.palette.warning.main} />
+            <StatTile label="降级交付" value={String(gate.degraded)}
+              hint={gate.gate_errors > 0
+                ? `另有 ${gate.gate_errors} 轮因校验器故障未真校验`
+                : `占 ${fmtPct(gate.degraded_rate)} · 带 ⚠️ 告示交付`}
+              stripe={gate.degraded > 0 ? theme.palette.error.main : theme.palette.success.main} />
           </Box>
           <Box sx={{ display: "grid", gap: 1.75, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
             <Card sx={cardSx}>
@@ -106,21 +110,19 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
                 <Typography sx={{ fontSize: 12, color: "text.secondary", mb: 2 }}>
                   按次数排序 · 悬停查看具体数值
                 </Typography>
-                {q.gate.layers.length === 0 ? (
+                {gate.layer_failures.length === 0 ? (
                   <Typography sx={{ fontSize: 13, color: "text.disabled" }}>
-                    {q.gate.blocked > 0
-                      ? "有拦截记录，但未记录具体层（该字段上线前的历史数据）"
-                      : "没有被拦下的回答"}
+                    没有被拦下的回答
                   </Typography>
                 ) : (
                   <Stack spacing={1.1}>
-                    {q.gate.layers.map((l) => (
+                    {gate.layer_failures.map((l) => (
                       <Tooltip key={l.layer} arrow followCursor placement="top"
-                        title={`${l.label}（${l.layer}）· 未通过 ${l.count} 次`}>
+                        title={`${l.zh}（${l.layer}）· 未通过 ${l.count} 次`}>
                         <Box sx={{ display: "grid", gridTemplateColumns: "120px 1fr 92px",
                           alignItems: "center", gap: 1.5, cursor: "pointer" }}>
                           <Typography sx={{ fontSize: 12, whiteSpace: "nowrap",
-                            overflow: "hidden", textOverflow: "ellipsis" }}>{l.label}</Typography>
+                            overflow: "hidden", textOverflow: "ellipsis" }}>{l.zh}</Typography>
                           <Box sx={{ height: 9, bgcolor: "action.selected", borderRadius: 1.5, overflow: "hidden" }}>
                             <Box sx={{ height: "100%", width: `${(l.count / layerMax) * 100}%`,
                               bgcolor: theme.palette.error.main, borderRadius: 1.5 }} />

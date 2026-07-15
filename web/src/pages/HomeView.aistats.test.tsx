@@ -35,19 +35,20 @@ const OV: StatsOverview = {
       { bucket: "1", count: 9 }, { bucket: "2", count: 22 }, { bucket: "3", count: 26 },
       { bucket: "4", count: 14 }, { bucket: "5-6", count: 9 }, { bucket: "7+", count: 7 },
     ],
+    gate: {
+      turns: 20, retries: 4, avg_retries: 0.2, degraded: 1, degraded_rate: 0.05,
+      first_pass_rate: 0.85, gate_errors: 0,
+      layer_failures: [
+        { layer: "judge", zh: "质量评分", count: 2 },
+        { layer: "grounding", zh: "知识库依据", count: 1 },
+      ],
+    },
     quality: {
       scored_turns: 12, avg_final: 78.4, avg_plan: 81, avg_steps: 74.2,
       distribution: [
         { bucket: "0-59", count: 2 }, { bucket: "60-79", count: 4 },
         { bucket: "80-89", count: 4 }, { bucket: "90-100", count: 2 },
       ],
-      gate: {
-        turns: 20, blocked: 3, block_rate: 0.15,
-        layers: [
-          { layer: "judge", label: "质量评分", count: 2 },
-          { layer: "grounding", label: "知识库依据", count: 1 },
-        ],
-      },
     },
   },
 };
@@ -99,9 +100,10 @@ describe("HomeView · 回答质量", () => {
     renderOps();
     await waitFor(() => expect(screen.getByText("平均质量分")).toBeTruthy());
     expect(screen.getByText("78.4")).toBeTruthy();
-    expect(screen.getByText("校验拦截率")).toBeTruthy();
-    expect(screen.getByText("15%")).toBeTruthy();          // block_rate 0.15
-    expect(screen.getByText("3 / 20 轮被拦下重答")).toBeTruthy();
+    expect(screen.getByText("一次过率")).toBeTruthy();
+    expect(screen.getByText("85%")).toBeTruthy();                    // first_pass_rate 0.85
+    expect(screen.getByText("20 轮经过交付门 · 共重答 4 次")).toBeTruthy();
+    expect(screen.getByText("降级交付")).toBeTruthy();
     // 失败层用中文标签展示（后端翻好再传，前端不另抄一份映射）
     expect(screen.getByText("质量评分")).toBeTruthy();
     expect(screen.getByText("知识库依据")).toBeTruthy();
@@ -112,13 +114,13 @@ describe("HomeView · 回答质量", () => {
       ...OV,
       ops: {
         ...OV.ops,
+        gate: { ...OV.ops.gate, turns: 0, layer_failures: [] },
         quality: {
           scored_turns: 0, avg_final: null, avg_plan: null, avg_steps: null,
           distribution: [
             { bucket: "0-59", count: 0 }, { bucket: "60-79", count: 0 },
             { bucket: "80-89", count: 0 }, { bucket: "90-100", count: 0 },
           ],
-          gate: { turns: 0, blocked: 0, block_rate: 0, layers: [] },
         },
       },
     });
@@ -129,15 +131,13 @@ describe("HomeView · 回答质量", () => {
     expect(screen.queryByText("平均质量分")).toBeNull();
   });
 
-  it("有拦截但无结构化层名（该字段上线前的历史数据）时如实说明", async () => {
+  it("校验器自身故障（fail-open）的轮数要显形——那些「通过」并非真校验过", async () => {
     (statsApi.overview as any).mockResolvedValue({
       ...OV,
-      ops: {
-        ...OV.ops,
-        quality: { ...OV.ops.quality, gate: { turns: 5, blocked: 2, block_rate: 0.4, layers: [] } },
-      },
+      ops: { ...OV.ops, gate: { ...OV.ops.gate, gate_errors: 3 } },
     });
     renderOps();
-    await waitFor(() => expect(screen.getByText(/未记录具体层/)).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText("另有 3 轮因校验器故障未真校验")).toBeTruthy());
   });
 });

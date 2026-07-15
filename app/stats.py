@@ -128,7 +128,9 @@ class StatsService:
         return {
             "range_days": days,
             "learn": self._learn_section(user_id, agg, series, app_counts),
-            "ops": self._ops_section(agg, series, app_counts, quality),
+            "ops": self._ops_section(agg, series, app_counts,
+                                     self._gate_stats(user_id, cutoff.isoformat()),
+                                     quality),
         }
 
     # ---------- 轨迹聚合 ----------
@@ -185,57 +187,27 @@ class StatsService:
         return out
 
     def _quality_agg(self, rows: list[tuple[str, list]]) -> dict:
-        """从 progress 抽 scope=quality（轨迹 judge 分数）与 scope=verify（交付门结果）。
+        """从 progress 抽 scope=quality —— 轨迹 judge 的分层打分。
 
-        质量分：_emit_quality 存的 text 是 {"plan","steps","final","feedback"} 的 JSON。
-        拦截率：一次 attempt 发一对同 key 的 running→ok/error（chat.py:520-567），故按 key
-        折叠取终态；"重答中…" 无 key 不计。一轮里只要有 ≥1 个 error 终态即判该轮被拦截
-        （含用尽重答次数后的降级交付——用户看到 ⚠️ 前缀，正是要监控的）。
+        _emit_quality 存的 text 是 {"plan","steps","final","feedback"} 的 JSON（外层 progress
+        是列表 JSON，故这里是两层）。交付门的重答/拦截统计不在这里，走 _gate_stats（读专门的
+        verify 列，比从渲染用文案里反推可靠）。
         """
         finals: list[int] = []
         plans: list[int] = []
         steps_: list[int] = []
-        daily_finals: dict[str, list[int]] = {}
-        gate_turns = gate_blocked = 0
-        layers: Counter = Counter()
-
-        for created_at, items in rows:
-            day = (created_at or "")[:10]
-            verify_states: dict[str, str] = {}      # key -> 最后一次的 status
-            has_verify = False
+        for _created_at, items in rows:
             for it in items:
-                if not isinstance(it, dict):
+                if not isinstance(it, dict) or it.get("scope") != "quality":
                     continue
-                scope = it.get("scope")
-                if scope == "quality":
-                    try:
-                        v = json.loads(it.get("text") or "{}")
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-                    if isinstance(v.get("final"), int):
-                        finals.append(v["final"])
-                        daily_finals.setdefault(day, []).append(v["final"])
-                    if isinstance(v.get("plan"), int):
-                        plans.append(v["plan"])
-                    if isinstance(v.get("steps"), int):
-                        steps_.append(v["steps"])
-                elif scope == "verify":
-                    st, key = it.get("status"), it.get("key")
-                    if st in ("ok", "error") and key:
-                        has_verify = True
-                        verify_states[key] = st
-                        if st == "error":
-                            # data 是后加的结构化字段；更早的历史数据没有它，此时只知道
-                            # 「被拦了」但不知是哪层——如实少计，不去反解中文文案（脆且易错）。
-                            for name in (it.get("data") or {}).get("failed", []):
-                                layers[name] += 1
-            if has_verify:
-                gate_turns += 1
-                gate_blocked += any(s == "error" for s in verify_states.values())
-
-        return {"finals": finals, "plans": plans, "steps": steps_,
-                "daily_finals": daily_finals, "gate_turns": gate_turns,
-                "gate_blocked": gate_blocked, "layers": layers}
+                try:
+                    v = json.loads(it.get("text") or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                for key, sink in (("final", finals), ("plan", plans), ("steps", steps_)):
+                    if isinstance(v.get(key), int):
+                        sink.append(v[key])
+        return {"finals": finals, "plans": plans, "steps": steps_}
 
     def _quality_section(self, rows: list[tuple[str, list]]) -> dict:
         agg = self._quality_agg(rows)
@@ -249,15 +221,6 @@ class StatsService:
                           if agg["steps"] else None),
             # {bucket,count} 形状 —— 前端 StepsHistogram 直接吃，无需新图表组件
             "distribution": _score_buckets(finals),
-            "gate": {
-                "turns": agg["gate_turns"],
-                "blocked": agg["gate_blocked"],
-                "block_rate": (round(agg["gate_blocked"] / agg["gate_turns"], 3)
-                               if agg["gate_turns"] else 0.0),
-                # 层名→中文走 verify 的公开函数，中文文案单一来源、不在此另抄一份映射
-                "layers": [{"layer": k, "label": failed_layers_zh([k]), "count": v}
-                           for k, v in agg["layers"].most_common()],
-            },
         }
 
     def _aggregate(self, events) -> dict:
@@ -436,6 +399,60 @@ class StatsService:
             "memory": self._count_user_memories(user_id),
         }
 
+    def _gate_stats(self, user_id: str | None, cutoff_iso: str) -> dict:
+        """交付门重答统计，读 conversation_messages.verify 列。
+
+        与 ops.totals.retries 是两回事：那个统计的是 LLM 网络重试（超时/限流后重发请求），
+        与交付门无关。这里统计的是「答案没过校验、带反馈重答」的次数。
+        """
+        empty = {"turns": 0, "retries": 0, "avg_retries": 0.0, "degraded": 0,
+                 "degraded_rate": 0.0, "first_pass_rate": 0.0, "gate_errors": 0,
+                 "layer_failures": []}
+        if self._app is None or not user_id:
+            return empty
+        try:
+            rows = self._app.execute(
+                "SELECT verify FROM conversation_messages"
+                " WHERE verify IS NOT NULL AND created_at >= ? AND conv_id IN"
+                " (SELECT id FROM conversations WHERE user_id=?)",
+                (cutoff_iso, user_id)).fetchall()
+        except sqlite3.Error:
+            return empty
+
+        turns = retries = degraded = first_pass = gate_errors = 0
+        layers: Counter = Counter()
+        for (raw,) in rows:
+            try:
+                vt = json.loads(raw)
+            except (TypeError, ValueError):
+                continue        # 脏数据不该让整个统计页 500
+            turns += 1
+            retries += vt.get("retries", 0) or 0
+            if vt.get("degraded"):
+                degraded += 1
+            if vt.get("gate_error"):   # 校验器故障跳过校验的轮数：这些「通过」并非真通过
+                gate_errors += 1
+            if (vt.get("attempts") or 0) == 1 and vt.get("ok"):
+                first_pass += 1
+            for h in vt.get("history") or []:
+                for name in h.get("failed") or []:
+                    layers[name] += 1
+        if turns == 0:
+            return empty
+        return {
+            "turns": turns,
+            "retries": retries,
+            "avg_retries": round(retries / turns, 3),
+            "degraded": degraded,
+            "degraded_rate": round(degraded / turns, 3),
+            "first_pass_rate": round(first_pass / turns, 3),
+            # 因校验器自身故障而跳过校验的轮数（fail-open）：>0 说明有回答其实没被真校验过
+            "gate_errors": gate_errors,
+            # 哪层最爱拦：按次数降序，用于判断该调哪个分项开关/阈值
+            "layer_failures": [{"layer": k, "zh": failed_layers_zh([k]), "count": v}
+                               for k, v in layers.most_common()],
+        }
+
     def _user_conv_ids(self, user_id: str | None) -> list[str]:
         """该用户的全部会话 id（对话记忆按 conv_id 归属，用它做用户隔离）。"""
         if self._app is None or not user_id:
@@ -546,10 +563,11 @@ class StatsService:
             "activity": series,
         }
 
-    def _ops_section(self, agg, series, app_counts, quality) -> dict:
-        # ⚠️ 口径不一致，看数时留意：本区其余指标是**全局**的（harness.db 的 trajectory_events
-        # 没有 user_id 列，无法按人切），只有 quality 来自 conversation_messages JOIN
-        # conversations，是**按当前用户隔离**的。故「运行次数 100 / 已评轮次 12」不矛盾。
+    def _ops_section(self, agg, series, app_counts, gate, quality) -> dict:
+        # ⚠️ 口径不一致，看数时留意：totals/daily/tools/steps_histogram 是**全局**的
+        # （harness.db 的 trajectory_events 没有 user_id 列，无法按人切），而 gate 与 quality
+        # 都来自 conversation_messages，是**按当前用户隔离**的。
+        # 故「运行次数 100 / 已评轮次 12」并不矛盾。
         return {
             "totals": {
                 "runs": agg["runs_started"],
@@ -564,6 +582,8 @@ class StatsService:
                 "p95_latency_ms": agg["p95_latency_ms"],
                 "avg_run_duration_ms": agg["avg_run_duration_ms"],
                 "total_run_duration_ms": agg["total_run_duration_ms"],
+                # 注意：这是 LLM 网络重试（超时/限流后重发请求），与交付门重答无关；
+                # 后者见下面的 gate.retries。两者口径完全不同，别混着看。
                 "retries": agg["retries"],
                 "cost_usd": agg["cost_usd"],
                 "cost_currency": self._currency,
@@ -573,5 +593,8 @@ class StatsService:
             "daily": series,
             "tools": self._tools_list(agg["tool_counts"], agg["tool_errors"]),
             "steps_histogram": self._steps_histogram(agg["steps_per_run"]),
+            # 交付门：答案没过校验带反馈重答的统计（读 conversation_messages.verify 列）
+            "gate": gate,
+            # 轨迹 judge 的分层质量分（读 progress 列 scope=quality 项）
             "quality": quality,
         }

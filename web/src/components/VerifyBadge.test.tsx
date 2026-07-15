@@ -146,3 +146,62 @@ describe("VerifyBadge 容错", () => {
     expect(screen.queryByText(/拆分/)).toBeNull();
   });
 });
+
+describe("刷新后从 progress 重建质量分", () => {
+  // quality 只在实时 SSE 时由 ChatView 赋值；走 ui_messages 加载历史时它是 undefined，
+  // 但 _emit_quality 同时把同一份 JSON 写进了 progress 列 —— 徽章须能从那里还原
+  const qJson = JSON.stringify({ plan: 80, steps: 70, final: 90, feedback: "拆分清楚" });
+
+  it("无 message.quality 但 progress 里有 → 仍显示质量分（此前刷新即消失）", () => {
+    render(<VerifyBadge message={msg({
+      progress: [
+        { scope: "verify", text: "校验通过", status: "ok" },
+        { scope: "quality", text: qJson, status: "ok" },
+      ],
+    })} />);
+    expect(screen.getByText("· 质量 90")).toBeTruthy();
+  });
+
+  it("展开后三层分与简评都还原", () => {
+    render(<VerifyBadge message={msg({
+      progress: [
+        { scope: "verify", text: "校验通过", status: "ok" },
+        { scope: "quality", text: qJson, status: "ok" },
+      ],
+    })} />);
+    fireEvent.click(screen.getByText("校验通过"));
+    expect(screen.getByText("拆分 80")).toBeTruthy();
+    expect(screen.getByText("关键步 70")).toBeTruthy();
+    expect(screen.getByText("最终 90")).toBeTruthy();
+    expect(screen.getByText("拆分清楚")).toBeTruthy();
+  });
+
+  it("只有 quality、无 verify → 徽章仍渲染（不因缺 verify 而整个消失）", () => {
+    render(<VerifyBadge message={msg({
+      progress: [{ scope: "quality", text: qJson, status: "ok" }],
+    })} />);
+    expect(screen.getByText("· 质量 90")).toBeTruthy();
+  });
+
+  it("message.quality 优先于 progress（实时路径不被回退值覆盖）", () => {
+    render(<VerifyBadge message={msg({
+      quality: { plan: 10, steps: 10, final: 11, feedback: "实时的" },
+      progress: [
+        { scope: "verify", text: "校验通过", status: "ok" },
+        { scope: "quality", text: qJson, status: "ok" },
+      ],
+    })} />);
+    expect(screen.getByText("· 质量 11")).toBeTruthy();
+  });
+
+  it("progress 里的 quality 是脏 JSON → 忽略，不崩", () => {
+    render(<VerifyBadge message={msg({
+      progress: [
+        { scope: "verify", text: "校验通过", status: "ok" },
+        { scope: "quality", text: "{不是合法JSON", status: "ok" },
+      ],
+    })} />);
+    expect(screen.getByText("校验通过")).toBeTruthy();
+    expect(screen.queryByText(/质量/)).toBeNull();
+  });
+});

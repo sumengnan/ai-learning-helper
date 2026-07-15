@@ -103,6 +103,103 @@ def _verify_progress(events):
             if e["type"] == "Progress" and e["data"]["scope"] == "verify"]
 
 
+def _verify_trace(store, cid):
+    """落库的交付门结构化判定（conversation_messages.verify 列）。"""
+    msgs = store.ui_messages(cid)
+    return [m["verify"] for m in msgs if m["role"] == "assistant"][-1]
+
+
+def test_verify_trace_persists_retries_and_failed_layers(make_mock, text_turn):
+    # 重答一次后通过 → 落库须能回答「重答几次、哪层没过、被否的那次是哪个 run」
+    verifier = _StubVerifier([
+        Verdict(ok=False, failed=["judge", "grounding"], critique="太笼统",
+                summary="judge、grounding", hard_failed=["grounding"]),
+        Verdict(ok=True),
+    ])
+    client, store = _client(make_mock, [text_turn("初版"), text_turn("修正版")],
+                            verifier, answer_gate_max_retries=1)
+    h = _auth(client)
+    cid, _ = _run_chat(client, h, "问个问题")
+
+    vt = _verify_trace(store, cid)
+    assert vt["attempts"] == 2 and vt["retries"] == 1
+    assert vt["ok"] is True and vt["degraded"] is False
+    assert len(vt["history"]) == 2
+    first = vt["history"][0]
+    assert first["attempt"] == 1 and first["ok"] is False
+    # 结构化保留：progress 列那份中文文案拍扁后统计不出这些
+    assert first["failed"] == ["judge", "grounding"]
+    assert first["hard_failed"] == ["grounding"]
+    assert first["critique"] == "太笼统"
+    assert vt["history"][1]["ok"] is True
+    # run_id 是与 harness 库 trajectory_events 的接缝，两次尝试各不相同
+    assert first["run_id"] != vt["history"][1]["run_id"]
+
+
+def test_verify_trace_run_id_links_to_rejected_draft(make_mock, text_turn):
+    # run_id 得真能捞回被否草稿的原文，否则这个字段没意义
+    verifier = _StubVerifier([
+        Verdict(ok=False, failed=["judge"], critique="不行", summary="judge"),
+        Verdict(ok=True),
+    ])
+    reg = ToolRegistry(); reg.register(CalculatorTool())
+    traj = TrajectoryStore(":memory:")
+    harness = Harness(client=make_mock([text_turn("初版草稿"), text_turn("修正版")]),
+                      registry=reg, checkpoint_store=CheckpointStore(":memory:"),
+                      trajectory_store=traj, sink=TrajectorySink(traj), system_prompt="你是助手")
+    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,
+                    enable_answer_gate=True, answer_gate_max_retries=1)
+    store = ConversationStore(":memory:")
+    app = create_app(config=cfg, harness=harness, store=store,
+                     doc_store=DocumentStore(":memory:"), verifier=verifier)
+    client = TestClient(app)
+    h = _auth(client)
+    cid, _ = _run_chat(client, h, "问个问题")
+
+    rejected_run = _verify_trace(store, cid)["history"][0]["run_id"]
+    evs = traj.load(rejected_run)
+    text = "".join(e["data"].get("text", "") for e in evs if e["type"] == "TextDelta")
+    assert "初版草稿" in text          # 据 run_id 捞回了那次被否的原文
+
+
+def test_verify_trace_single_pass_has_no_retries(make_mock, text_turn):
+    verifier = _StubVerifier([Verdict(ok=True)])
+    client, store = _client(make_mock, [text_turn("好答案")], verifier)
+    h = _auth(client)
+    cid, _ = _run_chat(client, h, "问个问题")
+
+    vt = _verify_trace(store, cid)
+    assert vt["attempts"] == 1 and vt["retries"] == 0 and vt["ok"] is True
+    assert vt["degraded"] is False and len(vt["history"]) == 1
+
+
+def test_verify_trace_marks_degraded_when_retries_exhausted(make_mock, text_turn):
+    verifier = _StubVerifier([Verdict(ok=False, failed=["judge"], critique="差",
+                                      summary="judge")])
+    client, store = _client(make_mock, [text_turn("烂答案"), text_turn("还是烂")],
+                            verifier, answer_gate_max_retries=1)
+    h = _auth(client)
+    cid, _ = _run_chat(client, h, "问个问题")
+
+    vt = _verify_trace(store, cid)
+    assert vt["attempts"] == 2 and vt["retries"] == 1
+    assert vt["ok"] is False and vt["degraded"] is True     # 用尽次数仍不过 → 降级交付
+    assert all(h_["ok"] is False for h_ in vt["history"])
+
+
+def test_verify_trace_absent_when_gate_off(make_mock, text_turn):
+    # 门没开就没有判定可记，不该写入噪音
+    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,
+                    enable_answer_gate=False)
+    store = ConversationStore(":memory:")
+    app = create_app(config=cfg, harness=_harness(make_mock, [text_turn("直通答案")]),
+                     store=store, doc_store=DocumentStore(":memory:"))
+    client = TestClient(app)
+    h = _auth(client)
+    cid, _ = _run_chat(client, h, "问个问题")
+    assert _verify_trace(store, cid) is None
+
+
 def test_fail_then_reanswer_delivers_second_version(make_mock, text_turn):
     verifier = _StubVerifier([
         Verdict(ok=False, failed=["judge"], critique="太笼统", summary="judge"),
@@ -225,3 +322,49 @@ def test_gate_off_empty_completion_persists_error_text(make_mock):
     assert last["status"] == "error"
     assert last["content"] != "（本轮未完成）"        # 不应退化成泛化占位
     assert err in last["content"]                     # 落库内容 == 在途所见错误文案
+
+
+# ---- 校验器自身故障：fail-open 交付，但必须留痕 ----
+
+class _BoomVerifier:
+    def __init__(self):
+        self.calls = 0
+
+    async def verify(self, question, answer, grounding, registry, steps=None):
+        self.calls += 1
+        raise RuntimeError("verifier 内部炸了")
+
+
+def test_verifier_crash_delivers_draft_instead_of_losing_it(make_mock, text_turn, caplog):
+    # 交付门是质量增强，它坏了不该连累用户丢掉一份好答案（此前是 fail-closed：整轮 RunError）
+    verifier = _BoomVerifier()
+    client, store = _client(make_mock, [text_turn("一份好答案")], verifier)
+    h = _auth(client)
+    with caplog.at_level("WARNING"):
+        cid, events = _run_chat(client, h, "问个问题")
+
+    assert verifier.calls == 1
+    assert _final(events) == "一份好答案"                     # 答案照常交付，没被丢
+    assert not [e for e in events if e["type"] == "RunError"]
+    msg = [m for m in store.ui_messages(cid) if m["role"] == "assistant"][-1]
+    assert msg["status"] == "done"
+    # 但绝不能无声无息：日志 + verify 列都要留痕
+    assert any("校验器故障" in r.message for r in caplog.records)
+    assert "verifier 内部炸了" in msg["verify"]["gate_error"]
+
+
+def test_verifier_crash_does_not_retry(make_mock, text_turn):
+    # 基建故障重答也没用，只会白烧一轮 token
+    verifier = _BoomVerifier()
+    client, _ = _client(make_mock, [text_turn("答案")], verifier, answer_gate_max_retries=2)
+    h = _auth(client)
+    _run_chat(client, h, "问个问题")
+    assert verifier.calls == 1
+
+
+def test_healthy_verifier_has_no_gate_error(make_mock, text_turn):
+    client, store = _client(make_mock, [text_turn("好答案")], _StubVerifier([Verdict(ok=True)]))
+    h = _auth(client)
+    cid, _ = _run_chat(client, h, "问个问题")
+    vt = [m for m in store.ui_messages(cid) if m["role"] == "assistant"][-1]["verify"]
+    assert vt["gate_error"] is None      # 正常路径不该冒出噪音
