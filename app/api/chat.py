@@ -26,6 +26,7 @@ from opentelemetry.trace import Status, StatusCode
 from harness.reliability.budget import BudgetTracker
 from harness.telemetry.tracer import get_tracer
 from harness.tools.base import ToolRegistry
+from harness.tools.builtins.memory_search import SearchMemoryTool
 from harness.types import Message, Role
 
 from ..auth import current_user
@@ -53,6 +54,7 @@ from ..tools.exam_tools import (
     StartExamTool,
 )
 from ..tools.knowledge_tools import SaveToKnowledgeTool
+from ..tools.validating import ValidatingTool, relevance_check
 from ..tools.save_download import SaveDownloadTool
 from ..logging_setup import set_log_context
 from ..verify import Verdict, _tool_exec_summary, failed_layers_zh
@@ -270,6 +272,16 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         if dstore is not None:
             _reg(SaveDownloadTool(
                 dstore, config.download_max_mb * 1024 * 1024, user_id))
+        # 知识库检索：必须按用户覆盖全局那个。assembly 里构造的是默认 collection="knowledge"
+        # （无冒号 → collection_to_scope 判成 owner=_global），而知识库写入的是
+        # knowledge:{user_id} —— 两个 owner 永不相交，不覆盖的话模型在聊天里永远搜不到
+        # 用户上传的文档，还会连带让交付门的 grounding 校验因「检索恒无命中」而形同虚设。
+        # 保持与 assembly.py 同款的 ValidatingTool 包装，别把每步校验弄丢了。
+        _mem = getattr(harness, "memory", None)
+        if _mem is not None:
+            _st = SearchMemoryTool(_mem, collection=f"knowledge:{user_id}",
+                                   default_k=config.search_top_k)
+            _reg(ValidatingTool(_st, relevance_check) if config.enable_step_check else _st)
         # 知识库保存：按用户隔离，写入 knowledge:{user_id} 并建立文档记录，
         # 使内容出现在「知识库」菜单（区别于 remember 写入的私有记忆）。
         if knowledge_service is not None:

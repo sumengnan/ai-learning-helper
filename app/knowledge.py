@@ -1,6 +1,7 @@
 # app/knowledge.py
 from __future__ import annotations
 
+import hashlib
 import re
 from uuid import uuid4
 
@@ -12,6 +13,16 @@ from .parsing import parse_file
 
 def _clip(text: str, n: int = 300) -> str:
     return " ".join(text.split())[:n]
+
+
+def _content_hash(text: str) -> str:
+    """正文的去重指纹。
+
+    先把空白压平再算：同一份内容改了换行/缩进/行尾空格重新导出，切出来的块与向量实质相同，
+    不该因为几个空格就被当成新文档再 embedding 一遍。除此之外不做任何规范化 —— 大小写、
+    标点的差异是真实的内容差异，不能抹掉。
+    """
+    return hashlib.sha256(" ".join((text or "").split()).encode("utf-8")).hexdigest()
 
 
 def _table_row(m: re.Match) -> str:
@@ -62,32 +73,43 @@ class KnowledgeService:
         text = parse_file(filename, data)          # UnsupportedFormat 冒泡
         if not text.strip():
             raise EmptyDocument(filename)
+        return await self._ingest_text(user_id, filename, text, size=len(data))
+
+    async def _ingest_text(self, user_id: str, source: str, text: str, *, size: int) -> dict:
+        """两个导入入口的共同实现：查重 → 切块+embedding → 建文档记录。
+
+        查重按**正文** hash，且必须赶在 add_texts 之前 —— 那一步要打 embedding 端点，
+        重复内容走到那儿钱就已经花了，而且会把一模一样的向量再灌一遍进库、污染检索
+        （同内容命中两次，白占候选池名额）。
+        """
+        content_hash = _content_hash(text)
+        dup = self._doc_store.find_by_hash(user_id, content_hash)
+        if dup is not None:
+            # 命中已有同内容文档：不重复切块/embedding/入库，回指原文档。
+            # duplicate 标记供接口层告知用户「这份已经在库里了」，而非假装导入成功。
+            return {"id": dup["id"], "filename": dup["filename"],
+                    "num_chunks": dup["num_chunks"], "duplicate": True}
         doc_id = uuid4().hex
         chunk_ids = await self._memory.add_texts(
             [text], self._collection_for(user_id),
-            {"source": filename, "doc_id": doc_id, "user_id": user_id},
-            kind=kind_for_filename(filename))
+            {"source": source, "doc_id": doc_id, "user_id": user_id},
+            kind=kind_for_filename(source))
         excerpt = " ".join(text.split())[:200]     # 压平空白后取首段作摘要
-        self._doc_store.create(user_id, doc_id, filename, len(data), chunk_ids, excerpt)
-        return {"id": doc_id, "filename": filename, "num_chunks": len(chunk_ids)}
+        self._doc_store.create(user_id, doc_id, source, size, chunk_ids, excerpt,
+                               content_hash=content_hash)
+        return {"id": doc_id, "filename": source, "num_chunks": len(chunk_ids),
+                "duplicate": False}
 
     async def ingest_text(self, user_id: str, title: str, text: str) -> dict:
         """把一段文本作为正式文档存入用户知识库（供聊天中「保存到知识库」使用）。
 
         与 ingest 一致：写入 knowledge:{user_id} 向量集合并建立 doc_store 文档记录，
-        故会出现在知识库菜单、可检索、可删除。区别仅是输入为文本而非上传文件。
+        故会出现在知识库菜单、可检索、可删除、同样参与去重。区别仅是输入为文本而非上传文件。
         """
         if not text.strip():
             raise EmptyDocument(title)
-        doc_id = uuid4().hex
-        chunk_ids = await self._memory.add_texts(
-            [text], self._collection_for(user_id),
-            {"source": title, "doc_id": doc_id, "user_id": user_id},
-            kind=kind_for_filename(title))       # 有后缀按类型；无后缀→auto 嗅探
-        excerpt = " ".join(text.split())[:200]
-        self._doc_store.create(user_id, doc_id, title, len(text.encode("utf-8")),
-                               chunk_ids, excerpt)
-        return {"id": doc_id, "filename": title, "num_chunks": len(chunk_ids)}
+        return await self._ingest_text(user_id, title, text,
+                                       size=len(text.encode("utf-8")))
 
     def list_fragments(self, user_id: str, page: int = 1, size: int = 8,
                        category: str | None = None) -> dict:

@@ -77,7 +77,10 @@ export function KnowledgeView() {
     setBusy(true); setError(null); setNotice(null);
     try {
       const r = await api.documents.upload(file);
-      setNotice(`已导入《${r.filename}》，切分 ${r.num_chunks} 个片段`);
+      // 内容与已有文档完全相同 → 后端不会重复入库，如实说明，别让用户以为又存了一份
+      setNotice(r.duplicate
+        ? `《${r.filename}》已在知识库中（内容相同，未重复导入）`
+        : `已导入《${r.filename}》，切分 ${r.num_chunks} 个片段`);
       setQuery(""); setResults(null);
       if (page === 1) await loadList(1, category); else setPage(1);
     } catch (e: any) { setError(`导入失败：${String(e?.message || e)}`); }

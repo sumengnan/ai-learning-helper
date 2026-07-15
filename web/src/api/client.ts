@@ -222,7 +222,9 @@ export const api = {
         if (!r.ok) throw new Error(await detail(r, `加载失败：${r.status}`));
         return r.json();
       }),
-    upload: (file: File) => {
+    // duplicate=true：内容与已有文档完全相同，后端未重复入库，id 指向原有那篇
+    upload: (file: File): Promise<{ id: string; filename: string; num_chunks: number;
+                                    duplicate: boolean }> => {
       const fd = new FormData(); fd.append("file", file);
       return authFetch("/api/documents", { method: "POST", body: fd }).then(async (r) => {
         if (!r.ok) throw new Error(await detail(r, `上传失败：${r.status}`));
