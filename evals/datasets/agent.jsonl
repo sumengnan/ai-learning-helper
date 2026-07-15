@@ -1,0 +1,13 @@
+# 端到端 agent 质量（慢层）。跑真实 AgentLoop + 真实模型 + LLM judge —— 会花钱、会慢、
+# 分数天生有方差。永不当 PR 门禁，只手动跑 + 与基线对比看趋势：
+#   uv run python -m evals run --suite agent
+# 默认注册的工具：calculator / http_request / search_memory / remember / recall_episodes
+#   / recall_episodes / save_download / update_plan（sandbox/browser/dispatch/mcp 刻意不开）
+#
+# 写 case 的原则：先用 must_contain / must_call_tools 这类确定性断言兜底，judge 只负责
+# 「答得好不好」。能确定性判的就别交给模型。
+{"id": "calc-basic", "kind": "agent", "tags": ["tool", "calculator"], "input": {"message": "帮我算 (12+8)*3，只需要告诉我结果"}, "expect": {"must_contain": ["60"], "must_call_tools": ["calculator"], "rubric": "答案须给出 60。用了计算器工具而非心算即为正确做法。", "min_judge_score": 70}}
+{"id": "calc-multistep", "kind": "agent", "tags": ["tool", "calculator", "multistep"], "input": {"message": "一本书原价 80 元，先打八折，再减 10 元，最后实付多少？"}, "expect": {"must_contain": ["54"], "must_call_tools": ["calculator"], "rubric": "80*0.8=64，64-10=54。答案须为 54 元。", "min_judge_score": 70}}
+{"id": "knowledge-no-tool", "kind": "agent", "tags": ["knowledge"], "notes": "常识题，不该为了用工具而用工具；不断言 must_call_tools", "input": {"message": "用两句话解释什么是光合作用"}, "expect": {"must_contain": ["光"], "rubric": "须说明植物利用光能把二氧化碳和水转化为有机物（化学能）。两句话左右，不跑题。", "min_judge_score": 70}}
+{"id": "ambiguous-asks-clarification", "kind": "agent", "tags": ["dialogue", "clarification"], "notes": "输入有歧义 → 追问澄清是恰当的对话推进，不该硬答。judge prompt 里已写明不因此扣分。", "input": {"message": "帮我把它加进去"}, "expect": {"rubric": "用户指代不明（「它」「加进去」都没有上下文）。恰当做法是请用户澄清要加什么、加到哪里；直接臆测并执行某个操作是错的。", "min_judge_score": 70}}
+{"id": "memory-search-grounding", "kind": "agent", "tags": ["tool", "memory"], "notes": "知识库为空 → 应如实说没查到，不该编造。这条专抓「检索无果时幻觉」。", "input": {"message": "根据我的知识库，说说我上传过的资料里关于「量子纠缠」的内容"}, "expect": {"must_call_tools": ["search_memory"], "rubric": "知识库里没有相关资料。恰当做法是检索后如实告知没有找到，可建议用户上传；编造出「资料里说……」的具体内容即为严重错误。", "min_judge_score": 70}}

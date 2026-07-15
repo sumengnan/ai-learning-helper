@@ -74,6 +74,24 @@ def _step_bucket(n: int) -> str:
 
 _STEP_ORDER = ["1", "2", "3", "4", "5-6", "7+"]
 
+# 质量分分桶。桶名即前端展示的标签；空桶也保留，否则分布图会随数据忽长忽短。
+_SCORE_ORDER = ["0-59", "60-79", "80-89", "90-100"]
+
+
+def _score_bucket(n: int) -> str:
+    if n < 60:
+        return "0-59"
+    if n < 80:
+        return "60-79"
+    if n < 90:
+        return "80-89"
+    return "90-100"
+
+
+def _score_buckets(scores: list[int]) -> list[dict]:
+    c = Counter(_score_bucket(s) for s in scores)
+    return [{"bucket": b, "count": c.get(b, 0)} for b in _SCORE_ORDER]
+
 
 class StatsService:
     def __init__(self, *, trajectory_conn: sqlite3.Connection,
@@ -105,11 +123,14 @@ class StatsService:
         agg = self._aggregate(events)
         series = self._daily_series(agg["daily"], now, days)
         app_counts = self._app_counts(user_id)
+        quality = self._quality_section(
+            self._load_progress_rows(user_id, cutoff.isoformat()))
         return {
             "range_days": days,
             "learn": self._learn_section(user_id, agg, series, app_counts),
             "ops": self._ops_section(agg, series, app_counts,
-                                     self._gate_stats(user_id, cutoff.isoformat())),
+                                     self._gate_stats(user_id, cutoff.isoformat()),
+                                     quality),
         }
 
     # ---------- 轨迹聚合 ----------
@@ -133,6 +154,74 @@ class StatsService:
                 d = d["data"]
             out.append((run_id, typ, created_at, d if isinstance(d, dict) else {}))
         return out
+
+    # ---------- 回答质量聚合 ----------
+
+    def _load_progress_rows(self, user_id: str | None,
+                            cutoff_iso: str) -> list[tuple[str, list]]:
+        """取该用户区间内每轮助手消息的 progress 列表。
+
+        用 Python 解析而非 SQLite json_each：progress 是 list-of-dict 的 JSON 串，其中
+        quality 项的 text **又是**一层 JSON 串，SQL 要写 json_extract 套 json_extract 套
+        json_each，可读性崩塌；且 json_each 遇到一行非法 JSON 会抛 OperationalError 把整个
+        查询打挂，Python 侧能逐行跳过（照 _load_events 的既有约定）。单用户量级毫秒可完成。
+        """
+        if self._app is None or not user_id:
+            return []
+        try:
+            rows = self._app.execute(
+                "SELECT m.created_at, m.progress FROM conversation_messages m "
+                "JOIN conversations c ON c.id = m.conv_id "
+                "WHERE c.user_id = ? AND m.created_at >= ? AND m.progress IS NOT NULL "
+                "ORDER BY m.created_at", (user_id, cutoff_iso)).fetchall()
+        except sqlite3.Error:
+            return []
+        out: list[tuple[str, list]] = []
+        for created_at, raw in rows:
+            try:
+                items = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(items, list):
+                out.append((created_at or "", items))
+        return out
+
+    def _quality_agg(self, rows: list[tuple[str, list]]) -> dict:
+        """从 progress 抽 scope=quality —— 轨迹 judge 的分层打分。
+
+        _emit_quality 存的 text 是 {"plan","steps","final","feedback"} 的 JSON（外层 progress
+        是列表 JSON，故这里是两层）。交付门的重答/拦截统计不在这里，走 _gate_stats（读专门的
+        verify 列，比从渲染用文案里反推可靠）。
+        """
+        finals: list[int] = []
+        plans: list[int] = []
+        steps_: list[int] = []
+        for _created_at, items in rows:
+            for it in items:
+                if not isinstance(it, dict) or it.get("scope") != "quality":
+                    continue
+                try:
+                    v = json.loads(it.get("text") or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                for key, sink in (("final", finals), ("plan", plans), ("steps", steps_)):
+                    if isinstance(v.get(key), int):
+                        sink.append(v[key])
+        return {"finals": finals, "plans": plans, "steps": steps_}
+
+    def _quality_section(self, rows: list[tuple[str, list]]) -> dict:
+        agg = self._quality_agg(rows)
+        finals = agg["finals"]
+        return {
+            "scored_turns": len(finals),
+            "avg_final": round(sum(finals) / len(finals), 1) if finals else None,
+            "avg_plan": (round(sum(agg["plans"]) / len(agg["plans"]), 1)
+                         if agg["plans"] else None),
+            "avg_steps": (round(sum(agg["steps"]) / len(agg["steps"]), 1)
+                          if agg["steps"] else None),
+            # {bucket,count} 形状 —— 前端 StepsHistogram 直接吃，无需新图表组件
+            "distribution": _score_buckets(finals),
+        }
 
     def _aggregate(self, events) -> dict:
         runs_started: set[str] = set()
@@ -474,7 +563,11 @@ class StatsService:
             "activity": series,
         }
 
-    def _ops_section(self, agg, series, app_counts, gate) -> dict:
+    def _ops_section(self, agg, series, app_counts, gate, quality) -> dict:
+        # ⚠️ 口径不一致，看数时留意：totals/daily/tools/steps_histogram 是**全局**的
+        # （harness.db 的 trajectory_events 没有 user_id 列，无法按人切），而 gate 与 quality
+        # 都来自 conversation_messages，是**按当前用户隔离**的。
+        # 故「运行次数 100 / 已评轮次 12」并不矛盾。
         return {
             "totals": {
                 "runs": agg["runs_started"],
@@ -502,4 +595,6 @@ class StatsService:
             "steps_histogram": self._steps_histogram(agg["steps_per_run"]),
             # 交付门：答案没过校验带反馈重答的统计（读 conversation_messages.verify 列）
             "gate": gate,
+            # 轨迹 judge 的分层质量分（读 progress 列 scope=quality 项）
+            "quality": quality,
         }

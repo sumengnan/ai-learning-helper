@@ -38,6 +38,18 @@ const OV: StatsOverview = {
       { bucket: "1", count: 9 }, { bucket: "2", count: 22 }, { bucket: "3", count: 26 },
       { bucket: "4", count: 14 }, { bucket: "5-6", count: 9 }, { bucket: "7+", count: 7 },
     ],
+    // 全空：两个门默认关闭，这才是默认配置下的常态
+    gate: {
+      turns: 0, retries: 0, avg_retries: 0, degraded: 0, degraded_rate: 0,
+      first_pass_rate: 0, gate_errors: 0, layer_failures: [],
+    },
+    quality: {
+      scored_turns: 0, avg_final: null, avg_plan: null, avg_steps: null,
+      distribution: [
+        { bucket: "0-59", count: 0 }, { bucket: "60-79", count: 0 },
+        { bucket: "80-89", count: 0 }, { bucket: "90-100", count: 0 },
+      ],
+    },
   },
 };
 

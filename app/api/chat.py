@@ -464,6 +464,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 return ev
 
             def _emit_verify(text, status=None, key=None):
+                # progress 存的是渲染用的中文文案；结构化判定（哪层没过/重答几次）走
+                # verify_trace → conversation_messages.verify 列，供 stats._gate_stats 统计。
                 ev = Progress("verify", text, status=status, key=key)
                 progress.append({"scope": ev.scope, "text": ev.text,
                                  "status": ev.status, "key": ev.key, "agent": ev.agent})

@@ -9,10 +9,15 @@ build_harness 的产物）走完全相同的代码路径。零网络因此是结
 from __future__ import annotations
 
 import json
+import time
+from dataclasses import dataclass, field
 
 from app.config import AppConfig
 from app.exam_grader import grade_objective, grade_short, parse_choice
 from app.verify import AnswerVerifier
+from harness.context.manager import ContextManager
+from harness.events import (RunError, RunFinished, TextDelta, ToolFinished, ToolStarted)
+from harness.loop.agent_loop import AgentLoop
 from harness.memory.eval import GoldenCase, evaluate
 from harness.memory.record import MemoryFilter, MemoryRecord, MemType
 from harness.memory.reranker import NoOpReranker
@@ -44,6 +49,71 @@ def scripted_complete(mapping: dict):
                 return json.dumps(payload, ensure_ascii=False)
         return "{}"
     return complete
+
+
+@dataclass
+class AgentTrace:
+    """一次 agent 运行的产物。steps 形状对齐 app/api/chat.py 的 collect["steps"]
+    （{"tool","args","result","is_error"}），好让 app/verify.py::_tool_exec_summary 直接吃 ——
+    离线判分喂给 judge 的上下文因此与线上逐字一致，分数才可比。"""
+    final: str = ""
+    tools: list[str] = field(default_factory=list)
+    steps: list[dict] = field(default_factory=list)
+    plan: str = ""
+    error: str = ""
+    elapsed_ms: int = 0
+
+
+class AgentDriver:
+    """跑真实 AgentLoop（慢层）。
+
+    协作者全部注入、绝不自己 build_harness：mock 层（tests/evals/ 传 MockModelClient）与
+    真实层（cli 传 build_harness 的 client/registry）因此走完全相同的代码路径。
+    事件收集逻辑对齐 app/api/chat.py:344-392。
+    """
+
+    def __init__(self, *, client, registry, system_prompt: str = "",
+                 max_steps: int = 10, model_name: str = "") -> None:
+        self._client = client
+        self._registry = registry
+        self._system_prompt = system_prompt
+        self._max_steps = max_steps
+        self._model_name = model_name
+
+    async def run(self, case) -> AgentTrace:
+        sp = case.input.system_prompt or self._system_prompt
+        loop = AgentLoop(client=self._client, registry=self._registry,
+                         context=ContextManager(sp), max_steps=self._max_steps,
+                         model_name=self._model_name)
+        trace = AgentTrace()
+        by_id: dict[str, dict] = {}
+        parts: list[str] = []
+        t0 = time.monotonic()
+        async for ev in loop.run(case.input.message):
+            if isinstance(ev, TextDelta):
+                parts.append(ev.text)
+            elif isinstance(ev, RunFinished):
+                trace.final = ev.message.content or ""
+            elif isinstance(ev, RunError):
+                trace.error = ev.error
+            elif isinstance(ev, ToolStarted):
+                tc = ev.tool_call
+                st = {"tool": tc.name, "args": tc.arguments}
+                trace.steps.append(st)
+                by_id[tc.id] = st
+                trace.tools.append(tc.name)
+            elif isinstance(ev, ToolFinished):
+                st = by_id.get(ev.result.tool_call_id)
+                if st is not None:
+                    st["result"] = ev.result.content
+                    st["is_error"] = ev.result.is_error
+        trace.elapsed_ms = int((time.monotonic() - t0) * 1000)
+        # RunFinished 没来（跑挂/超步）时退回累积的流式文本，让打分器仍有东西可看
+        trace.final = trace.final or "".join(parts)
+        # update_plan 工具的入参即任务拆分，供轨迹 judge 用
+        trace.plan = next((s.get("args", "") for s in trace.steps
+                           if s.get("tool") == "update_plan"), "")
+        return trace
 
 
 class ExamGradeDriver:

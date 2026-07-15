@@ -300,6 +300,111 @@ def _app_conn_with_gate(rows):
     return conn
 
 
+# ---------- 回答质量聚合（读 progress 列 scope=quality 项）----------
+
+def _quality_app_conn():
+    """带 progress 列的 app 库（_app_conn 那份刻意不带，用于验证缺列时的优雅降级）。"""
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        "CREATE TABLE documents(id TEXT, user_id TEXT);"
+        "CREATE TABLE questions(id TEXT, user_id TEXT);"
+        "CREATE TABLE wrong_answers(id TEXT, user_id TEXT);"
+        "CREATE TABLE conversations(id TEXT, user_id TEXT, title TEXT, created_at TEXT);"
+        "CREATE TABLE conversation_messages(conv_id TEXT, seq INTEGER, created_at TEXT, "
+        "progress TEXT);"
+        "CREATE TABLE downloads(id TEXT, user_id TEXT, filename TEXT, size INTEGER, "
+        "content_type TEXT, created_at TEXT, seq INTEGER);")
+    conn.execute("INSERT INTO conversations VALUES ('cv1','u','会话','2026-07-10T09:00:00+00:00')")
+    conn.execute("INSERT INTO conversations VALUES ('cv9','other','别人的','2026-07-10T09:00:00+00:00')")
+    conn.commit()
+    return conn
+
+
+def _turn(conn, items, conv="cv1", seq=0, created_at="2026-07-11T08:00:00+00:00"):
+    """写一轮助手消息的 progress（形状同 chat.py 落库的那份）。"""
+    conn.execute("INSERT INTO conversation_messages(conv_id, seq, created_at, progress) "
+                 "VALUES (?,?,?,?)",
+                 (conv, seq, created_at, json.dumps(items, ensure_ascii=False)))
+    conn.commit()
+
+
+def _quality(final=None, plan=None, steps=None):
+    return {"scope": "quality", "key": "quality", "status": "ok",
+            "text": json.dumps({"plan": plan, "steps": steps, "final": final, "feedback": ""})}
+
+
+
+def _quality_svc(app_conn):
+    return StatsService(trajectory_conn=_traj_conn(), app_conn=app_conn,
+                        memory_conn=None, now=lambda: FIXED_NOW)
+
+
+def test_quality_scores_aggregated():
+    app = _quality_app_conn()
+    _turn(app, [_quality(final=90, plan=80, steps=70)], seq=0)
+    _turn(app, [_quality(final=60, plan=60, steps=50)], seq=1)
+    q = _quality_svc(app).overview("u")["ops"]["quality"]
+    assert q["scored_turns"] == 2
+    assert q["avg_final"] == 75.0
+    assert q["avg_plan"] == 70.0
+    assert q["avg_steps"] == 60.0
+
+
+def test_quality_distribution_buckets_are_stable():
+    app = _quality_app_conn()
+    for i, s in enumerate([95, 85, 70, 30]):
+        _turn(app, [_quality(final=s)], seq=i)
+    dist = _quality_svc(app).overview("u")["ops"]["quality"]["distribution"]
+    # 桶集合固定（含空桶），否则分布图会随数据忽长忽短
+    assert [d["bucket"] for d in dist] == ["0-59", "60-79", "80-89", "90-100"]
+    assert [d["count"] for d in dist] == [1, 1, 1, 1]
+
+
+
+
+
+def test_quality_is_scoped_to_user():
+    app = _quality_app_conn()
+    _turn(app, [_quality(final=90)], conv="cv1", seq=0)
+    _turn(app, [_quality(final=10)], conv="cv9", seq=0)   # 别人的会话
+    q = _quality_svc(app).overview("u")["ops"]["quality"]
+    assert q["scored_turns"] == 1 and q["avg_final"] == 90.0
+
+
+def test_quality_empty_when_judge_never_ran():
+    """轨迹 judge 默认关闭，故默认配置下这块本就是空的 —— 不能崩，也不能瞎编。"""
+    q = _quality_svc(_quality_app_conn()).overview("u")["ops"]["quality"]
+    assert q["scored_turns"] == 0
+    assert q["avg_final"] is None and q["avg_plan"] is None and q["avg_steps"] is None
+    assert [d["count"] for d in q["distribution"]] == [0, 0, 0, 0]
+
+
+def test_malformed_progress_rows_are_skipped_not_fatal():
+    app = _quality_app_conn()
+    app.execute("INSERT INTO conversation_messages(conv_id, seq, created_at, progress) "
+                "VALUES ('cv1', 0, '2026-07-11T08:00:00+00:00', '{坏 JSON')")
+    app.execute("INSERT INTO conversation_messages(conv_id, seq, created_at, progress) "
+                "VALUES ('cv1', 1, '2026-07-11T08:01:00+00:00', '\"不是列表\"')")
+    app.commit()
+    _turn(app, [_quality(final=88)], seq=2)
+    q = _quality_svc(app).overview("u")["ops"]["quality"]
+    assert q["scored_turns"] == 1 and q["avg_final"] == 88.0
+
+
+def test_quality_text_not_json_is_skipped():
+    app = _quality_app_conn()
+    _turn(app, [{"scope": "quality", "key": "quality", "status": "ok", "text": "不是 JSON"}], seq=0)
+    assert _quality_svc(app).overview("u")["ops"]["quality"]["scored_turns"] == 0
+
+
+def test_missing_progress_column_degrades_gracefully():
+    """库里没有 progress 列（旧库）→ 整块降级为空，不抛。"""
+    q = _quality_svc(_app_conn()).overview("u")["ops"]["quality"]
+    assert q["scored_turns"] == 0 and q["avg_final"] is None
+
+
+# ---------- 交付门重答统计的用例 ----------
+
 def _gate_svc(rows):
     tc = _traj_conn(); _seed_traj(tc)
     return StatsService(trajectory_conn=tc, app_conn=_app_conn_with_gate(rows),

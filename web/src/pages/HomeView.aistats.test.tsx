@@ -35,6 +35,21 @@ const OV: StatsOverview = {
       { bucket: "1", count: 9 }, { bucket: "2", count: 22 }, { bucket: "3", count: 26 },
       { bucket: "4", count: 14 }, { bucket: "5-6", count: 9 }, { bucket: "7+", count: 7 },
     ],
+    gate: {
+      turns: 20, retries: 4, avg_retries: 0.2, degraded: 1, degraded_rate: 0.05,
+      first_pass_rate: 0.85, gate_errors: 0,
+      layer_failures: [
+        { layer: "judge", zh: "质量评分", count: 2 },
+        { layer: "grounding", zh: "知识库依据", count: 1 },
+      ],
+    },
+    quality: {
+      scored_turns: 12, avg_final: 78.4, avg_plan: 81, avg_steps: 74.2,
+      distribution: [
+        { bucket: "0-59", count: 2 }, { bucket: "60-79", count: 4 },
+        { bucket: "80-89", count: 4 }, { bucket: "90-100", count: 2 },
+      ],
+    },
   },
 };
 
@@ -76,5 +91,53 @@ describe("HomeView · AI 运行统计页签", () => {
     fireEvent.mouseDown(screen.getByLabelText("时间范围"));
     fireEvent.click(await screen.findByRole("option", { name: "近 30 天" }));
     await waitFor(() => expect(statsApi.overview).toHaveBeenCalledWith(30));
+  });
+});
+
+describe("HomeView · 回答质量", () => {
+  it("有评分时展示质量分、拦截率与失败层", async () => {
+    (statsApi.overview as any).mockResolvedValue(OV);
+    renderOps();
+    await waitFor(() => expect(screen.getByText("平均质量分")).toBeTruthy());
+    expect(screen.getByText("78.4")).toBeTruthy();
+    expect(screen.getByText("一次过率")).toBeTruthy();
+    expect(screen.getByText("85%")).toBeTruthy();                    // first_pass_rate 0.85
+    expect(screen.getByText("20 轮经过交付门 · 共重答 4 次")).toBeTruthy();
+    expect(screen.getByText("降级交付")).toBeTruthy();
+    // 失败层用中文标签展示（后端翻好再传，前端不另抄一份映射）
+    expect(screen.getByText("质量评分")).toBeTruthy();
+    expect(screen.getByText("知识库依据")).toBeTruthy();
+  });
+
+  it("两个门都没开时给出可操作的空态提示，而不是空白或 0 分", async () => {
+    (statsApi.overview as any).mockResolvedValue({
+      ...OV,
+      ops: {
+        ...OV.ops,
+        gate: { ...OV.ops.gate, turns: 0, layer_failures: [] },
+        quality: {
+          scored_turns: 0, avg_final: null, avg_plan: null, avg_steps: null,
+          distribution: [
+            { bucket: "0-59", count: 0 }, { bucket: "60-79", count: 0 },
+            { bucket: "80-89", count: 0 }, { bucket: "90-100", count: 0 },
+          ],
+        },
+      },
+    });
+    renderOps();
+    await waitFor(() => expect(screen.getByText(/还没有质量评分记录/)).toBeTruthy());
+    // 默认配置下这块本就是空的，必须说清怎么开，否则会被当成 bug
+    expect(screen.getByText("HARNESS_ENABLE_TRAJECTORY_JUDGE")).toBeTruthy();
+    expect(screen.queryByText("平均质量分")).toBeNull();
+  });
+
+  it("校验器自身故障（fail-open）的轮数要显形——那些「通过」并非真校验过", async () => {
+    (statsApi.overview as any).mockResolvedValue({
+      ...OV,
+      ops: { ...OV.ops, gate: { ...OV.ops.gate, gate_errors: 3 } },
+    });
+    renderOps();
+    await waitFor(() =>
+      expect(screen.getByText("另有 3 轮因校验器故障未真校验")).toBeTruthy());
   });
 });

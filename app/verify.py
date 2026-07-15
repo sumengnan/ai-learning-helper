@@ -47,6 +47,19 @@ def _json_output():
     finally:
         reset_extra_body_override(token)
 
+
+async def call_json(complete, system: str, user: str) -> dict:
+    """强制 JSON 输出跑一次 LLM 并解析。任何失败直接抛 —— 异常策略由调用方决定。
+
+    线上（本文件各 judge 方法）：捕获后吞掉当通过，绝不因基建抖动拦交付。
+    离线（evals/judge.py::StrictJudge）：不捕获，让失败显式变成 Score(status="error")，
+    否则一次端点抖动会被读成一次满分。
+    两种语义共用同一份 prompt 与解析，判分口径才可比。
+    """
+    with _json_output():
+        raw = await complete(system, user)
+    return json.loads(_strip_fence(raw))
+
 # 硬门：失败不允许降级交付（必须重答或明确拦截）
 _HARD_CHECKS = frozenset({"format", "code", "empty"})
 
@@ -195,9 +208,7 @@ class TrajectoryJudge:
                 f"关键步摘要：\n{step_summaries or '（无）'}\n\n"
                 f"最终答案：\n{answer}\n\n请分别给 拆分/每步/最终 打分并简评。")
         try:
-            with _json_output():
-                raw = await self._complete(TRAJECTORY_SYSTEM, user)
-            v = json.loads(_strip_fence(raw))
+            v = await call_json(self._complete, TRAJECTORY_SYSTEM, user)
             return TrajectoryScore(
                 _coerce_int(v.get("plan")), _coerce_int(v.get("steps")),
                 _coerce_int(v.get("final")), v.get("feedback") or "")
@@ -264,9 +275,7 @@ class AnswerVerifier:
     async def _judge_grounding(self, context: str, answer: str) -> tuple[bool, str]:
         user = f"知识库资料：\n{context}\n\n待核查回答：\n{answer}\n\n请逐条判断回答是否都有资料支撑。"
         try:
-            with _json_output():
-                raw = await self._complete(GROUNDING_SYSTEM, user)
-            v = json.loads(_strip_fence(raw))
+            v = await call_json(self._complete, GROUNDING_SYSTEM, user)
             grounded = bool(v.get("grounded", True))
             unsupported = v.get("unsupported") or []
             fb = v.get("feedback") or ""
@@ -288,9 +297,7 @@ class AnswerVerifier:
         parts.append("请先找问题再打分并点评。")
         user = "\n".join(parts)
         try:
-            with _json_output():
-                raw = await self._judge_complete(JUDGE_SYSTEM, user)
-            v = json.loads(_strip_fence(raw))
+            v = await call_json(self._judge_complete, JUDGE_SYSTEM, user)
             return _coerce_int(v.get("score", 100)), v.get("feedback") or ""
         except Exception as e:
             _log.warning("judge 校验失败，跳过该项：%s", e)
