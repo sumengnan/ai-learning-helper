@@ -38,7 +38,7 @@ agents/       子 agent 花名册
 tests/        pytest 测试
 docker/       浏览器子沙箱镜像等
 docs/         部署等文档
-Dockerfile / docker-compose.yml   容器化与编排
+Dockerfile / docker/             容器化与编排（compose 在 docker/ 下）
 VERSION       部署版本号的「大.中」声明（小版本由 CI 自增）
 ```
 
@@ -99,8 +99,8 @@ npm run test
 本地也可直接容器化运行：
 
 ```bash
-# 需先准备好 .env
-docker compose up -d --build
+# 需先在项目根准备好 .env（compose 用 ../.env 读它）
+cd docker && docker compose up -d --build
 ```
 
 ## 技能框架
