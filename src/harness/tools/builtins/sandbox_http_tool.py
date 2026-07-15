@@ -8,7 +8,8 @@ from pydantic import BaseModel
 from ..base import Tool
 from ...net.policy import PolicyError, check_url
 from ...net.sandbox_dns import resolve_in_sandbox
-from .http_tool import browser_fallback_or_none, looks_blocked, render_http_result
+from .http_tool import (
+    browser_fallback_or_none, looks_blocked, merge_user_agent, render_http_result)
 
 
 def _parse_response(raw: str) -> tuple[int, str | None, str, str]:
@@ -48,7 +49,8 @@ class SandboxedHttpRequestTool(Tool):
 
     def __init__(self, sandbox, allowed_domains, block_private: bool = True,
                  timeout: float = 30.0, max_bytes: int = 5_000_000,
-                 max_redirects: int = 5, browser_fallback=None) -> None:
+                 max_redirects: int = 5, browser_fallback=None,
+                 user_agent: str = "") -> None:
         self._sandbox = sandbox
         self._allowed = allowed_domains
         self._block_private = block_private
@@ -56,6 +58,7 @@ class SandboxedHttpRequestTool(Tool):
         self._max_bytes = max_bytes
         self._max_redirects = max_redirects
         self._browser_fallback = browser_fallback
+        self._user_agent = user_agent
 
     def set_browser_fallback(self, fn) -> None:
         self._browser_fallback = fn
@@ -101,7 +104,8 @@ class SandboxedHttpRequestTool(Tool):
                 # 把 curl 钉到宿主已校验过的 IP，避免容器再解析一次（关闭 rebinding 时间窗）
                 port = parsed.port or (443 if parsed.scheme == "https" else 80)
                 cmd += ["--resolve", f"{host}:{port}:{','.join(pinned_ips)}"]
-            for k, v in (params.headers or {}).items():
+            # 与宿主版同一套合并规则：显式传的 User-Agent 优先，否则补默认 UA
+            for k, v in (merge_user_agent(params.headers, self._user_agent) or {}).items():
                 cmd += ["-H", f"{k}: {v}"]
             if params.body is not None:
                 cmd += ["--data-binary", params.body]

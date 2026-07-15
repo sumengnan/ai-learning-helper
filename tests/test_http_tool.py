@@ -173,3 +173,69 @@ async def test_normal_page_no_fallback():
     out = await tool.run(tool.Params(url="http://example.com/"))
     assert calls == []          # 正常页面不触发兜底
     assert "200" in out
+
+
+# ---- User-Agent：空 UA 会被不少站点直接 403，故默认必须带一个 ----
+
+_UA = "Mozilla/5.0 (compatible; AI-Learning-Helper/1.0; +harness)"
+
+
+async def test_default_user_agent_is_sent():
+    seen = {}
+
+    def handler(req):
+        seen["ua"] = req.headers.get("user-agent")
+        return httpx.Response(200, text="ok")
+    tool = HttpRequestTool([], True, 5.0, 1000, 3, client_factory=_factory(handler),
+                           resolve=_public, user_agent=_UA)
+    await tool.run(tool.Params(url="http://example.com/"))
+    assert seen["ua"] == _UA
+
+
+async def test_explicit_user_agent_wins_over_default():
+    seen = {}
+
+    def handler(req):
+        seen["ua"] = req.headers.get("user-agent")
+        return httpx.Response(200, text="ok")
+    tool = HttpRequestTool([], True, 5.0, 1000, 3, client_factory=_factory(handler),
+                           resolve=_public, user_agent=_UA)
+    await tool.run(tool.Params(url="http://example.com/",
+                               headers={"user-agent": "MyBot/9"}))   # 大小写不敏感
+    assert seen["ua"] == "MyBot/9"
+
+
+async def test_other_headers_survive_ua_merge():
+    seen = {}
+
+    def handler(req):
+        seen["auth"] = req.headers.get("authorization")
+        seen["ua"] = req.headers.get("user-agent")
+        return httpx.Response(200, text="ok")
+    tool = HttpRequestTool([], True, 5.0, 1000, 3, client_factory=_factory(handler),
+                           resolve=_public, user_agent=_UA)
+    await tool.run(tool.Params(url="http://example.com/", headers={"Authorization": "Bearer t"}))
+    assert seen["auth"] == "Bearer t" and seen["ua"] == _UA
+
+
+async def test_ua_merge_does_not_mutate_caller_headers():
+    def handler(req):
+        return httpx.Response(200, text="ok")
+    tool = HttpRequestTool([], True, 5.0, 1000, 3, client_factory=_factory(handler),
+                           resolve=_public, user_agent=_UA)
+    headers = {"X-K": "v"}
+    await tool.run(tool.Params(url="http://example.com/", headers=headers))
+    assert headers == {"X-K": "v"}          # 调用方传进来的 dict 不该被就地改写
+
+
+async def test_empty_user_agent_config_sends_none():
+    # 显式设空 → 退回旧行为（不发 UA），逃生口
+    seen = {}
+
+    def handler(req):
+        seen["ua"] = req.headers.get("user-agent")
+        return httpx.Response(200, text="ok")
+    tool = HttpRequestTool([], True, 5.0, 1000, 3, client_factory=_factory(handler),
+                           resolve=_public, user_agent="")
+    await tool.run(tool.Params(url="http://example.com/"))
+    assert seen["ua"] is None or "python-httpx" in seen["ua"].lower()

@@ -72,11 +72,13 @@ def build_harness(config) -> Harness:
         from harness.tools.builtins.sandbox_http_tool import SandboxedHttpRequestTool
         http_tool = SandboxedHttpRequestTool(
             sandbox, config.http_allowed_domains, config.http_block_private,
-            config.http_timeout, config.http_max_response_bytes, config.http_max_redirects)
+            config.http_timeout, config.http_max_response_bytes, config.http_max_redirects,
+            user_agent=config.http_user_agent)
     else:
         http_tool = HttpRequestTool(
             config.http_allowed_domains, config.http_block_private, config.http_timeout,
-            config.http_max_response_bytes, config.http_max_redirects)
+            config.http_max_response_bytes, config.http_max_redirects,
+            user_agent=config.http_user_agent)
     _reg(http_tool)
 
     # 记忆（有 api_key 即可注册；知识库为空时检索返回空，不报错）

@@ -94,3 +94,35 @@ async def test_private_ip_resolved_in_sandbox_blocked_on_host():
         await tool.run(tool.Params(url="http://internal/"))
     assert len(sb.calls) == 1                        # 只做了解析，没发 curl
     assert sb.calls[0][0] == "getent"
+
+
+# ---- User-Agent：沙箱版走 curl，UA 须进 -H，且与宿主版同一套优先级 ----
+
+_UA = "Mozilla/5.0 (compatible; AI-Learning-Helper/1.0; +harness)"
+
+
+def _header_args(cmd):
+    """从 curl 命令里挑出所有 -H 的值。"""
+    return [cmd[i + 1] for i, a in enumerate(cmd) if a == "-H"]
+
+
+async def test_sandboxed_sends_default_user_agent():
+    sb = FakeSandbox(["HTTP/1.1 200 OK\r\n\r\nok"])
+    tool = SandboxedHttpRequestTool(sb, [], block_private=False, user_agent=_UA)
+    await tool.run(tool.Params(url="https://example.com/"))
+    assert f"User-Agent: {_UA}" in _header_args(sb.calls[0])
+
+
+async def test_sandboxed_explicit_user_agent_wins():
+    sb = FakeSandbox(["HTTP/1.1 200 OK\r\n\r\nok"])
+    tool = SandboxedHttpRequestTool(sb, [], block_private=False, user_agent=_UA)
+    await tool.run(tool.Params(url="https://example.com/", headers={"User-Agent": "MyBot/9"}))
+    hs = _header_args(sb.calls[0])
+    assert "User-Agent: MyBot/9" in hs and f"User-Agent: {_UA}" not in hs
+
+
+async def test_sandboxed_no_ua_configured_sends_none():
+    sb = FakeSandbox(["HTTP/1.1 200 OK\r\n\r\nok"])
+    tool = SandboxedHttpRequestTool(sb, [], block_private=False, user_agent="")
+    await tool.run(tool.Params(url="https://example.com/"))
+    assert not any(h.lower().startswith("user-agent:") for h in _header_args(sb.calls[0]))
