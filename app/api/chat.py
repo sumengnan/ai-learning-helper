@@ -170,6 +170,8 @@ def emit_gate_span(tracer, vt: dict, t0_ns: int) -> None:
         sp.set_attribute("app.gate.retries", vt["retries"])
         sp.set_attribute("app.gate.ok", vt["ok"])
         sp.set_attribute("app.gate.degraded", vt["degraded"])
+        if vt.get("gate_error"):   # 校验器故障 → 本轮的「通过」不代表真校验过，须显形
+            sp.set_attribute("app.gate.error", vt["gate_error"])
         for h in vt["history"]:
             sp.add_event("verify.attempt", {
                 "attempt": h["attempt"], "run_id": h["run_id"], "ok": h["ok"],
@@ -519,7 +521,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     corrective = None
                     max_attempts = config.answer_gate_max_retries + 1
                     verify_trace = {"attempts": 0, "retries": 0, "ok": False,
-                                    "degraded": False, "history": []}
+                                    "degraded": False, "gate_error": None, "history": []}
                     gate_t0 = time.time_ns()     # span 起点：循环跑完后据此补发（见 _emit_gate_span）
                     # 未通过轮生成的副作用产物（下载/知识/题目），交付/降级时清理掉
                     stale_fx: dict[str, list[str]] = {"download": [], "knowledge": [], "questions": []}
@@ -570,6 +572,17 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                 verdict = await verifier.verify(
                                     question, draft, collect["grounding"], registry,
                                     steps=collect["steps"])
+                            except Exception as e:   # noqa: BLE001
+                                # 校验器自身故障（非回答质量问题）→ fail-open：跳过校验照常交付。
+                                # 交付门是质量增强，它坏了不该连累用户丢掉一份好答案；且门本就
+                                # 默认关闭，「无门」是受支持的状态。但绝不能无声无息：打日志 +
+                                # 记进 verify 列的 gate_error，stats 能统计到「多少轮没真校验过」。
+                                # 与轨迹 judge 的既有行为一致（verify.py 亦是失败即跳过）。
+                                log.warning("交付门校验器故障，本轮跳过校验直接交付：%s", e,
+                                            exc_info=True)
+                                gate_error = f"{type(e).__name__}: {e}"[:200]
+                                verify_trace["gate_error"] = gate_error
+                                verdict = Verdict(ok=True)
                             finally:
                                 reset_sandbox_conv(stoken)
 

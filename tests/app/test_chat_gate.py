@@ -322,3 +322,49 @@ def test_gate_off_empty_completion_persists_error_text(make_mock):
     assert last["status"] == "error"
     assert last["content"] != "（本轮未完成）"        # 不应退化成泛化占位
     assert err in last["content"]                     # 落库内容 == 在途所见错误文案
+
+
+# ---- 校验器自身故障：fail-open 交付，但必须留痕 ----
+
+class _BoomVerifier:
+    def __init__(self):
+        self.calls = 0
+
+    async def verify(self, question, answer, grounding, registry, steps=None):
+        self.calls += 1
+        raise RuntimeError("verifier 内部炸了")
+
+
+def test_verifier_crash_delivers_draft_instead_of_losing_it(make_mock, text_turn, caplog):
+    # 交付门是质量增强，它坏了不该连累用户丢掉一份好答案（此前是 fail-closed：整轮 RunError）
+    verifier = _BoomVerifier()
+    client, store = _client(make_mock, [text_turn("一份好答案")], verifier)
+    h = _auth(client)
+    with caplog.at_level("WARNING"):
+        cid, events = _run_chat(client, h, "问个问题")
+
+    assert verifier.calls == 1
+    assert _final(events) == "一份好答案"                     # 答案照常交付，没被丢
+    assert not [e for e in events if e["type"] == "RunError"]
+    msg = [m for m in store.ui_messages(cid) if m["role"] == "assistant"][-1]
+    assert msg["status"] == "done"
+    # 但绝不能无声无息：日志 + verify 列都要留痕
+    assert any("校验器故障" in r.message for r in caplog.records)
+    assert "verifier 内部炸了" in msg["verify"]["gate_error"]
+
+
+def test_verifier_crash_does_not_retry(make_mock, text_turn):
+    # 基建故障重答也没用，只会白烧一轮 token
+    verifier = _BoomVerifier()
+    client, _ = _client(make_mock, [text_turn("答案")], verifier, answer_gate_max_retries=2)
+    h = _auth(client)
+    _run_chat(client, h, "问个问题")
+    assert verifier.calls == 1
+
+
+def test_healthy_verifier_has_no_gate_error(make_mock, text_turn):
+    client, store = _client(make_mock, [text_turn("好答案")], _StubVerifier([Verdict(ok=True)]))
+    h = _auth(client)
+    cid, _ = _run_chat(client, h, "问个问题")
+    vt = [m for m in store.ui_messages(cid) if m["role"] == "assistant"][-1]["verify"]
+    assert vt["gate_error"] is None      # 正常路径不该冒出噪音
