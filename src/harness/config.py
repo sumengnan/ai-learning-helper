@@ -157,5 +157,5 @@ class HarnessConfig(BaseSettings):
     # MCP（Model Context Protocol）客户端：连接外部/内置 MCP server，把远程工具暴露为本地工具。
     # server 清单在下面这个 JSON 文件里声明（stdio + streamable-http 双传输）；改配置后重启
     # （或调 POST /api/mcp/reload）生效。总开关 enable_mcp 在 AppConfig。
-    mcp_config_path: str = "mcp_servers.json"   # server 清单文件路径
+    mcp_config_path: str = "mcp/mcp_servers.json"   # server 清单文件路径
     mcp_connect_timeout: float = 15.0           # 单 server 连接/初始化超时（秒），超时跳过

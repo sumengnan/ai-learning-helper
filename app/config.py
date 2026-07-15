@@ -15,7 +15,7 @@ def load_env_file(path: str = ".env") -> list[str]:
     """把 .env 里尚未存在于 os.environ 的键补进进程环境，返回补入的键名。
 
     pydantic-settings 读 .env 只用来填 AppConfig 字段（且只认 HARNESS_ 前缀），**不会**
-    写进 os.environ。而 mcp_servers.json 里的 ${VAR} 走 os.path.expandvars，只认
+    写进 os.environ。而 mcp/mcp_servers.json 里的 ${VAR} 走 os.path.expandvars，只认
     os.environ —— 两者接不上：写在 .env 里的 DASHSCOPE_API_KEY 永远不生效，Authorization
     头原样发出 "Bearer ${DASHSCOPE_API_KEY}"，换来一个 401，且只有一条 warning 日志。
 

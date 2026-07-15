@@ -41,7 +41,7 @@ COPY src ./src
 COPY app ./app
 COPY skills ./skills
 COPY agents ./agents
-COPY mcp_servers.json ./
+COPY mcp ./mcp
 # 前端静态产物（app/main.py 在 /app/web/dist 处 mount 静态站点）
 COPY --from=web /web/dist ./web/dist
 
