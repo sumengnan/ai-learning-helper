@@ -25,7 +25,7 @@ from .assembly import build_harness
 from .attachments import AttachmentStore
 from .auth import AuthService, UserStore
 from .completion import build_completer
-from .config import AppConfig
+from .config import AppConfig, load_env_file
 from .conversations import ConversationStore
 from .db import migrate, open_db
 from .url_blocklist import UrlBlockStore
@@ -49,7 +49,15 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
                profile_store=None, exam_session_store=None,
                url_block_store=None) -> FastAPI:
     # exam_store 参数保留仅为向后兼容（模拟考试已迁入聊天工具，不再有独立考试端点）
-    config = config or AppConfig()
+    if config is None:
+        # 生产路径（python -m app → uvicorn factory，不传 config）：先把 .env 补进
+        # os.environ，否则 mcp_servers.json 里的 ${VAR} 解析不出来——pydantic-settings
+        # 只填配置对象、不写环境。调用方自带 config（测试/嵌入式）时不碰 os.environ。
+        injected = load_env_file(AppConfig.model_config.get("env_file") or ".env")
+        if injected:
+            logging.getLogger("app").info(
+                "从 .env 补入 %d 个环境变量：%s", len(injected), "、".join(injected))
+        config = AppConfig()
     configure_logging()   # 幂等：确保测试/嵌入式启动也有可见日志
     # OTel：otel_enabled=False（默认）时是空操作，tracer 保持 no-op、零开销。
     # 不装则 harness/app 里所有插桩都白写，故在此唯一入口装配。

@@ -1,9 +1,48 @@
 # app/config.py
 from __future__ import annotations
 
+import logging
+import os
+
 from pydantic_settings import SettingsConfigDict
 
 from harness.config import HarnessConfig
+
+_log = logging.getLogger("app.config")
+
+
+def load_env_file(path: str = ".env") -> list[str]:
+    """把 .env 里尚未存在于 os.environ 的键补进进程环境，返回补入的键名。
+
+    pydantic-settings 读 .env 只用来填 AppConfig 字段（且只认 HARNESS_ 前缀），**不会**
+    写进 os.environ。而 mcp_servers.json 里的 ${VAR} 走 os.path.expandvars，只认
+    os.environ —— 两者接不上：写在 .env 里的 DASHSCOPE_API_KEY 永远不生效，Authorization
+    头原样发出 "Bearer ${DASHSCOPE_API_KEY}"，换来一个 401，且只有一条 warning 日志。
+
+    真环境变量优先：已存在的键一律不覆盖（export / docker -e / k8s env 说了算）。
+    """
+    injected: list[str] = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return injected                      # 无 .env 是正常情形（全靠真环境变量）
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        key, _, val = line.partition("=")
+        key = key.strip()
+        if not key or key in os.environ:      # 已有真环境变量 → 不覆盖
+            continue
+        val = val.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+            val = val[1:-1]
+        os.environ[key] = val
+        injected.append(key)
+    return injected
 
 
 class AppConfig(HarnessConfig):

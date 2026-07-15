@@ -213,3 +213,78 @@ def test_wrap_non_source_tool_passthrough():
 
     calc = _Calc()
     assert wrap_tool(calc, sink) is calc   # 非来源工具原样返回
+
+
+# ---------- 记源暂停：交付门内部的工具调用不算「参考来源」 ----------
+
+class _FakePy(Tool):
+    """交付门 _run_code_blocks 会从同一个（已包记源层的）registry 取它来跑答案里的代码块。"""
+    name = "run_python"
+    description = "fake"
+
+    class Params(BaseModel):
+        code: str
+
+    async def run(self, params):
+        return "stdout:\n42\n(exit 0)"
+
+
+async def test_paused_sink_records_nothing_and_appends_no_marker():
+    # 用户从没看见 AI 执行过这段代码——它是交付门的后台校验行为，不该冒充成参考来源
+    sink = SourceSink()
+    wrapped = wrap_tool(_FakePy(), sink)
+    with sink.paused():
+        out = await wrapped.run(wrapped.Params(code="print(6*7)"))
+    assert sink.snapshot() == []
+    assert "参考来源" not in out          # 标注也不能加：校验器还要解析这段结果
+
+
+async def test_sink_records_again_after_pause_exits():
+    sink = SourceSink()
+    wrapped = wrap_tool(_FakePy(), sink)
+    with sink.paused():
+        await wrapped.run(wrapped.Params(code="print(1)"))
+    out = await wrapped.run(wrapped.Params(code="print(2)"))
+    assert len(sink.snapshot()) == 1 and "参考来源 [1]" in out
+
+
+async def test_pause_restores_on_exception():
+    sink = SourceSink()
+    try:
+        with sink.paused():
+            raise RuntimeError("校验器炸了")
+    except RuntimeError:
+        pass
+    wrapped = wrap_tool(_FakePy(), sink)
+    out = await wrapped.run(wrapped.Params(code="print(1)"))
+    assert len(sink.snapshot()) == 1 and "参考来源 [1]" in out   # 异常没把 sink 卡在暂停态
+
+
+async def test_pause_is_reentrant():
+    sink = SourceSink()
+    wrapped = wrap_tool(_FakePy(), sink)
+    with sink.paused():
+        with sink.paused():
+            await wrapped.run(wrapped.Params(code="print(1)"))
+        await wrapped.run(wrapped.Params(code="print(2)"))   # 内层退出不该提前恢复
+    assert sink.snapshot() == []
+
+
+async def test_paused_http_fetch_is_not_credited_as_source():
+    # facts 核查去抓答案里引用的 URL：模型只是写了个链接（可能是编的）、从没读过它，
+    # 不能因为交付门核实了一下就把它「认证」成参考来源
+    class _FakeHttp(Tool):
+        name = "http_request"
+        description = "fake"
+
+        class Params(BaseModel):
+            url: str
+
+        async def run(self, params):
+            return "HTTP 200\n标题：某页\n最终URL：https://x.com/a\n\n正文"
+
+    sink = SourceSink()
+    wrapped = wrap_tool(_FakeHttp(), sink)
+    with sink.paused():
+        await wrapped.run(wrapped.Params(url="https://x.com/a"))
+    assert sink.snapshot() == []
