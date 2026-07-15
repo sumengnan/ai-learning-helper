@@ -264,7 +264,14 @@ export const api = {
       }).then(() => undefined),
   },
   wrong: {
-    list: () => authFetch("/api/wrong-answers").then((r) => r.json()),
+    list: (params: { page?: number; size?: number; type?: string; q?: string } = {}) => {
+      const sp = new URLSearchParams();
+      sp.set("page", String(params.page ?? 1));
+      sp.set("size", String(params.size ?? 20));
+      if (params.type) sp.set("type", params.type);
+      if (params.q) sp.set("q", params.q);
+      return authFetch(`/api/wrong-answers?${sp.toString()}`).then((r) => r.json());
+    },
     removeMany: (ids: string[]) =>
       authFetch("/api/wrong-answers/delete", {
         method: "POST", headers: { "Content-Type": "application/json" },

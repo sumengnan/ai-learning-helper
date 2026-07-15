@@ -44,11 +44,28 @@ class WrongAnswerStore:
                 "snapshot": json.loads(r[3]), "user_answer": json.loads(r[4]),
                 "created_at": r[5]}
 
-    def list(self, user_id: str) -> list[dict]:
-        rows = self._db.execute(
-            f"SELECT {self._COLS} FROM wrong_answers WHERE user_id=? ORDER BY seq DESC",
-            (user_id,)).fetchall()
-        return [self._row(r) for r in rows]
+    def _filter(self, user_id: str, type, q):
+        """题型/题干筛选。两者都存在 snapshot 的 JSON 里，故用 json_extract 取字段。"""
+        clauses = ["user_id=?"]
+        params: list = [user_id]
+        if type:
+            clauses.append("json_extract(snapshot, '$.type')=?"); params.append(type)
+        if q:
+            clauses.append("json_extract(snapshot, '$.stem') LIKE ?"); params.append(f"%{q}%")
+        return " AND ".join(clauses), params
+
+    def list(self, user_id: str, *, type: str | None = None, q: str | None = None,
+             limit: int | None = None, offset: int = 0) -> list[dict]:
+        where, params = self._filter(user_id, type, q)
+        sql = f"SELECT {self._COLS} FROM wrong_answers WHERE {where} ORDER BY seq DESC"
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"; params += [limit, offset]
+        return [self._row(r) for r in self._db.execute(sql, params).fetchall()]
+
+    def count(self, user_id: str, *, type: str | None = None, q: str | None = None) -> int:
+        where, params = self._filter(user_id, type, q)
+        return self._db.execute(
+            f"SELECT COUNT(*) FROM wrong_answers WHERE {where}", params).fetchone()[0]
 
     def sample(self, user_id: str, count: int) -> list[dict]:
         rows = self._db.execute(
