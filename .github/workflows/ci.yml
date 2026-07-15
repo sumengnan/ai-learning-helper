@@ -1,0 +1,48 @@
+name: CI
+
+# PR 上直接跑；main 推送时由 deploy.yml 经 workflow_call 带跑（故此处不监听 push，
+# 否则 main 上会重复跑两遍）。
+on:
+  pull_request:
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    env:
+      # 显式置空：需要真实端点的测试据此整文件 skip（tests/test_integration_real.py:17），
+      # 且任何漏网的真实调用会直接 401 而不是烧钱。CI 不配 secret 是零成本的结构性保证。
+      HARNESS_API_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: 安装依赖（按 uv.lock 复现）
+        run: uv sync --frozen
+      # 存量测试 + tests/evals/ 的组件级 eval 门禁，一条命令全包。
+      # eval 门禁是普通 pytest 测试，故 CI 无需任何新机制。
+      - name: 跑测试（含 eval 门禁）
+        run: uv run pytest -q
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: 类型检查
+        run: npx tsc -b
+      - name: 跑前端测试
+        run: npm run test

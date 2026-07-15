@@ -1,0 +1,7 @@
+# 检索质量 golden set。语料见 corpus/default.jsonl；case 搬自 tests/test_retrieval_eval.py:7。
+# 打分走 harness.memory.eval.evaluate（hit@k / MRR），embedder 由 driver 注入
+# （mock 层是 conftest 的 MockEmbeddingClient：按空白分词 hash，确定性、不打网络）。
+{"id": "retr-sort", "kind": "retrieval", "tags": ["semantic"], "input": {"query": "排序算法", "corpus": "default"}, "expect": {"relevant_ids": ["d1"]}}
+{"id": "retr-datastruct", "kind": "retrieval", "tags": ["semantic"], "input": {"query": "数据结构", "corpus": "default"}, "expect": {"relevant_ids": ["d2"]}}
+{"id": "retr-bfs", "kind": "retrieval", "tags": ["semantic"], "input": {"query": "广度优先", "corpus": "default"}, "expect": {"relevant_ids": ["d3"]}}
+{"id": "retr-dp", "kind": "retrieval", "tags": ["semantic"], "input": {"query": "动态规划", "corpus": "default"}, "expect": {"relevant_ids": ["d4"]}}

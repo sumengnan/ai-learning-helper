@@ -7,6 +7,9 @@ vi.mock("../api/client", () => ({
   streamChat: vi.fn(async () => undefined),
   sendDecision: vi.fn(async () => undefined),
   api: {
+    // send() 对新对话首条消息会调 autotitle 自动命名；不 mock 会抛 TypeError
+    // 把 send() 打断在调 streamChat 之前（与附件无关，但会让本文件的用例失败）
+    autotitle: vi.fn(async () => ({ title: null })),
     attachments: {
       upload: vi.fn(async (_cid: string, file: File) => ({
         id: "srv-1", filename: file.name, size: file.size, content_type: file.type,
