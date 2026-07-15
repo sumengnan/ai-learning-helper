@@ -28,6 +28,62 @@ class Scorer(Protocol):
     async def score(self, case, output) -> Score: ...
 
 
+class ContainsScorer:
+    """确定性断言：must_contain 全中且 must_not_contain 全不中才算满分。
+
+    先跑它再跑 LLM judge —— 便宜、确定、无歧义的检查不该交给模型。
+    """
+
+    name = "contains"
+
+    async def score(self, case, trace) -> Score:
+        exp = case.expect
+        if not exp.must_contain and not exp.must_not_contain:
+            return Score(0.0, SKIPPED, "未声明 must_contain / must_not_contain")
+        if trace.error:
+            return Score(0.0, ERROR, f"agent 跑挂：{trace.error}")
+        text = trace.final or ""
+        missing = [s for s in exp.must_contain if s not in text]
+        present = [s for s in exp.must_not_contain if s in text]
+        bad = []
+        if missing:
+            bad.append(f"答案里缺 {missing}")
+        if present:
+            bad.append(f"答案里不该出现 {present}")
+        return Score(0.0 if bad else 1.0, OK, "；".join(bad))
+
+
+class ToolCallScorer:
+    """轨迹断言：期望被调的工具是否真的调过。"""
+
+    name = "tool_call"
+
+    async def score(self, case, trace) -> Score:
+        want = case.expect.must_call_tools
+        if not want:
+            return Score(0.0, SKIPPED, "未声明 must_call_tools")
+        if trace.error:
+            return Score(0.0, ERROR, f"agent 跑挂：{trace.error}")
+        missing = [t for t in want if t not in trace.tools]
+        return Score(0.0 if missing else 1.0, OK,
+                     f"未调用 {missing}（实际调了 {trace.tools or '无'}）" if missing else "")
+
+
+class LlmJudgeScorer:
+    """独立裁判模型给答案质量打分。judge 不可用 → ERROR（不是 0 分，也不是放行）。"""
+
+    name = "llm_judge"
+
+    def __init__(self, judge) -> None:
+        self._judge = judge          # evals.judge.StrictJudge
+
+    async def score(self, case, trace) -> Score:
+        if trace.error:
+            return Score(0.0, ERROR, f"agent 跑挂：{trace.error}")
+        return await self._judge.score_answer(
+            case.input.message, trace.final, trace.steps, case.expect.rubric)
+
+
 class ExamGradeScorer:
     """比对 exam_grader 的解析/判分产物与期望。
 
