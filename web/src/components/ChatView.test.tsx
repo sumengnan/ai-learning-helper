@@ -100,10 +100,9 @@ describe("ChatView", () => {
     expect(screen.queryByText("你你好好")).toBeNull();
   });
 
-  it("开关默认值：展示工具/Token 开、答错保存默认开", () => {
+  it("开关默认值：展示工具/Token 开", () => {
     render(<ChatView conversationId="c1" initial={[]} />);
     expect((screen.getByLabelText("展示工具调用和 Token") as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByLabelText("考试答错自动保存错题集") as HTMLInputElement).checked).toBe(true);
   });
 
   it("空产出（仅 RunFinished、无 TextDelta）→ 标失败并提示，不显示「已完成」", async () => {
@@ -145,22 +144,14 @@ describe("ChatView", () => {
     fireEvent.click(screen.getByText("发送"));
     await waitFor(() => expect(vi.mocked(streamChat)).toHaveBeenCalled());
     const calls = vi.mocked(streamChat).mock.calls;
-    expect(calls[calls.length - 1][7]).toBe(true);    // think 为第 8 个参数，默认开
+    expect(calls[calls.length - 1][6]).toBe(true);    // think 为第 7 个参数，默认开
     fireEvent.click(screen.getByLabelText("思考模式"));   // 关闭
     expect(localStorage.getItem("chat_think")).toBe("0");
   });
 
-  it("『答错自动保存』默认开并透传 true；关闭后持久化为 0", async () => {
+  it("不再有『考试答错自动保存错题集』开关（答错必存，无从关闭）", async () => {
     render(<ChatView conversationId="c1" initial={[]} />);
-    // 默认开：不点开关直接发送，saveWrong 应透传 true（第 5 个参数）
-    fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "hi" } });
-    fireEvent.click(screen.getByText("发送"));
-    await waitFor(() => expect(vi.mocked(streamChat)).toHaveBeenCalled());
-    const calls = vi.mocked(streamChat).mock.calls;
-    expect(calls[calls.length - 1][4]).toBe(true);
-    // 关闭开关 → 持久化 "0"
-    fireEvent.click(screen.getByLabelText("考试答错自动保存错题集"));
-    expect(localStorage.getItem("chat_save_wrong")).toBe("0");
+    expect(screen.queryByLabelText("考试答错自动保存错题集")).toBeNull();
   });
 
   it("Progress scope=plan → 渲染任务步骤清单", async () => {

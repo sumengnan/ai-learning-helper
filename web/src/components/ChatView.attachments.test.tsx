@@ -5,11 +5,13 @@ import { streamChat, api } from "../api/client";
 
 vi.mock("../api/client", () => ({
   streamChat: vi.fn(async () => undefined),
+  attachChat: vi.fn(async () => undefined),
+  stopRun: vi.fn(async () => undefined),
   sendDecision: vi.fn(async () => undefined),
   api: {
-    // send() 对新对话首条消息会调 autotitle 自动命名；不 mock 会抛 TypeError
-    // 把 send() 打断在调 streamChat 之前（与附件无关，但会让本文件的用例失败）
+    messages: vi.fn(async () => []),
     autotitle: vi.fn(async () => ({ title: null })),
+    downloads: { save: vi.fn(async () => undefined) },
     attachments: {
       upload: vi.fn(async (_cid: string, file: File) => ({
         id: "srv-1", filename: file.name, size: file.size, content_type: file.type,
@@ -46,7 +48,7 @@ describe("ChatView 附件", () => {
     await waitFor(() => expect(vi.mocked(streamChat)).toHaveBeenCalled());
     const calls = vi.mocked(streamChat).mock.calls;
     const call = calls[calls.length - 1];
-    expect(call[5]).toEqual(["srv-1"]);   // 第 6 个参数为 attachment ids
+    expect(call[4]).toEqual(["srv-1"]);   // 第 5 个参数为 attachment ids
     // 发送后气泡仍渲染附件名
     await waitFor(() => expect(screen.getAllByText("note.txt").length).toBeGreaterThan(0));
   });

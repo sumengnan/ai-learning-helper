@@ -31,6 +31,63 @@ def test_delete_one():
     assert s.list("u1") == []
 
 
+def _snap_of(type, stem):
+    return {"type": type, "stem": stem, "options": ["1", "2"],
+            "answer": 1, "explanation": ""}
+
+
+def test_list_filters_by_type_from_snapshot():
+    s = WrongAnswerStore(":memory:")
+    s.create("u1", "q", "e", _snap_of("single", "单选题"), 0)
+    s.create("u1", "q", "e", _snap_of("truefalse", "判断题"), 0)
+    got = s.list("u1", type="truefalse")
+    assert [r["snapshot"]["stem"] for r in got] == ["判断题"]
+    assert s.count("u1", type="truefalse") == 1
+
+
+def test_list_filters_by_stem_keyword():
+    s = WrongAnswerStore(":memory:")
+    s.create("u1", "q", "e", _snap_of("single", "光合作用在哪"), 0)
+    s.create("u1", "q", "e", _snap_of("single", "细胞呼吸在哪"), 0)
+    got = s.list("u1", q="光合")
+    assert [r["snapshot"]["stem"] for r in got] == ["光合作用在哪"]
+    assert s.count("u1", q="光合") == 1
+    assert s.count("u1", q="在哪") == 2          # 子串匹配
+
+
+def test_list_combines_type_and_keyword():
+    s = WrongAnswerStore(":memory:")
+    s.create("u1", "q", "e", _snap_of("single", "光合作用"), 0)
+    s.create("u1", "q", "e", _snap_of("truefalse", "光合作用"), 0)
+    assert s.count("u1", type="single", q="光合") == 1
+
+
+def test_list_paginates_newest_first():
+    s = WrongAnswerStore(":memory:")
+    for i in range(5):
+        s.create("u1", "q", "e", _snap_of("single", f"题{i}"), 0)
+    page1 = s.list("u1", limit=2, offset=0)
+    page2 = s.list("u1", limit=2, offset=2)
+    assert [r["snapshot"]["stem"] for r in page1] == ["题4", "题3"]   # seq 倒序
+    assert [r["snapshot"]["stem"] for r in page2] == ["题2", "题1"]
+    assert s.count("u1") == 5
+
+
+def test_list_without_filters_returns_all():
+    """无参调用保持旧行为（delete_wrong_answers 工具依赖）。"""
+    s = WrongAnswerStore(":memory:")
+    for i in range(3):
+        s.create("u1", "q", "e", _snap_of("single", f"题{i}"), 0)
+    assert len(s.list("u1")) == 3
+
+
+def test_count_respects_user_isolation():
+    s = WrongAnswerStore(":memory:")
+    s.create("u1", "q", "e", _snap_of("single", "光合作用"), 0)
+    s.create("u2", "q", "e", _snap_of("single", "光合作用"), 0)
+    assert s.count("u1", q="光合") == 1
+
+
 def test_sample_returns_snapshots_within_count():
     s = WrongAnswerStore(":memory:")
     for _ in range(3):

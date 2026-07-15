@@ -30,7 +30,6 @@ const MotionBox = motion(Box);
 
 const SHOW_TOOLS_KEY = "chat_show_tools";
 const SHOW_SOURCES_KEY = "chat_show_sources";
-const SAVE_WRONG_KEY = "chat_save_wrong";
 const THINK_KEY = "chat_think";
 const VERIFY_KEY = "chat_verify";
 const MAX_ATTACHMENTS = 10;
@@ -82,7 +81,6 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
   const [busy, setBusy] = useState(false);
   const [showTools, setShowTools] = useState(() => readBool(SHOW_TOOLS_KEY, true));
   const [showSources, setShowSources] = useState(() => readBool(SHOW_SOURCES_KEY, true));
-  const [saveWrong, setSaveWrong] = useState(() => readBool(SAVE_WRONG_KEY, true));
   const [think, setThink] = useState(() => readBool(THINK_KEY, true));
   const [verify, setVerify] = useState(() => readBool(VERIFY_KEY, true));
   const abortRef = useRef<AbortController | null>(null);
@@ -101,8 +99,6 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
     { approvalId: string; command: string; reason: string } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
-  const saveWrongRef = useRef(saveWrong);
-  saveWrongRef.current = saveWrong;
   const thinkRef = useRef(think);
   thinkRef.current = think;
   const verifyRef = useRef(verify);
@@ -180,9 +176,6 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
   };
   const toggleShowSources = (v: boolean) => {
     setShowSources(v); localStorage.setItem(SHOW_SOURCES_KEY, v ? "1" : "0");
-  };
-  const toggleSaveWrong = (v: boolean) => {
-    setSaveWrong(v); localStorage.setItem(SAVE_WRONG_KEY, v ? "1" : "0");
   };
   const toggleThink = (v: boolean) => {
     setThink(v); localStorage.setItem(THINK_KEY, v ? "1" : "0");
@@ -285,7 +278,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
     abortRef.current = controller;
     const onEvent = (e: any) => applyEvent(e, () => { outcome = "error"; });
     try {
-      await streamChat(conversationId, msg, onEvent, controller.signal, saveWrongRef.current,
+      await streamChat(conversationId, msg, onEvent, controller.signal,
         attachments.map((a) => a.id),
         (rid) => { turnRunIdRef.current = rid; upd((a) => { a.runId = rid; }); },
         thinkRef.current, verifyRef.current);
@@ -563,11 +556,6 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
           control={<Switch size="small" checked={showSources}
             onChange={(e) => toggleShowSources(e.target.checked)} />}
           label={<Typography variant="caption">展示数据来源和引用</Typography>}
-        />
-        <FormControlLabel
-          control={<Switch size="small" checked={saveWrong}
-            onChange={(e) => toggleSaveWrong(e.target.checked)} />}
-          label={<Typography variant="caption">考试答错自动保存错题集</Typography>}
         />
       </Box>
       <Box
