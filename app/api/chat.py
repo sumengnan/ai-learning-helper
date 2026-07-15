@@ -140,7 +140,7 @@ def _side_effect_ids(steps: list[dict]) -> dict[str, list[str]]:
     """提取本轮各副作用工具成功产物的 id（下载/知识/题目），供失败轮清理。
 
     工具在结果里带机读标记：save_download→〔下载ID:x〕、save_to_knowledge→〔知识ID:x〕、
-    add_questions→〔题目ID:x,y〕。失败步（is_error）不计。"""
+    add_questions/generate_questions→〔题目ID:x,y〕。失败步（is_error）不计。"""
     out: dict[str, list[str]] = {"download": [], "knowledge": [], "questions": []}
     for s in steps or []:
         if s.get("is_error"):
@@ -151,7 +151,7 @@ def _side_effect_ids(steps: list[dict]) -> dict[str, list[str]]:
             out["download"] += _DL_ID_RE.findall(r)
         elif tool == "save_to_knowledge":
             out["knowledge"] += _KB_ID_RE.findall(r)
-        elif tool == "add_questions":
+        elif tool in ("add_questions", "generate_questions"):
             for grp in _Q_ID_RE.findall(r):
                 out["questions"] += [x for x in grp.split(",") if x]
     return out

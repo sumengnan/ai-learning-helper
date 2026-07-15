@@ -92,3 +92,25 @@ def test_sources_distinct_nonempty_isolated():
     s.create("u2", {"type": "single", "stem": "d", "options": ["1", "2"],
                     "answer": 0, "source": "他人"})                      # 他用户不出现
     assert s.sources("u1") == ["算术"]
+
+
+def test_get_many_preserves_given_order():
+    """SQL 的 IN 不保序，get_many 必须按调用方给的 id 顺序返回。"""
+    s = QuestionStore(":memory:")
+    ids = [s.create("u1", _q(stem=f"题{i}")) for i in range(6)]
+    want = [ids[4], ids[0], ids[3], ids[1]]
+    assert [q["id"] for q in s.get_many("u1", want)] == want
+
+
+def test_get_many_skips_unknown_and_dedupes():
+    s = QuestionStore(":memory:")
+    a = s.create("u1", _q(stem="a")); b = s.create("u1", _q(stem="b"))
+    assert [q["id"] for q in s.get_many("u1", [a, "不存在", b, a])] == [a, b]
+    assert s.get_many("u1", []) == []
+
+
+def test_get_many_isolates_users():
+    s = QuestionStore(":memory:")
+    mine = s.create("u1", _q(stem="我的"))
+    theirs = s.create("u2", _q(stem="他的"))
+    assert [q["id"] for q in s.get_many("u1", [mine, theirs])] == [mine]

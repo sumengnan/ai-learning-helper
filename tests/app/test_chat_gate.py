@@ -41,6 +41,17 @@ def test_side_effect_ids_groups_by_tool():
     assert fx["questions"] == ["q1", "q2"]
 
 
+def test_side_effect_ids_tracks_generate_questions_too():
+    """generate_questions 同样往题库写题，失败轮须一并清理。"""
+    from app.api.chat import _side_effect_ids
+    steps = [
+        {"tool": "generate_questions", "result": "已生成〔题目ID:g1,g2〕", "is_error": False},
+        {"tool": "add_questions", "result": "已入库〔题目ID:a1〕", "is_error": False},
+        {"tool": "generate_questions", "result": "出题失败", "is_error": True},
+    ]
+    assert _side_effect_ids(steps)["questions"] == ["g1", "g2", "a1"]
+
+
 class _StubVerifier:
     """按序返回预设 Verdict；记录调用次数与看到的答案。"""
     def __init__(self, verdicts):
