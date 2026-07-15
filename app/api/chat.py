@@ -21,7 +21,10 @@ from harness.llm.openai_compat import set_extra_body_override
 from harness.loop.agent_loop import AgentLoop
 from harness.persistence.serialize import event_to_dict
 from harness.progress import reset_emitter, set_emitter
+from opentelemetry.trace import Status, StatusCode
+
 from harness.reliability.budget import BudgetTracker
+from harness.telemetry.tracer import get_tracer
 from harness.tools.base import ToolRegistry
 from harness.types import Message, Role
 
@@ -34,6 +37,7 @@ from ..sandbox_manager import reset_sandbox_conv, set_sandbox_conv
 from ..summaries import SummaryStore
 from ..summarizer import RollingSummarizer
 from ..sources import SOURCE_GUIDE, SourceSink, wrap_tool
+from ..url_blocklist import guard_fetch_tool
 from ..tools.attachment_tools import ListAttachmentsTool, ReadAttachmentTool
 from ..exam_flow import grade_exam_turn
 from ..tools.exam_tools import (
@@ -83,11 +87,11 @@ EXAM_GUIDE = (
     "- save_wrong_answer 的调用方式：即席出题（题目不在题库）时【必须】直接传该题的 "
     "stem/type/answer（可含 options）以及用户作答 user_answer，不要只传 question_id；"
     "若该题来自 sample_questions，也可传其 question_id。\n"
-    "- 【务必真的调用该工具】：在你实际调用 save_wrong_answer 并看到成功结果之前，"
-    "绝不能说「已存入错题集」「已保存」之类的话；没有发起工具调用就一个字都不要提保存。"
-    "保存成功后，【务必明确告诉用户】「这道题已加入你的错题集，方便以后复习」，让用户清楚知道，不要含糊略过；"
-    "若你的工具列表里没有该工具（用户关了开关），就直接跳过保存，"
-    "不要向用户解释开关是否开启、也不要反复提示「功能未开启」。\n"
+    "- 【务必真的调用该工具，不能只是嘴上说】：用户每答错一道题就必须存入错题集，这是无条件的，"
+    "不看用户是否要求、不问用户是否需要、也没有任何开关可以跳过。在你实际调用 save_wrong_answer "
+    "并看到成功结果之前，绝不能说「已存入错题集」「已加入错题集」「已保存」之类的话——"
+    "没有发起工具调用就一个字都不要提保存，那是欺骗用户。"
+    "保存成功后，【务必明确告诉用户】「这道题已加入你的错题集，方便以后复习」，让用户清楚知道，不要含糊略过。\n"
     "\n题库管理：\n"
     "- 用户让你「把这些知识/资料整理成题存进题库」时，用 add_questions 直接把你整理好的"
     "题目写入题库；若用户希望「就某主题从我的知识库出题」，用 generate_questions（依赖知识库检索）。\n"
@@ -117,7 +121,6 @@ def _today_guide() -> str:
 class _ChatRequest(BaseModel):
     conversation_id: str
     message: str
-    save_wrong: bool = True         # 「考试答错自动保存错题集」开关（默认开）
     think: bool = True              # 「思考模式」开关（默认开）；透传 enable_thinking，可手动关
     verify: bool = True             # 「结果校验」开关（默认开）；关则本轮跳过交付门校验
     attachment_ids: list[str] = []  # 本轮随消息发送的附件（已先经上传接口拿到 id）
@@ -154,6 +157,31 @@ def _side_effect_ids(steps: list[dict]) -> dict[str, list[str]]:
     return out
 
 
+def emit_gate_span(tracer, vt: dict, t0_ns: int) -> None:
+    """把交付门判定补发成一个 answer_gate span（每次尝试一个 verify.attempt event）。
+
+    循环跑完后据 t0_ns 显式补发，而非用 start_as_current_span 包住循环：产出这些判定的是个
+    async generator，其中的 yield 会把 span 的 contextvar 泄漏进消费者上下文。
+    未装 OTel provider 时 tracer 为 no-op，全是空操作。
+    """
+    sp = tracer.start_span("answer_gate", start_time=t0_ns)
+    try:
+        sp.set_attribute("app.gate.attempts", vt["attempts"])
+        sp.set_attribute("app.gate.retries", vt["retries"])
+        sp.set_attribute("app.gate.ok", vt["ok"])
+        sp.set_attribute("app.gate.degraded", vt["degraded"])
+        for h in vt["history"]:
+            sp.add_event("verify.attempt", {
+                "attempt": h["attempt"], "run_id": h["run_id"], "ok": h["ok"],
+                "failed": h["failed"], "hard_failed": h["hard_failed"],
+                "critique": h["critique"][:200]})
+        if vt["degraded"]:      # 用尽重答次数仍未过 → 标红，便于在追踪后端筛出来
+            last = vt["history"][-1]["summary"] if vt["history"] else "未知"
+            sp.set_status(Status(StatusCode.ERROR, f"交付门未通过：{last}"))
+    finally:
+        sp.end()
+
+
 def _plan_text(progress: list[dict]) -> str:
     """从进度事件里取最后一次任务拆分（scope=plan 的 JSON 文本），供轨迹 judge 回看。"""
     plans = [p["text"] for p in progress if p.get("scope") == "plan"]
@@ -164,7 +192,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                      verifier=None, attachment_store=None, run_manager=None,
                      knowledge_service=None, quiz_service=None,
                      profile_store=None, trajectory_judge=None,
-                     exam_session_store=None) -> APIRouter:
+                     exam_session_store=None, url_block_store=None) -> APIRouter:
     router = APIRouter()
     # 简答题判分用 judge completer（考试判分中间件用；客观题不需要模型）
     from ..completion import build_judge_completer
@@ -193,15 +221,17 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 sample_rate=config.memory_write_sample_rate)
     _assembler = ContextAssembler(config, config.model,
                                   summarizer=_summarizer, conv_memory=_conv_memory)
+    # 交付门插桩：未装 OTel provider 时 get_tracer 返回 no-op tracer，零开销
+    _tracer = get_tracer("app.chat")
 
-    def _build_registry(user_id: str, save_wrong: bool, conv_id: str,
-                        has_attachments: bool,
+    def _build_registry(user_id: str, conv_id: str, has_attachments: bool,
                         exam_active: bool = False) -> tuple[ToolRegistry, SourceSink]:
         reg = ToolRegistry()
         sink = SourceSink()
-        # 来源工具包一层记源（wrap_tool 只包「产生来源」的工具，其余原样）
+        # 两层包装，顺序有讲究：guard 在内、记源在外。guard 命中登记时抛 ToolError，
+        # 该异常先于记源逻辑抛出，故被跳过的网址不会被记成「参考来源」。
         def _reg(t):
-            reg.register(wrap_tool(t, sink))
+            reg.register(wrap_tool(guard_fetch_tool(t, url_block_store), sink))
         for t in harness.registry.tools():
             _reg(t)
         # 用用户级 save_download 覆盖全局那个（同名），使下载文件按用户隔离
@@ -221,9 +251,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             if quiz_service is not None:
                 _reg(GenerateQuestionsTool(quiz_service, user_id))
             # 考试激活时不暴露 save_wrong_answer：判分与保存已由服务端确定性完成，防重复入库
-            if save_wrong and wrong_store is not None and not exam_active:
+            if wrong_store is not None and not exam_active:
                 _reg(SaveWrongAnswerTool(question_store, wrong_store, user_id))
-        # 错题集捞题/删题是独立能力，不受「答错自动保存」开关限制
         if wrong_store is not None:
             _reg(SampleWrongAnswersTool(wrong_store, user_id))
             _reg(DeleteWrongAnswersTool(wrong_store, user_id))
@@ -268,10 +297,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             exam_note, exam_active = await grade_exam_turn(
                 exam_session_store, wrong_store, _exam_judge,
                 user_id=user_id, conv_id=req.conversation_id,
-                message=req.message, save_wrong=req.save_wrong)
-        registry, source_sink = _build_registry(user_id, req.save_wrong,
-                                                 req.conversation_id, has_attachments,
-                                                 exam_active)
+                message=req.message)
+        registry, source_sink = _build_registry(user_id, req.conversation_id,
+                                                 has_attachments, exam_active)
         # 交付门开启需三者皆备：装配了 verifier + 服务端总开关 + 本轮用户开关（默认开，可手动关）
         gate_on = verifier is not None and config.enable_answer_gate and req.verify
         # 喂给模型的消息：带附件时追加只含文件名的名单提示（不含内容），入库仍用原文
@@ -417,6 +445,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             delivered = None
             delivered_sources: list[dict] = []   # 交付那次尝试的权威来源
             errored = False
+            # 交付门结构化判定轨迹（门未开则保持 None，不落库）：progress 列只存渲染用中文，
+            # 统计「哪层失败率高/平均重答几次」要的是这里未拍扁的 failed[]/hard_failed[]。
+            verify_trace: dict | None = None
             parts: list[str] = []        # 累积客户端面 TextDelta，供 stop/重启保留已生成部分
             first_token_at: list[float] = []   # 首个 TextDelta 时刻（记一次），用于算首字延迟
 
@@ -487,6 +518,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     # 交付门：缓冲 → 校验 → 不过则回灌重答，最多 answer_gate_max_retries 次
                     corrective = None
                     max_attempts = config.answer_gate_max_retries + 1
+                    verify_trace = {"attempts": 0, "retries": 0, "ok": False,
+                                    "degraded": False, "history": []}
+                    gate_t0 = time.time_ns()     # span 起点：循环跑完后据此补发（见 _emit_gate_span）
                     # 未通过轮生成的副作用产物（下载/知识/题目），交付/降级时清理掉
                     stale_fx: dict[str, list[str]] = {"download": [], "knowledge": [], "questions": []}
 
@@ -557,6 +591,18 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                     critique=tscore.feedback or f"整体质量 {tscore.final} 偏低",
                                     summary="trajectory")
 
+                        # 结构化记这次判定（须在轨迹 judge 可能改写 verdict 之后）。run_id 是与
+                        # harness 库 trajectory_events 的接缝：据此可捞出该次尝试（含被否草稿）
+                        # 的逐字原始输出——此前每次重答虽各有 run_id，却无处得知它是第几次、被谁否的。
+                        verify_trace["history"].append(
+                            {"attempt": attempt + 1, "run_id": run_id_a, "ok": verdict.ok,
+                             "failed": list(verdict.failed),
+                             "hard_failed": list(verdict.hard_failed),
+                             "summary": verdict.summary, "critique": verdict.critique})
+                        verify_trace["attempts"] = attempt + 1
+                        verify_trace["retries"] = attempt      # 重答次数 = 尝试数 - 1
+                        verify_trace["ok"] = verdict.ok
+
                         if verdict.ok:
                             yield _emit_verify("校验通过", status="ok", key=ekey)
                             delivered = draft
@@ -570,6 +616,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                   + (f"：{verdict.critique}" if verdict.critique else ""))
                         yield _emit_verify(reason, status="error", key=ekey)
                         if attempt == max_attempts - 1:      # 用尽次数 → 降级交付
+                            verify_trace["degraded"] = True
                             delivered = draft or "（本轮未完成）"
                             delivered_sources = source_sink.snapshot()
                             errored = not draft
@@ -584,6 +631,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         corrective = (f"你上一版回答未通过自动校验。问题：{verdict.critique}。"
                                       f"请针对性修正后，重新完整回答原问题：{question}")
 
+                    emit_gate_span(_tracer, verify_trace, gate_t0)
                     # 交付：终稿以 TextDelta 补发（保留打字机）+ 合成 RunFinished
                     delivered = delivered or "（本轮未完成）"
                     for chunk in _chunks(delivered):
@@ -601,10 +649,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                   steps=steps or None, progress=progress or None,
                                   status=status, sources=delivered_sources or None,
                                   tokens=_usage.get("tokens"), cost=_usage.get("cost"),
-                                  elapsed_ms=_elapsed, reasoning=collect.get("reasoning") or None)
-                log.info("聊天完成 status=%s 耗时%dms tokens=%s 工具%d次 来源%d条",
+                                  elapsed_ms=_elapsed, reasoning=collect.get("reasoning") or None,
+                                  verify=verify_trace)
+                log.info("聊天完成 status=%s 耗时%dms tokens=%s 工具%d次 来源%d条 重答%s次",
                          status, _elapsed, _usage.get("tokens"), len(steps),
-                         len(delivered_sources))
+                         len(delivered_sources),
+                         verify_trace["retries"] if verify_trace else "-")
                 # L3：把对话文本写入向量库供后续语义召回（best-effort，不阻断）
                 if _conv_memory is not None and not errored and final_content:
                     try:
@@ -619,14 +669,16 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     req.conversation_id, turn_run_id,
                     delivered or "".join(parts) or "（已停止）",
                     steps=steps or None, progress=progress or None, status="stopped",
-                    elapsed_ms=round((time.time() - turn_start) * 1000))
+                    elapsed_ms=round((time.time() - turn_start) * 1000),
+                    verify=verify_trace)   # 中断时保留已发生的重答记录
                 raise
             except Exception as e:  # noqa: BLE001  意外异常也要把占位落成 error，别永远 streaming
                 store.finish_turn(
                     req.conversation_id, turn_run_id,
                     delivered or "".join(parts) or "（本轮未能完成，请重试）",
                     steps=steps or None, progress=progress or None, status="error",
-                    elapsed_ms=round((time.time() - turn_start) * 1000))
+                    elapsed_ms=round((time.time() - turn_start) * 1000),
+                    verify=verify_trace)   # 出错时保留已发生的重答记录
                 yield RunError(error=str(e))
 
         turn_run_id = uuid4().hex

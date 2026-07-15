@@ -36,6 +36,20 @@ async def browser_fallback_or_none(fn, url: str, reason: str) -> str | None:
     return f"（{reason}，已自动改用浏览器抓取）\n\n{text}"
 
 
+def merge_user_agent(headers: dict | None, user_agent: str) -> dict | None:
+    """把默认 UA 并进请求头；调用方显式传的 User-Agent 优先（大小写不敏感）。
+
+    空 UA 是最典型的爬虫特征，不少站点据此直接 403，故默认必须带一个。
+    """
+    if not user_agent:
+        return headers
+    out = dict(headers or {})
+    if any(k.lower() == "user-agent" for k in out):
+        return out
+    out["User-Agent"] = user_agent
+    return out
+
+
 def _looks_like_html(content_type: str, body: str) -> bool:
     """判定响应是否为 HTML：优先 Content-Type，缺失时嗅探正文开头。"""
     if "html" in content_type.lower():
@@ -71,12 +85,14 @@ class HttpRequestTool(Tool):
 
     def __init__(self, allowed_domains, block_private: bool = True, timeout: float = 30.0,
                  max_bytes: int = 5_000_000, max_redirects: int = 5,
-                 client_factory=None, resolve=None, browser_fallback=None) -> None:
+                 client_factory=None, resolve=None, browser_fallback=None,
+                 user_agent: str = "") -> None:
         self._allowed = allowed_domains
         self._block_private = block_private
         self._timeout = timeout
         self._max_bytes = max_bytes
         self._max_redirects = max_redirects
+        self._user_agent = user_agent
         self._client_factory = client_factory or (
             lambda: httpx.AsyncClient(follow_redirects=False, timeout=timeout))
         self._resolve_kw = {"resolve": resolve} if resolve is not None else {}
@@ -88,11 +104,12 @@ class HttpRequestTool(Tool):
 
     async def _fetch(self, params: "HttpRequestTool.Params") -> tuple[int, str, str, str, str]:
         url = params.url
+        headers = merge_user_agent(params.headers, self._user_agent)
         async with self._client_factory() as client:
             for _ in range(self._max_redirects + 1):
                 check_url(url, self._allowed, self._block_private, **self._resolve_kw)  # PolicyError→is_error
                 async with client.stream(params.method, url,
-                                         headers=params.headers, content=params.body) as resp:
+                                         headers=headers, content=params.body) as resp:
                     if resp.is_redirect and "location" in resp.headers:
                         url = str(httpx.URL(url).join(resp.headers["location"]))
                         continue

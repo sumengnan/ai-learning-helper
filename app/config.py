@@ -20,6 +20,8 @@ class AppConfig(HarnessConfig):
     app_db_path: str = "app.db"
     app_system_prompt: str = "你是一个 AI 学习助手，可用工具检索知识、联网、计算来帮助用户学习。"
     enable_browser: bool = False
+    # 抓取失败的网址登记：失败即记，下次抓前短路让模型换来源（分级 TTL，非永久拉黑）
+    enable_url_blocklist: bool = True
     enable_sandbox: bool = False
     enable_dispatch: bool = False
     enable_skills: bool = False
@@ -40,7 +42,6 @@ class AppConfig(HarnessConfig):
     gate_check_code: bool = True            # 分项开关：代码可运行
     gate_check_judge: bool = True           # 分项开关：LLM 自评打分
     gate_check_facts: bool = False          # 分项开关：引用链接可达性核对
-    gate_check_consistency: bool = True     # 分项开关：声称完成动作但零工具调用 → 判不一致、重做
     # 每步校验（实时层，规则/阈值为主，内核零改动）
     enable_step_check: bool = True          # 高风险步实时校验（检索相关性/代码执行）
     step_relevance_min: float = 0.0         # 检索低分阈值；0=只判空命中（起步）

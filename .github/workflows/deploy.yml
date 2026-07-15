@@ -16,7 +16,12 @@ env:
   IMAGE: sumengnan/ai-learning-helper
 
 jobs:
+  # 先跑全量测试（含 eval 门禁）；红的代码不许上生产。复用 ci.yml，不重复定义。
+  test:
+    uses: ./.github/workflows/ci.yml
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: write        # 允许推送自增版本号的 git tag

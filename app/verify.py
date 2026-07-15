@@ -29,6 +29,7 @@ from harness.llm.openai_compat import (
 from harness.tools.base import ToolError
 
 from .quiz_service import _strip_fence
+from .url_blocklist import UrlBlockedError
 
 _log = logging.getLogger("app.verify")
 
@@ -47,13 +48,12 @@ def _json_output():
         reset_extra_body_override(token)
 
 # 硬门：失败不允许降级交付（必须重答或明确拦截）
-_HARD_CHECKS = frozenset({"format", "code", "empty", "consistency"})
+_HARD_CHECKS = frozenset({"format", "code", "empty"})
 
 # 校验层名 → 中文，供前端展示「未通过的是哪一层」
 _LAYER_ZH = {
     "format": "格式/完整性", "grounding": "知识库依据", "code": "代码可运行",
     "judge": "质量评分", "facts": "引用链接", "trajectory": "整体质量", "empty": "未产出答案",
-    "consistency": "动作一致性",
 }
 
 
@@ -120,18 +120,6 @@ class Verdict:
 
 def _looks_truncated(answer: str) -> bool:
     return answer.count("```") % 2 == 1        # 代码围栏未闭合 → 大概率被截断
-
-
-# 完成性措辞：声称已保存/入库/下载/生成文件等「副作用动作」的短语（与工具调用记录比对）
-_CLAIM_RE = re.compile(
-    r"(存入|存进|保存到|加入|添加到)[^。，、\n]{0,6}(错题集|知识库|题库)"
-    r"|已(入库|下载)"
-    r"|(保存|导出|生成)[^。，、\n]{0,6}(文件|下载|笔记)")
-
-
-def _looks_claimed_action(answer: str) -> bool:
-    """回答是否声称完成了某个「副作用动作」（保存/入库/下载/生成文件等）。"""
-    return bool(_CLAIM_RE.search(answer or ""))
 
 
 def _extract_code_blocks(answer: str) -> list[tuple[str, str]]:
@@ -239,13 +227,6 @@ class AnswerVerifier:
             if _looks_truncated(ans):
                 return Verdict._make(["format"], ["回答疑似被截断（代码围栏未闭合）"])
 
-        # consistency —— 无 LLM：声称完成保存/入库/下载等动作，但本轮零工具调用 → 判不一致（硬门）
-        if cfg.gate_check_consistency and not steps and _looks_claimed_action(ans):
-            return Verdict._make(
-                ["consistency"],
-                ["回复声称已完成保存/入库/下载等操作，但本轮未实际调用任何工具——"
-                 "请真正调用相应工具后再确认，或不要声称已完成"])
-
         # 2) grounding —— 仅当本轮检索到知识库资料时才判
         if cfg.gate_check_grounding:
             passages = [g["content"] for g in grounding
@@ -333,7 +314,7 @@ class AnswerVerifier:
         """抽取答案中的 http(s) 链接，用 http_request 工具判可达（2xx/3xx）。
 
         工具不存在、参数不匹配、抓取抛错等基础设施问题一律跳过（放行不拦截）；
-        仅当明确取到 4xx/5xx 状态码时记为不可达。
+        仅当明确取到 4xx/5xx 状态码、或链接命中失败登记时记为不可达。
         """
         tool = registry.get("http_request")
         if tool is None:
@@ -342,6 +323,9 @@ class AnswerVerifier:
         for url in _extract_urls(answer)[:5]:      # 至多核查前 5 个，控成本
             try:
                 out = await tool.run(tool.Params(url=url))
+            except UrlBlockedError as e:           # 已知坏链：登记过就是证据，不是基建抖动
+                bad.append(f"{url}({e.record['reason']})")
+                continue
             except Exception as e:                 # 抓取失败/被拒/参数不符 → 放行不判
                 _log.warning("facts 校验抓取 %s 失败，跳过：%s", url, e)
                 continue

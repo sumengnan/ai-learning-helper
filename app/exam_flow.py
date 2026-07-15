@@ -73,8 +73,8 @@ def _build_note(mode: str, q: dict, idx: int, n: int, is_correct: bool,
 
 
 async def grade_exam_turn(exam_store, wrong_store, judge_complete, *,
-                          user_id: str, conv_id: str, message: str,
-                          save_wrong: bool) -> tuple[str, bool]:
+                          user_id: str, conv_id: str,
+                          message: str) -> tuple[str, bool]:
     """返回 (注入模型的判定提示, 考试是否仍活跃)。无 active 考试返回 ('', False)。"""
     exam = exam_store.get_active(user_id, conv_id)
     if exam is None:
@@ -103,9 +103,9 @@ async def grade_exam_turn(exam_store, wrong_store, judge_complete, *,
         user_answer = parsed
 
     saved = False
-    if (not is_correct) and save_wrong and wrong_store is not None:
+    if (not is_correct) and wrong_store is not None:
         wrong_store.create(user_id, q.get("question_id", "") or "", "exam",
-                           _snapshot(q), user_answer)      # 确定性保存
+                           _snapshot(q), user_answer)      # 答错即存，确定性保存
         saved = True
 
     exam_store.record(user_id, conv_id, user_answer, is_correct)
