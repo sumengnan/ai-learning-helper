@@ -443,7 +443,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                 const plan = planItems[planItems.length - 1];
                 const live = busy && i === messages.length - 1 && m.status === "streaming";
                 return plan ? (
-                  <PlanBlock text={plan.text} live={live} stopped={m.status === "stopped"} />
+                  <PlanBlock text={plan.text} live={live} status={m.status} />
                 ) : null;
               })()}
               {showTools && m.role === "assistant" && m.progress && m.progress.length > 0 && (() => {
