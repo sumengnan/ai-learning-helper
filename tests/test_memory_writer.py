@@ -337,3 +337,47 @@ async def test_extract_completer_defaults_to_main(mock_embedder):
                      retriever=None, complete=main)
     await w._extract("随便")
     assert len(main.calls) == 1
+
+
+# ---- 分阶段耗时（用于判断 record_turn 该不该改成 fire-and-forget）----
+
+async def test_write_logs_per_phase_timings(mock_embedder, monkeypatch, caplog):
+    """耗时须分到阶段：只有总数的话，看不出该改异步还是该关调和的思考链。"""
+    from harness.memory import writer as W
+    ticks = iter([
+        0.0, 1.5,      # 提炼 1500ms
+        1.5, 1.7,      # 找候选 200ms
+        1.7, 4.2,      # 调和 2500ms
+        4.2, 4.3,      # 落库 100ms
+    ])
+
+    class _Clock:
+        def monotonic(self): return next(ticks)
+        def time(self): return 1_700_000_000.0
+    monkeypatch.setattr(W, "time", _Clock())
+
+    w, backend, emb = await _writer(mock_embedder, [
+        '[{"text":"用户在学 Rust","mem_type":"semantic"}]',
+    ])
+    with caplog.at_level(logging.INFO, logger="harness.memory.writer"):
+        await w.write("u1", "k", "我在学 Rust")
+    assert "耗时=4300ms" in caplog.text
+    assert "（提炼1500/候选200/调和2500/落库100）" in caplog.text
+
+
+async def test_write_timing_survives_reconcile_shortcut(mock_embedder, caplog):
+    """无候选时调和会短路（不调 LLM），计时不能因此错位或抛。"""
+    w, backend, emb = await _writer(mock_embedder, [
+        '[{"text":"全新事实","mem_type":"semantic"}]',
+    ])
+    with caplog.at_level(logging.INFO, logger="harness.memory.writer"):
+        await w.write("u1", "k", "随便说点")
+    assert "耗时=" in caplog.text and "提炼" in caplog.text
+
+
+async def test_no_write_log_when_nothing_extracted(mock_embedder, caplog):
+    """提炼为空即早返回：不该记一条「新增=0」的流水账混淆视听。"""
+    w, backend, emb = await _writer(mock_embedder, ["[]"])
+    with caplog.at_level(logging.INFO, logger="harness.memory.writer"):
+        assert await w.write("u1", "k", "哈哈") == []
+    assert "记忆写入" not in caplog.text

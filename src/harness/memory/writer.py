@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 
 from .record import MemType, MemoryFilter, MemoryRecord
@@ -221,19 +222,33 @@ class MemoryWriter:
         """智能写入：提炼→找候选→调和→应用，返回新写入记录 id。best-effort，异常安全。"""
         if not text or not text.strip():
             return []
+        # 分阶段计时：本方法被 chat 的 gen() await，跑完这轮 run 才算结束、SSE 流才关闭、
+        # 前端才解除 busy —— 也就是说它不拖慢答案（RunFinished 早已送出），却拖着用户
+        # 不能发下一句。要不要把它改成 fire-and-forget（代价：进程重启会丢在写的记忆），
+        # 得看真实耗时；而分到阶段才知道该改哪儿——若大头在调和，先关它的思考链可能就够了。
+        _t = time.monotonic()
         facts = await self._extract(text)
+        ms_ext = round((time.monotonic() - _t) * 1000)
         if not facts:
             return []
+        _t = time.monotonic()
         try:
             candidates = await self._gather_candidates(owner_id, kind, facts)
         except Exception as e:                           # 找候选失败：降级为无候选（全 ADD）
             log.warning("memory gather candidates failed: %s", e)
             candidates = []
+        ms_cand = round((time.monotonic() - _t) * 1000)
+        _t = time.monotonic()
         ops = await self._reconcile(facts, candidates)
+        ms_rec = round((time.monotonic() - _t) * 1000)
+        _t = time.monotonic()
         new_ids = await self._apply(owner_id, kind, ops)
+        ms_apply = round((time.monotonic() - _t) * 1000)
         # 判定分布是「调和到底在不在工作」的正面信号：有候选却清一色 ADD、NOOP/REPLACE 恒为 0，
         # 就说明它在空转（模型没判、或判定被静默丢弃），光靠失败告警看不出这种情况。
         _dist = {k: sum(1 for o in ops if o.op == k) for k in ("ADD", "NOOP", "REPLACE")}
-        log.info("记忆写入 提炼=%d条 候选=%d 判定=%s 新增=%d",
-                 len(facts), len(candidates), _dist, len(new_ids))
+        log.info("记忆写入 提炼=%d条 候选=%d 判定=%s 新增=%d 耗时=%dms"
+                 "（提炼%d/候选%d/调和%d/落库%d）",
+                 len(facts), len(candidates), _dist, len(new_ids),
+                 ms_ext + ms_cand + ms_rec + ms_apply, ms_ext, ms_cand, ms_rec, ms_apply)
         return new_ids
