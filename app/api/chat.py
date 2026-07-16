@@ -114,6 +114,42 @@ EXAM_GUIDE = (
     "- delete_questions（删题库题）和 delete_wrong_answers（删错题）会永久删除，"
     "调用前必须先向用户复述将删除的具体题目并等待用户确认，切勿在未确认时直接删除。\n")
 
+# EXAM_GUIDE 是常驻提示里最大的一块（约 1600 字，占常驻 60%），但绝大多数轮次用不上
+# （问答/写代码/查资料）。改为命中考试语境才注入 —— 但绝不能只看当前这句话：
+# 「即时练习」是模型自驱的多轮流程（sample_questions 抽题后逐题问答），中间轮用户只回
+# 「A」，既无触发词也无服务端 session，此时若丢了指引，「答错必存」等保证会静默失效。
+# 故用三个信号任一即注入，且刻意偏向注入 —— 漏注入=破坏保证（高代价），多注入=浪费 0.3%
+# 窗口（低代价）。不做成 skill 的原因：实测模型从不主动 load_skill（0/440 次调用）。
+_EXAM_TRIGGER = re.compile(
+    "考试|考我|考考|考核|模拟考|测验|测测|测一下|测下|小测|刷题|练题|做题|答题|做题|"
+    "出题|命题|练习|题库|错题|抽题|几道题|来道题|来几题|做几道|做一道|背题|默写|开考")
+_EXAM_TOOLS = frozenset({
+    "start_exam", "sample_questions", "sample_wrong_answers", "save_wrong_answer",
+    "list_questions", "add_questions", "generate_questions",
+    "delete_questions", "delete_wrong_answers"})
+_EXAM_HISTORY_WINDOW = 16   # 覆盖一次批量抽题后逐题问答的往返（每题约 2 条消息）
+
+
+def _needs_exam_guide(message: str, history, exam_active: bool) -> bool:
+    """本轮是否处于考试/练习语境，需注入 EXAM_GUIDE。任一信号命中即注入：
+    1) 本条消息含考试/刷题/错题等意图词；
+    2) 有 active start_exam 会话（考试进行中，用户此刻多半只回「A」）；
+    3) 近 _EXAM_HISTORY_WINDOW 条历史里出现过考试类工具调用，或用户说过意图词
+       —— 覆盖模型自驱的多轮练习（中间轮无触发词、无 session）。
+    """
+    if exam_active:
+        return True
+    if _EXAM_TRIGGER.search(message or ""):
+        return True
+    for m in (history or [])[-_EXAM_HISTORY_WINDOW:]:
+        if any(tc.name in _EXAM_TOOLS for tc in (m.tool_calls or [])):
+            return True
+        if m.role == Role.USER and isinstance(m.content, str) \
+                and _EXAM_TRIGGER.search(m.content):
+            return True
+    return False
+
+
 ATTACHMENT_GUIDE = (
     "\n\n用户可能在消息中上传附件（文件内容默认不在上下文里，需要时再取）：\n"
     "- 用 list_attachments 查看本对话的附件清单（id/文件名/类型）。\n"
@@ -517,11 +553,16 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         # read_attachment 根本没注册（见 _build_registry），此时还介绍它们的用法，等于
         # 告诉模型一批它没有的工具——比浪费 token 更糟。
         attachment_guide = ATTACHMENT_GUIDE if has_attachments else ""
+        # EXAM_GUIDE 命中考试语境才注入（约省 60% 常驻）。exam_active 已由上面的
+        # grade_exam_turn 判定；history 用于识别模型自驱的多轮练习。工具本身仍常驻注册，
+        # 只省指引文本 —— 万一触发词漏判，模型仍能靠工具描述兜底，是降级而非失能。
+        exam_guide = EXAM_GUIDE if _needs_exam_guide(
+            req.message, history, exam_active) else ""
         # 清单收尾结果 → 并进 context 列，供统计「模型多久不收一次尾 / 补救成没成」
         plan_trace: dict = {}
         ctx_trace: dict = {}      # 上下文组装结果 → finish_turn 落 context 列，供 stats 统计
         base_ctx = await _assembler.build_manager(
-            harness.system_prompt + profile_block + EXAM_GUIDE + attachment_guide
+            harness.system_prompt + profile_block + exam_guide + attachment_guide
             + SOURCE_GUIDE + _today_guide(),
             history, req.message, req.conversation_id, trace=ctx_trace)
         log.info("上下文组装 conv=%s 历史%d条 耗时%dms %s",
@@ -543,8 +584,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         async def _drain(loop_obj, run_id_a, message, passthrough, collect):
             """跑一次 AgentLoop，逐事件产出 SSE 串；把 final/steps/grounding 收进 collect。
 
-            passthrough=False（交付门）时缓冲不转发终态事件（TextDelta/RunFinished/RunError），
-            仅转发"agent 在干活"的活动事件；终稿由调用方校验后再补发。
+            passthrough=False（交付门）时正文 TextDelta 照常流式给用户（先看后校验），
+            仅压住 RunFinished/RunError —— 这两个终态由调用方在校验通过后合成，避免答案还没
+            校验就被前端标「已完成」。未过要重答时，调用方先发 scope=reset 清屏、再让新一版流式。
             """
             queue: asyncio.Queue = asyncio.Queue()
             sentinel = object()
@@ -643,7 +685,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                                     "status": ev.status, "key": ev.key,
                                                     "agent": ev.agent})
                     # 交付门下缓冲终态事件（不转发）；直通模式转发全部
-                    if passthrough or not isinstance(ev, (TextDelta, RunFinished, RunError)):
+                    # 门内也转发 TextDelta（用户先看到打字机正文），只压 RunFinished/RunError
+                    if passthrough or not isinstance(ev, (RunFinished, RunError)):
                         yield ev
             finally:
                 if not task.done():
@@ -820,8 +863,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         run_id_a = uuid4().hex
                         store.add_run(req.conversation_id, run_id_a)
                         source_sink.reset()   # 每次尝试重置，交付时快照该次来源
+                        # 门内 TextDelta 现在实时流式：经 _acc 累积进 parts（供刷新还原本轮已见文本）
                         async for s in _drain(_new_loop(run_id_a), run_id_a, msg, False, collect):
-                            yield s
+                            yield _acc(s)
                         steps.extend(collect["steps"])
                         draft = (collect["final"] or "").strip()
                         cur_fx = _side_effect_ids(collect["steps"])   # 本轮生成的副作用产物
@@ -905,12 +949,11 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         yield _emit_verify(reason, status="error", key=ekey)
                         if attempt == max_attempts - 1:      # 用尽次数 → 降级交付
                             verify_trace["degraded"] = True
+                            # 最后一版已流式显示给用户，保留原样、不再在正文前拼 ⚠️ 告示
+                            # （那会导致同一段文字清屏重打）——未过由红色「结果校验未通过」徽章表达。
                             delivered = draft or "（本轮未完成）"
                             delivered_sources = source_sink.snapshot()
                             errored = not draft
-                            if verdict.summary:
-                                delivered = (f"⚠️ 此回答未通过自动校验（{verdict.summary}），"
-                                             f"请谨慎参考。\n\n" + delivered)
                             # 降级交付本轮：同样只删被本版取代的那类旧产物
                             for _ev in _emit_purged(_settle_stale_fx(stale_fx, cur_fx)):
                                 yield _ev
@@ -918,15 +961,22 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         for _k in stale_fx:   # 本轮未通过、将重答，其副作用产物作废待清理
                             stale_fx[_k] += cur_fx[_k]
                         yield _emit_verify("重答中…", status="running")
+                        # 清屏：上一版正文已流式显示给用户，重答前清空，让新版从头打字机输出。
+                        # 同步重置 parts 与落库占位——否则刷新恰好落在重答间隙时会看到旧版残留。
+                        parts.clear()
+                        store.flush_partial(req.conversation_id, turn_run_id, "")
+                        yield Progress("reset", "")
                         corrective = (f"你上一版回答未通过自动校验。问题：{verdict.critique}。"
                                       f"请针对性修正后，重新完整回答原问题：{question}"
                                       + _redo_fx_note(collect["steps"]))
 
                     emit_gate_span(_tracer, verify_trace, gate_t0)
-                    # 交付：终稿以 TextDelta 补发（保留打字机）+ 合成 RunFinished
+                    # 交付：正文已在生成时逐字流式给用户，无需重发（避免清屏重打同一段）。
+                    # 仅当屏上确实空白（降级且本轮空产出）才补一句兜底文案，再合成 RunFinished。
                     delivered = delivered or "（本轮未完成）"
-                    for chunk in _chunks(delivered):
-                        yield _acc(TextDelta(text=chunk))
+                    if not "".join(parts).strip():
+                        for chunk in _chunks(delivered):
+                            yield _acc(TextDelta(text=chunk))
                     yield RunFinished(message=Message(role=Role.ASSISTANT, content=delivered))
 
                 # 清单收尾：交付门开与不开两条路径都会漏，故放在二者汇合处。仅当模型真的

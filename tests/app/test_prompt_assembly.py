@@ -95,8 +95,8 @@ def test_attachment_guide_present_with_attachment(tmp_path):
 
 
 def test_always_resident_guides_are_present(tmp_path):
-    """这些不能做成按需加载的技能：模型不会为了知道自己不许撒谎而去 load_skill，
-    也不知道自己不知道今天几号。"""
+    """这些不能做成按需加载/条件注入：模型不知道自己不知道今天几号，也不会为了
+    知道该引用来源而先去加载什么。"""
     rec = _PromptRecordingClient()
     c = _client(rec, tmp_path)
     h = _auth(c)
@@ -105,6 +105,32 @@ def test_always_resident_guides_are_present(tmp_path):
 
     sys_prompt = rec.systems[0]
     assert "【当前日期】" in sys_prompt                 # _today_guide：模型无从自知
-    assert "绝不能说" in sys_prompt                     # 假承诺护栏
-    assert "无条件" in sys_prompt                       # 答错必存
     assert "参考来源" in sys_prompt                     # 引用约定
+
+
+def test_exam_guide_absent_for_non_exam_message(tmp_path):
+    """普通问答/写代码不该背着约 1600 字的考试指引 —— 那是常驻里最大的一块。"""
+    rec = _PromptRecordingClient()
+    c = _client(rec, tmp_path)
+    h = _auth(c)
+    cid = c.post("/api/conversations", json={}, headers=h).json()["id"]
+    _chat(c, h, cid, msg="生成一段 Python 代码执行")
+
+    sys_prompt = rec.systems[0]
+    assert "题库 / 错题集 / 模拟考试" not in sys_prompt
+    assert "save_wrong_answer" not in sys_prompt
+    assert "无条件" not in sys_prompt                   # 答错必存的措辞只在 EXAM_GUIDE
+
+
+def test_exam_guide_present_on_trigger(tmp_path):
+    """用户表达考试意图 → 指引注入，答错必存等约束到位。"""
+    rec = _PromptRecordingClient()
+    c = _client(rec, tmp_path)
+    h = _auth(c)
+    cid = c.post("/api/conversations", json={}, headers=h).json()["id"]
+    _chat(c, h, cid, msg="考我几道 Java 并发的题")
+
+    sys_prompt = rec.systems[0]
+    assert "题库 / 错题集 / 模拟考试" in sys_prompt
+    assert "无条件" in sys_prompt                       # 答错必存护栏在场
+    assert "绝不能说" in sys_prompt                     # 假承诺护栏在场

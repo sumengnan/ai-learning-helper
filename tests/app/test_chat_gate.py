@@ -227,14 +227,24 @@ def test_fail_then_reanswer_delivers_second_version(make_mock, text_turn):
     vp = _verify_progress(events)
     assert any("校验中" in t for t in vp) and any("重答中" in t for t in vp)
     assert _final(events) == "修正版答案"                # 交付的是修正版
-    # 草稿未逐字流给用户：TextDelta 只应是交付阶段补发的终稿分片，拼起来=修正版
+    # 两版都逐字流给了用户：初版先流式显示 → 未过发 reset 清屏 → 修正版再流式
+    kinds = [(e["type"], e["data"].get("scope") if e["type"] == "Progress" else None)
+             for e in events]
+    assert ("Progress", "reset") in kinds               # 重答前清屏信号
     deltas = "".join(e["data"]["text"] for e in events if e["type"] == "TextDelta")
-    assert deltas == "修正版答案"
+    assert "初版答案" in deltas and "修正版答案" in deltas  # 初版确实显示过，不是被缓冲吞掉
+    # reset 之后的 TextDelta 拼起来 = 最终交付版（清屏后重新打字机输出）
+    ridx = next(i for i, e in enumerate(events)
+                if e["type"] == "Progress" and e["data"].get("scope") == "reset")
+    after = "".join(e["data"]["text"] for e in events[ridx:] if e["type"] == "TextDelta")
+    assert after == "修正版答案"
     msgs = [m.content for m in store.messages(cid)]
-    assert msgs == ["问个问题", "修正版答案"]            # 落库为交付版
+    assert msgs == ["问个问题", "修正版答案"]            # 落库为交付版（不含被清屏的初版）
 
 
-def test_exhausted_retries_degrades_with_warning(make_mock, text_turn):
+def test_exhausted_retries_degrades_keeps_shown_answer(make_mock, text_turn):
+    """降级交付：最后一版已流式显示给用户，保留原样、不在正文前拼 ⚠️ 告示。
+    未过由红色「结果校验未通过」徽章 + verify_trace.degraded 表达，正文不被篡改。"""
     verifier = _StubVerifier([Verdict(ok=False, failed=["grounding"],
                                       critique="缺依据", summary="grounding")])
     client, store = _client(make_mock, [text_turn("可疑答案")],
@@ -243,9 +253,13 @@ def test_exhausted_retries_degrades_with_warning(make_mock, text_turn):
     cid, events = _run_chat(client, h, "问")
 
     assert verifier.calls == 1
-    final = _final(events)
-    assert final.startswith("⚠️") and "可疑答案" in final and "grounding" in final
-    assert store.messages(cid)[-1].content.startswith("⚠️")     # 落库含告示
+    assert _final(events) == "可疑答案"                         # 正文原样，无 ⚠️ 前缀
+    assert store.messages(cid)[-1].content == "可疑答案"        # 落库亦原样（与屏上一致）
+    assert "⚠️" not in _final(events)
+    vt = _verify_trace(store, cid)
+    assert vt["degraded"] is True                              # 降级状态仍记录
+    assert any(e["type"] == "Progress" and e["data"]["scope"] == "verify"
+               and e["data"]["status"] == "error" for e in events)   # 红色未通过事件在
 
 
 def test_first_answer_passes_delivers_as_is(make_mock, text_turn):
