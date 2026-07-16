@@ -83,3 +83,23 @@ def test_autotitle_honours_fast_enable_thinking():
     client.post(f"/api/conversations/{cid}/autotitle",
                 json={"message": "你好"}, headers=h)
     assert spy.seen[0].get("enable_thinking") is True
+
+
+def test_question_importer_wired_to_fast_completer(monkeypatch):
+    """导入题目解析须接快速档：它是独立接口、够不着聊天页那个思考开关，
+    不自己表态就一路跟着服务端默认思考（Qwen3 系默认开）。"""
+    import app.main as M
+    sentinel = object()
+    # main.py 在模块顶层 import 了这个名字，故须打桩 app.main 上的绑定
+    # （assembly.py 是在函数体内 import 的，那边打桩 app.completion 才生效）
+    monkeypatch.setattr(M, "build_fast_completer", lambda client, cfg: sentinel)
+    captured = {}
+    real = M.QuestionImporter
+
+    def _spy(complete, store):
+        captured["complete"] = complete
+        return real(complete, store)
+    monkeypatch.setattr(M, "QuestionImporter", _spy)
+
+    _app(_ThinkingSpy())          # create_app 内部装配 question_importer
+    assert captured.get("complete") is sentinel

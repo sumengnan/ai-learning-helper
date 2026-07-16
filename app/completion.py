@@ -88,6 +88,20 @@ def build_judge_completer(client, config):
     return _with_thinking(base, False)
 
 
+def build_check_completer(client, config):
+    """构造交付门事实核对（grounding）用的 completer：主模型 + 关思考。
+
+    留在主模型而非 judge 档：grounding 是拿答案对着检索到的原文核对有无依据，不是自评
+    打分，没有「给自己打高分」的偏差可言，不必占用（可能更贵的）裁判模型。
+    但思考必须跟 judge 一样显式关掉——它同为校验判断题，不需要推理链。
+
+    此前它用的是不带任何覆盖的 build_completer，实际继承了聊天页那个「思考模式」开关
+    （chat.py 在 gen() 里设了 enable_thinking 且从不 reset）——于是同一个 AnswerVerifier
+    里，打分恒关思考、grounding 却跟着用户开关走，两个校验动作行为不一致。
+    """
+    return _with_thinking(build_completer(client, config.model), False)
+
+
 def build_fast_completer(client, config):
     """构造「快速模型」档 completer：配了 fast_model 则起独立 client（可指向独立端点/key），
     否则回退传入的主 client/主模型。供压缩/命名/提炼这类机械活用——当前是 L2 摘要、

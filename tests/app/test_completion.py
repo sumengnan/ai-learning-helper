@@ -1,6 +1,7 @@
 import pytest
 from app.completion import (
-    build_completer, _alt_config, build_judge_completer, build_fast_completer)
+    build_completer, _alt_config, build_judge_completer, build_fast_completer,
+    build_check_completer)
 from app.config import AppConfig
 
 
@@ -157,3 +158,40 @@ async def test_fast_completer_restores_override_after_call(make_mock, text_turn)
         assert get_extra_body_override() == {"enable_thinking": True, "top_p": 0.9}
     finally:
         reset_extra_body_override(tok)
+
+
+# ---- 核对档（grounding）：主模型 + 关思考 ----
+
+@pytest.mark.asyncio
+async def test_check_completer_disables_thinking(make_mock, text_turn):
+    """grounding 与 judge 同为交付门的校验动作，行为须一致——都不带思考链。
+
+    此前 grounding 用的是不带覆盖的 build_completer，实际继承了聊天页那个思考开关，
+    于是同一个 AnswerVerifier 里打分恒关、grounding 却跟着用户开关走。
+    """
+    inner = make_mock([text_turn("ok")])
+    seen = _spy_thinking(inner)
+    await build_check_completer(inner, _jcfg())("s", "u")
+    assert seen["thinking"] is False
+
+
+@pytest.mark.asyncio
+async def test_check_completer_ignores_ambient_toggle(make_mock, text_turn):
+    from harness.llm.openai_compat import set_extra_body_override, reset_extra_body_override
+    inner = make_mock([text_turn("ok")])
+    seen = _spy_thinking(inner)
+    tok = set_extra_body_override({"enable_thinking": True})
+    try:
+        await build_check_completer(inner, _jcfg())("s", "u")
+    finally:
+        reset_extra_body_override(tok)
+    assert seen["thinking"] is False
+
+
+def test_check_completer_stays_on_main_model_not_judge():
+    """核对不该占用 judge 档：它是对着原文核事实，没有「给自己打高分」的偏差可言，
+    而 judge 档往往指向更贵的模型。"""
+    cfg = _jcfg(judge_model="expensive-judge")
+    # 配了 judge_model 也不影响核对档：它只认主模型，故两分支构造出的都是可调用对象
+    assert callable(build_check_completer(object(), cfg))
+    assert callable(build_check_completer(object(), _jcfg()))

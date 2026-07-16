@@ -150,3 +150,47 @@ def test_memory_writer_not_built_when_extract_disabled():
     h = build_harness(_cfg(memory_write_extract=False, enable_browser=False,
                            enable_sandbox=False))
     assert h.memory_writer is None
+
+
+def test_maintainer_and_hyde_wired_to_fast_completer(monkeypatch):
+    """整合蒸馏与查询期召回增强都须接快速档 —— 二者都是机械活。
+
+    接线测试不可省：把 build_fast_completer 换回 build_completer，别处没有任何测试会红。
+    这里把 build_fast_completer 换成哨兵，看它到底有没有被传进去（assembly 是在函数体内
+    import 的，故打桩 app.completion 上的名字即可生效）。
+    """
+    import app.completion as C
+    sentinel = object()
+    monkeypatch.setattr(C, "build_fast_completer", lambda client, cfg: sentinel)
+    h = build_harness(_cfg(enable_browser=False, enable_sandbox=False))
+    assert h.memory_maintainer._complete is sentinel, "整合蒸馏应接快速档"
+    assert h.memory._retriever._complete is sentinel, "HyDE/多查询改写应接快速档"
+
+
+@pytest.mark.asyncio
+async def test_fast_tier_sites_all_declare_thinking_off():
+    """快速档的四个站点（整合/HyDE/导入/提炼）发出的 extra_body 必须显式关思考。
+
+    此前它们什么都不发，由模型服务端默认决定（Qwen3 系默认开思考）——同一份代码换个
+    供应商行为就变，且无从在代码里看出会发生什么。
+    """
+    from harness.llm.base import StreamChunk
+    from harness.llm.openai_compat import get_extra_body_override
+    from app.completion import build_fast_completer, build_completer
+
+    seen = {}
+
+    class _Probe:
+        def __init__(self, tag):
+            self._tag = tag
+
+        async def stream(self, messages, tools):
+            seen[self._tag] = get_extra_body_override().get("enable_thinking", "未声明")
+            yield StreamChunk(type="text", text="x")
+            yield StreamChunk(type="done")
+
+    cfg = _cfg()
+    await build_fast_completer(_Probe("fast"), cfg)("s", "u")
+    await build_completer(_Probe("bare"), cfg.model)("s", "u")
+    assert seen["fast"] is False, "快速档须显式关思考"
+    assert seen["bare"] == "未声明", "主模型裸调仍不声明（对照组：证明上面那条不是白测）"

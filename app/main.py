@@ -24,7 +24,7 @@ from harness.telemetry.tracer import setup_telemetry
 from .assembly import build_harness
 from .attachments import AttachmentStore
 from .auth import AuthService, UserStore
-from .completion import build_completer
+from .completion import build_completer, build_fast_completer
 from .config import AppConfig, load_env_file
 from .conversations import ConversationStore
 from .db import migrate, open_db
@@ -97,8 +97,10 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
                                    retrieve_k=config.quiz_retrieve_k,
                                    short_pass_score=config.short_pass_score)
     if question_importer is None:
+        # 走快速档：把粘贴/上传的文本解析成题目，是纯抽取，与记忆写入的 _extract 同形。
+        # 它是独立接口、够不着聊天页那个思考开关，不自己表态就一路跟着服务端默认思考。
         question_importer = QuestionImporter(
-            build_completer(harness.client, config.model), question_store)
+            build_fast_completer(harness.client, config), question_store)
 
     user_store = user_store if user_store is not None else UserStore(conn=app_conn)
     secret = os.environ.get("AUTH_SECRET") or config.auth_secret
@@ -115,11 +117,12 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
         expose_headers=["X-Refresh-Token", "X-Run-Id"])
     # 回答交付前校验门（开关开时装配；测试可注入 verifier）：用单发 completer 做
     # grounding/judge，代码块在会话沙箱实跑。
-    from .completion import build_judge_completer
+    from .completion import build_check_completer, build_judge_completer
     if verifier is None and config.enable_answer_gate:
         from .verify import AnswerVerifier
-        # judge 用独立 completer（可指向独立端点/模型），降低自评打高分偏差
-        verifier = AnswerVerifier(build_completer(harness.client, config.model), config,
+        # grounding 用核对档（主模型 + 关思考）、judge 用独立 completer（可指向独立端点/
+        # 模型，降低自评打高分偏差）。两者同为校验动作，都不带思考链。
+        verifier = AnswerVerifier(build_check_completer(harness.client, config), config,
                                   judge_complete=build_judge_completer(harness.client, config))
     # 轨迹 judge（交付前一次性回看整轨迹分层打分）：与 answer gate 独立，可单独开
     trajectory_judge = None

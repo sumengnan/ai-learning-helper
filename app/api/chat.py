@@ -17,7 +17,7 @@ from harness.approval import reset_context, resolve, set_context
 from harness.events import (
     ModelUsage, Progress, ReasoningDelta, RunError, RunFinished, TextDelta,
     ToolFinished, ToolStarted)
-from harness.llm.openai_compat import set_extra_body_override
+from harness.llm.openai_compat import reset_extra_body_override, set_extra_body_override
 from harness.loop.agent_loop import AgentLoop
 from harness.persistence.serialize import event_to_dict
 from harness.progress import reset_emitter, set_emitter
@@ -512,6 +512,10 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 atoken = set_context(run_id=run_id_a, timeout=config.sandbox_approval_timeout)
                 stoken = set_sandbox_conv(req.conversation_id)
                 ptoken = set_plan_clock()   # 本轮步骤计时表；重答的每次尝试各自重新计时
+                # 思考模式（按请求）：只包住主循环——聊天页那个开关的语义是「我这个问题不用
+                # 想那么久」，管的是回答用户的那些调用，而不是交付门校验、记忆调和、记忆整合
+                # 这些旁路。此前它设在 gen() 里且从不 reset，那些旁路全都悄悄继承了它。
+                btoken = set_extra_body_override({"enable_thinking": req.think})
                 try:
                     # 本轮附件播种进会话沙箱 /workspace/uploads/，供模型直接执行（写盘≠给模型）
                     if attachment_metas and harness.sandbox is not None:
@@ -530,6 +534,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 except Exception as e:  # 兜底成 RunError，避免流卡死
                     queue.put_nowait(RunError(error=str(e)))
                 finally:
+                    reset_extra_body_override(btoken)
                     reset_plan_clock(ptoken)
                     reset_sandbox_conv(stoken)
                     reset_context(atoken)
@@ -596,8 +601,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             turn_start = time.time()     # 本轮墙钟起点，用于落库耗时（刷新后仍可展示）
             # 关联 id：本轮（后台任务）内每条日志都带 conv/run，便于把一次请求串起来看
             set_log_context(conv_id=req.conversation_id, run_id=turn_run_id)
-            # 思考模式（按请求）：透传 enable_thinking 给 LLM 客户端；仅作用于本轮任务的模型调用
-            set_extra_body_override({"enable_thinking": req.think})
+            # 思考模式按请求透传，但设在 pump() 里、只包主循环（见那里的注释）：设在此处会
+            # 一路漏给交付门校验、记忆调和、记忆整合——它们与「我这个问题不用想那么久」无关。
             log.info("聊天开始 msg=%d字 附件=%d 交付门=%s 思考=%s",
                      len(req.message or ""), len(attachment_metas), gate_on, req.think)
             question = req.message
