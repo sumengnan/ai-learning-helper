@@ -214,8 +214,19 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
 
   // 把一个 SSE 事件应用到最后一条（助手）消息上；RunError 时调 markError。
   const applyEvent = (e: any, markError: () => void) => {
-    if (e.type === "TextDelta") upd((a) => { a.content += e.data.text; });
-    else if (e.type === "ReasoningDelta") upd((a) => { a.reasoning = (a.reasoning || "") + e.data.text; });
+    if (e.type === "TextDelta") upd((a) => {
+      // 正文首字到达 = 思考结束，冻结思考耗时（起点优先用首个 reasoning 时刻，
+      // 接回/刷新场景无该时刻则回退到本轮起点 startedAt）
+      if (!a.content && a.reasoning && a.reasoningMs == null) {
+        const base = a.reasoningStartedAt ?? a.startedAt;
+        if (base != null) a.reasoningMs = Date.now() - base;
+      }
+      a.content += e.data.text;
+    });
+    else if (e.type === "ReasoningDelta") upd((a) => {
+      if (a.reasoningStartedAt == null) a.reasoningStartedAt = Date.now();
+      a.reasoning = (a.reasoning || "") + e.data.text;
+    });
     else if (e.type === "ToolStarted") upd((a) => a.steps!.push({ tool: e.data.tool_call.name, args: e.data.tool_call.arguments }));
     else if (e.type === "ToolFinished") upd((a) => {
       const s = a.steps![a.steps!.length - 1];
@@ -326,6 +337,11 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
           a.status = status;
         }
         if (a.startedAt != null && a.elapsedMs == null) a.elapsedMs = Date.now() - a.startedAt;
+        // 纯思考无正文（思考完直接结束）时正文分支没机会冻结，这里兜底
+        if (a.reasoning && a.reasoningMs == null) {
+          const base = a.reasoningStartedAt ?? a.startedAt;
+          if (base != null) a.reasoningMs = Date.now() - base;
+        }
       });
     }
   }
@@ -400,6 +416,11 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
           a.status = status;
         }
         if (a.startedAt != null && a.elapsedMs == null) a.elapsedMs = Date.now() - a.startedAt;
+        // 纯思考无正文（思考完直接结束）时正文分支没机会冻结，这里兜底
+        if (a.reasoning && a.reasoningMs == null) {
+          const base = a.reasoningStartedAt ?? a.startedAt;
+          if (base != null) a.reasoningMs = Date.now() - base;
+        }
       });
     }
   }
@@ -451,10 +472,15 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                 </Box>
               )}
               {/* 思考过程：置于最顶（工具调用等过程块之上），先于正文展示推理内容 */}
-              {m.role === "assistant" && m.reasoning && (
-                <ThinkingBlock reasoning={m.reasoning}
-                  live={busy && i === messages.length - 1 && m.status === "streaming"} />
-              )}
+              {m.role === "assistant" && m.reasoning && (() => {
+                const streamingLast = busy && i === messages.length - 1 && m.status === "streaming";
+                // 思考进行中 = 本轮仍在流式 且 正文尚未开始（首字一到即视为思考结束）
+                const thinking = streamingLast && !m.content;
+                return (
+                  <ThinkingBlock reasoning={m.reasoning} thinking={thinking}
+                    startedAt={m.reasoningStartedAt ?? m.startedAt} elapsedMs={m.reasoningMs} />
+                );
+              })()}
               {m.role === "assistant" && m.progress && (() => {
                 const planItems = m.progress.filter((p) => p.scope === "plan");
                 const plan = planItems[planItems.length - 1];

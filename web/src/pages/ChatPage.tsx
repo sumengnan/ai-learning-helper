@@ -49,6 +49,7 @@ export function ChatPage() {
       usage: m.tokens != null ? { tokens: m.tokens, cost: m.cost ?? null } : undefined,
       elapsedMs: m.elapsed_ms ?? undefined,
       reasoning: m.reasoning ?? undefined,   // 刷新后还原思考过程
+      reasoningMs: m.reasoning_ms ?? undefined,   // 刷新后还原思考耗时
     })));
     setActiveId(id);
   }

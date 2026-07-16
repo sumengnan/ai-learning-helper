@@ -586,6 +586,11 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     queue.put_nowait(sentinel)
 
             task = asyncio.create_task(pump())
+            # 思考计时：从首个 reasoning token 到其后首个正文 token 的墙钟（monotonic，不受
+            # 系统调时影响）。带工具的思考会分多段产出 reasoning，各段累加。仅供思考块顶部显示，
+            # 与整轮 elapsed 无关。
+            reason_t0: float | None = None
+            reason_ms = 0.0
             try:
                 while True:
                     ev = await queue.get()
@@ -593,6 +598,11 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         break
                     if isinstance(ev, RunFinished):
                         collect["final"] = ev.message.content
+                        if reason_t0 is not None:   # 思考到底、无正文（纯推理答复）→ 收尾计时
+                            reason_ms += (time.monotonic() - reason_t0) * 1000
+                            reason_t0 = None
+                        if reason_ms > 0:
+                            collect["reasoning_ms"] = int(reason_ms)
                     elif isinstance(ev, RunError):
                         collect["error"] = ev.error
                     elif isinstance(ev, ToolStarted):
@@ -619,6 +629,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     elif isinstance(ev, ReasoningDelta):
                         # 累积思考过程供落库，刷新后仍能还原（前端仍实时收到该事件流式展示）
                         collect["reasoning"] = collect.get("reasoning", "") + ev.text
+                        if reason_t0 is None:       # 本段思考起点
+                            reason_t0 = time.monotonic()
+                    elif isinstance(ev, TextDelta) and reason_t0 is not None:
+                        # 正文开始 → 本段思考结束，落定这一段耗时
+                        reason_ms += (time.monotonic() - reason_t0) * 1000
+                        reason_t0 = None
                     elif isinstance(ev, ModelUsage):
                         # 记录用量供落库（与前端一致取最新一次的 total/cost），刷新后仍可展示
                         collect["usage"] = {"tokens": ev.usage.total_tokens, "cost": ev.cost_usd}
@@ -938,6 +954,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                   status=status, sources=delivered_sources or None,
                                   tokens=_usage.get("tokens"), cost=_usage.get("cost"),
                                   elapsed_ms=_elapsed, reasoning=collect.get("reasoning") or None,
+                                  reasoning_ms=collect.get("reasoning_ms"),
                                   verify=verify_trace,
                                   context={**ctx_trace, "plan": plan_trace} if plan_trace
                                   else (ctx_trace or None))

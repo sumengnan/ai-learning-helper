@@ -18,7 +18,7 @@ _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS conversation_messages(
          conv_id TEXT, seq INTEGER, role TEXT, content TEXT, tool_calls TEXT,
          tool_call_id TEXT, steps TEXT, progress TEXT, sources TEXT, verify TEXT,
-         context TEXT, created_at TEXT,
+         context TEXT, reasoning_ms INTEGER, created_at TEXT,
          PRIMARY KEY(conv_id, seq))""",
     # content_hash：正文的 sha256，用于「同一用户重复导入同一内容」的去重（见 KnowledgeService.ingest）。
     # 存的是**解析后正文**的 hash 而非原始字节：同一份内容存成 .txt 与 .md 上传两次，
@@ -73,7 +73,10 @@ _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
     "conversation_messages": {"steps": "TEXT", "progress": "TEXT", "attachments": "TEXT",
                               "run_id": "TEXT", "status": "TEXT", "sources": "TEXT",
                               "tokens": "INTEGER", "cost": "REAL", "elapsed_ms": "INTEGER",
-                              "reasoning": "TEXT", "verify": "TEXT", "context": "TEXT"},
+                              "reasoning": "TEXT", "verify": "TEXT", "context": "TEXT",
+                              # 思考模式下的思考耗时（毫秒）：首个 reasoning token 到首个正文
+                              # token 的墙钟，供思考块顶部显示「思考 N 秒」，刷新后仍在
+                              "reasoning_ms": "INTEGER"},
     # content_hash 对旧库为 NULL：老文档不参与去重（不去回算 hash，正文已不在库里），
     # 只有新导入的才互相比对。这是有意的向后兼容，不是遗漏。
     "documents": {"user_id": "TEXT", "excerpt": "TEXT", "content_hash": "TEXT"},
