@@ -13,10 +13,12 @@ _SCHEMA = (
     # verify：交付门结构化判定轨迹（JSON）。progress 列存的是渲染用中文文案，
     # 统计「哪层失败率高/平均重答几次」需要未拍扁的 failed[]/hard_failed[]/attempts，故单列。
     # 每条 history 带 run_id，可据此去 harness 库 trajectory_events 捞出该次被否的草稿原文。
+    # context 列：本轮上下文组装的结构化结果（L1 挤出多少 / L2 摘要成没成 / L3 检索成没成）。
+    # 与 verify 列同性质——都是「模型看不见、用户看不见，但出了事必须查得到」的服务端判定。
     """CREATE TABLE IF NOT EXISTS conversation_messages(
          conv_id TEXT, seq INTEGER, role TEXT, content TEXT, tool_calls TEXT,
          tool_call_id TEXT, steps TEXT, progress TEXT, sources TEXT, verify TEXT,
-         created_at TEXT,
+         context TEXT, created_at TEXT,
          PRIMARY KEY(conv_id, seq))""",
     """CREATE TABLE IF NOT EXISTS documents(
          id TEXT PRIMARY KEY, user_id TEXT, filename TEXT, size INTEGER, num_chunks INTEGER,
@@ -68,7 +70,7 @@ _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
     "conversation_messages": {"steps": "TEXT", "progress": "TEXT", "attachments": "TEXT",
                               "run_id": "TEXT", "status": "TEXT", "sources": "TEXT",
                               "tokens": "INTEGER", "cost": "REAL", "elapsed_ms": "INTEGER",
-                              "reasoning": "TEXT", "verify": "TEXT"},
+                              "reasoning": "TEXT", "verify": "TEXT", "context": "TEXT"},
     "documents": {"user_id": "TEXT", "excerpt": "TEXT"},
     "questions": {"user_id": "TEXT"},
     "wrong_answers": {"user_id": "TEXT"},

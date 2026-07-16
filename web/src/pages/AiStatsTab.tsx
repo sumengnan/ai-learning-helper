@@ -16,6 +16,7 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
   const cur = ops.totals.cost_currency || "¥";
   const q = ops.quality;
   const gate = ops.gate;
+  const ctx = ops.context;
   const scoreColor = (s: number) => (s >= 80 ? theme.palette.success.main
     : s >= 60 ? theme.palette.warning.main : theme.palette.error.main);
   const layerMax = Math.max(1, ...gate.layer_failures.map((l) => l.count));
@@ -145,6 +146,34 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
             </Card>
           </Box>
       </>
+
+      {/* 上下文健康度：与「回答质量」分开成节 —— 那节讲「答得好不好」，这节讲「答的时候
+          还记不记得住」。二者是不同的失败面：上下文丢了，答案照样能拿高分（judge 只看当轮）。
+          仅 layered 策略产出，默认 full，故常态全 0 —— 与本页其它块一致：照常出 tiles、值为 0，
+          不换成一段说明文案。 */}
+      <Eyebrow note={rangeLabel(days)}>上下文健康度</Eyebrow>
+      <Box sx={{ display: "grid", gap: 1.75, mb: 1.75,
+        gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4,1fr)" } }}>
+        {/* 头号指标：不为 0 就得查 —— 那些轮模型丢了一段历史还照着残缺上下文自信作答了。
+            故 >0 一律标红，不设「少量可接受」的黄档：一次失忆就是一次事故。 */}
+        <StatTile label="上下文失忆" value={String(ctx.amnesia_turns)}
+          hint={ctx.amnesia_turns > 0
+            ? "这些轮丢了更早历史，且模型不自知"
+            : ctx.layered_turns === 0 ? "未启用分层上下文（full 策略）" : "摘要均已覆盖挤出的历史"}
+          stripe={ctx.amnesia_turns > 0 ? theme.palette.error.main : theme.palette.success.main} />
+        <StatTile label="分层轮数" value={String(ctx.layered_turns)}
+          hint={`共 ${ctx.turns} 轮有记录 · 其余走 full`}
+          stripe={theme.palette.primary.main} />
+        <StatTile label="L2 摘要" value={ctx.summary_errors ? `${ctx.summary_ok} / ${ctx.summary_ok + ctx.summary_errors}` : String(ctx.summary_ok)}
+          hint={ctx.summary_errors > 0 ? `${ctx.summary_errors} 次失败（含无害的空挤出）` : "成功压缩更早历史的轮数"}
+          stripe={ctx.summary_errors > 0 ? theme.palette.warning.main : theme.palette.success.main} />
+        {/* L3 与 L2 分开摆：检索挂了只是少了「相关片段」这层增益，不等于失忆，
+            混在一起看会把真正要紧的 amnesia 冲淡 */}
+        <StatTile label="挤出历史 / L3 失败"
+          value={`${ctx.evicted_total} / ${ctx.retrieval_errors}`}
+          hint="累计移出 L1 的消息条数 · 语义检索失败轮数"
+          stripe={theme.palette.primary.main} />
+      </Box>
 
       {/* 工具调用 */}
       <Eyebrow>工具调用 &amp; 成功率</Eyebrow>

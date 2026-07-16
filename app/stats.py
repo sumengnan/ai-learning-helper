@@ -141,7 +141,8 @@ class StatsService:
             "ops": self._ops_section(agg, series, self._global_counts(),
                                      self._gate_stats(cutoff.isoformat()),
                                      self._quality_section(
-                                         self._load_progress_rows(cutoff.isoformat()))),
+                                         self._load_progress_rows(cutoff.isoformat())),
+                                     self._context_stats(cutoff.isoformat())),
         }
 
     # ---------- 轨迹聚合 ----------
@@ -497,6 +498,52 @@ class StatsService:
                                for k, v in layers.most_common()],
         }
 
+    def _context_stats(self, cutoff_iso: str) -> dict:
+        """分层上下文统计，读 conversation_messages.context 列。**全局**，与同页其它运维指标同口径。
+
+        最要紧的是 amnesia_turns：被挤出 L1 的历史 >0 但 L2 摘要没成的轮数 —— 那些轮模型是
+        真丢了一段历史，还照着残缺上下文自信作答了。这个数只要不是 0 就得查。
+        它与 summary_errors 不同：摘要失败但本就没挤出东西（evicted=0）无害，不该算进来。
+        """
+        empty = {"turns": 0, "layered_turns": 0, "evicted_total": 0, "amnesia_turns": 0,
+                 "summary_errors": 0, "retrieval_errors": 0, "summary_ok": 0}
+        if self._app is None:
+            return empty
+        try:
+            rows = self._app.execute(
+                "SELECT context FROM conversation_messages"
+                " WHERE context IS NOT NULL AND created_at >= ?",
+                (cutoff_iso,)).fetchall()
+        except sqlite3.Error:
+            return empty
+
+        turns = layered = evicted_total = amnesia = s_err = r_err = s_ok = 0
+        for (raw,) in rows:
+            try:
+                ct = json.loads(raw)
+            except (TypeError, ValueError):
+                continue        # 脏数据不该让整个统计页 500
+            turns += 1
+            if ct.get("strategy") != "layered":
+                continue
+            layered += 1
+            evicted = ct.get("evicted") or 0
+            evicted_total += evicted
+            if ct.get("summary") == "error":
+                s_err += 1
+                if evicted > 0:      # 挤出去的没被摘到 → 这一轮真失忆了
+                    amnesia += 1
+            elif ct.get("summary") == "ok":
+                s_ok += 1
+            if ct.get("retrieval") == "error":
+                r_err += 1
+        if turns == 0:
+            return empty
+        return {"turns": turns, "layered_turns": layered, "evicted_total": evicted_total,
+                # >0 即有回答是在「丢了一段历史且模型不自知」的情况下给出的
+                "amnesia_turns": amnesia,
+                "summary_errors": s_err, "retrieval_errors": r_err, "summary_ok": s_ok}
+
     def _user_conv_ids(self, user_id: str | None) -> list[str]:
         """该用户的全部会话 id（对话记忆按 conv_id 归属，用它做用户隔离）。"""
         if self._app is None or not user_id:
@@ -607,7 +654,7 @@ class StatsService:
             "activity": series,
         }
 
-    def _ops_section(self, agg, series, counts, gate, quality) -> dict:
+    def _ops_section(self, agg, series, counts, gate, quality, context) -> dict:
         # 本区（AI 运行统计）**整片全局、不按用户切**：轨迹库 trajectory_events 本就没有
         # user_id 列切不了，gate/quality 若按用户切就会和同页其它指标对不上。
         # counts 须传 _global_counts() 的产物，别误传 _app_counts()（那是学习主场用的本人口径）。
@@ -640,4 +687,7 @@ class StatsService:
             "gate": gate,
             # 轨迹 judge 的分层质量分（读 progress 列 scope=quality 项）
             "quality": quality,
+            # 分层上下文：L1 挤出多少、L2/L3 成没成（读 conversation_messages.context 列）。
+            # 看 amnesia_turns —— 不为 0 说明有回答是在丢了历史且模型不自知的情况下给出的。
+            "context": context,
         }

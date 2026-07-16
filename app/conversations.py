@@ -134,13 +134,14 @@ class ConversationStore:
                     status: str = "done", sources: list[dict] | None = None,
                     tokens: int | None = None, cost: float | None = None,
                     elapsed_ms: int | None = None, reasoning: str | None = None,
-                    verify: dict | None = None) -> None:
+                    verify: dict | None = None, context: dict | None = None) -> None:
         """一轮结束：按 run_id 把 streaming 占位 assistant UPDATE 为最终内容 + steps/progress/
         sources（参考来源）+ 状态 + 用量（tokens/cost）+ 耗时（elapsed_ms）+ reasoning（思考过程）
-        + verify（交付门结构化判定轨迹，门未开时为 None）——刷新后仍能还原。"""
+        + verify（交付门结构化判定轨迹，门未开时为 None）+ context（上下文组装结果：L1 挤出多少、
+        L2/L3 成没成，full 策略下为 None）——刷新后仍能还原。"""
         self._conn.execute(
             "UPDATE conversation_messages SET content=?, steps=?, progress=?, sources=?, "
-            "status=?, tokens=?, cost=?, elapsed_ms=?, reasoning=?, verify=? "
+            "status=?, tokens=?, cost=?, elapsed_ms=?, reasoning=?, verify=?, context=? "
             "WHERE conv_id=? AND run_id=? AND role='assistant'",
             (content,
              json.dumps(steps, ensure_ascii=False) if steps else None,
@@ -148,6 +149,7 @@ class ConversationStore:
              json.dumps(sources, ensure_ascii=False) if sources else None,
              status, tokens, cost, elapsed_ms, reasoning or None,
              json.dumps(verify, ensure_ascii=False) if verify else None,
+             json.dumps(context, ensure_ascii=False) if context else None,
              conv_id, run_id))
         self._conn.commit()
 

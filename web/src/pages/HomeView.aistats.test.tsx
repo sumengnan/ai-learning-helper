@@ -50,6 +50,10 @@ const OV: StatsOverview = {
         { bucket: "80-89", count: 4 }, { bucket: "90-100", count: 2 },
       ],
     },
+    context: {
+      turns: 20, layered_turns: 15, evicted_total: 42, amnesia_turns: 0,
+      summary_errors: 0, retrieval_errors: 0, summary_ok: 15,
+    },
   },
 };
 
@@ -154,5 +158,47 @@ describe("HomeView · 回答质量", () => {
     renderOps();
     await waitFor(() =>
       expect(screen.getByText("另有 3 轮因校验器故障未真校验")).toBeTruthy());
+  });
+
+  // 上下文健康度：L2 摘要失败此前完全静默，这块就是让它显形的地方
+  it("上下文失忆轮数要显形并标红——那些回答是丢了历史且模型不自知时给出的", async () => {
+    (statsApi.overview as any).mockResolvedValue({
+      ...OV,
+      ops: { ...OV.ops, context: { ...OV.ops.context, amnesia_turns: 2,
+                                   summary_errors: 3, summary_ok: 12 } },
+    });
+    renderOps();
+    await waitFor(() => expect(screen.getByText("上下文健康度")).toBeTruthy());
+    expect(screen.getByText("上下文失忆")).toBeTruthy();
+    expect(screen.getByText("这些轮丢了更早历史，且模型不自知")).toBeTruthy();
+    // L2 失败要能看出「成功/总数」，而非只报一个成功数
+    expect(screen.getByText("12 / 15")).toBeTruthy();
+    expect(screen.getByText("3 次失败（含无害的空挤出）")).toBeTruthy();
+  });
+
+  it("没失忆时不误报：full 策略（未启用分层）与「摘要都覆盖了」要分得开", async () => {
+    (statsApi.overview as any).mockResolvedValue({
+      ...OV,
+      ops: { ...OV.ops, context: { turns: 20, layered_turns: 0, evicted_total: 0,
+                                   amnesia_turns: 0, summary_errors: 0,
+                                   retrieval_errors: 0, summary_ok: 0 } },
+    });
+    renderOps();
+    await waitFor(() =>
+      expect(screen.getByText("未启用分层上下文（full 策略）")).toBeTruthy());
+    expect(screen.queryByText("这些轮丢了更早历史，且模型不自知")).toBeNull();
+  });
+
+  it("L3 检索失败与 L2 失忆分开展示——前者只是少了增益，不该冲淡后者", async () => {
+    (statsApi.overview as any).mockResolvedValue({
+      ...OV,
+      ops: { ...OV.ops, context: { ...OV.ops.context, retrieval_errors: 7,
+                                   evicted_total: 42, amnesia_turns: 0 } },
+    });
+    renderOps();
+    await waitFor(() => expect(screen.getByText("挤出历史 / L3 失败")).toBeTruthy());
+    expect(screen.getByText("42 / 7")).toBeTruthy();
+    // L3 挂了 7 次，但没失忆 → 失忆格仍是 0，不被带跑
+    expect(screen.getByText("摘要均已覆盖挤出的历史")).toBeTruthy();
   });
 });

@@ -27,6 +27,18 @@ export interface QualityStat {
   avg_steps: number | null;
   distribution: StepBucket[];      // 与步数直方图同形状，复用 StepsHistogram 渲染
 }
+/** 分层上下文（L1 窗口 / L2 摘要 / L3 检索）。仅 layered 策略产出，默认 full 故常态为 0。 */
+export interface ContextStat {
+  turns: number;                   // 有上下文记录的轮数（含 full）
+  layered_turns: number;           // 其中走 layered 的轮数（下列指标的分母）
+  evicted_total: number;           // 累计被挤出 L1 的历史条数
+  // 挤出了历史、却没摘要成功的轮数 —— 这些轮模型是真丢了一段历史且不自知。
+  // 不是 summary_errors：没挤出东西时摘要失败无害，拿那个当告警会天天误报。
+  amnesia_turns: number;
+  summary_errors: number;
+  retrieval_errors: number;        // L3 挂了只是少了增益，与失忆不是一回事
+  summary_ok: number;
+}
 
 export interface StatsOverview {
   range_days: number;
@@ -51,10 +63,11 @@ export interface StatsOverview {
     daily: DailyPoint[];
     tools: ToolStat[];
     steps_histogram: StepBucket[];
-    // 注意口径：totals/daily/tools/steps_histogram 是全局的（轨迹库无 user_id），
-    // 而 gate 与 quality 按当前用户隔离
+    // 口径：本区（AI 运行统计）**整片全局、不按用户切** —— 轨迹库无 user_id 本就切不了，
+    // gate/quality/context 若按用户切会和同页其它指标对不上（见 stats.py::_ops_section）。
     gate: GateStat;
     quality: QualityStat;
+    context: ContextStat;
   };
 }
 

@@ -52,7 +52,10 @@ from ..tools.exam_tools import (
     StartExamTool,
 )
 from ..tools.knowledge_tools import SaveToKnowledgeTool
+from ..tools.plan_tool import (
+    FINALIZE_SYSTEM, finalize_user_prompt, merge_finalized, unfinished_steps)
 from ..tools.save_download import SaveDownloadTool
+from ..quiz_service import _strip_fence
 from ..logging_setup import set_log_context
 from ..verify import Verdict, _tool_exec_summary, failed_layers_zh
 
@@ -213,6 +216,40 @@ def _plan_text(progress: list[dict]) -> str:
     return plans[-1] if plans else ""
 
 
+async def _finalize_stale_plan(complete, progress: list[dict], steps: list[dict],
+                               trace: dict) -> Progress | None:
+    """交付前收尾任务清单：清单还留着 pending/running 就补一次定向调用，返回要发的事件。
+
+    为什么在这里、为什么不接进交付门：
+    - 检测是纯确定性的（unfinished_steps 只解析文本），零成本，故无条件先跑；
+    - 但**不能**记进 verdict.failed —— 那会触发整轮重答（重跑检索、重新生成文件），
+      为一个纯记账问题付整轮成本。实测那种轮次的答案本身是好的（judge 打 95 分）。
+      所以只花一次小调用让模型把清单收尾，答案一个字不动。
+    - 也不能由服务端替它标 done：「第3步做没做」工具轨迹里推不出来（save_download 对应
+      哪一条是语义匹配）。只能问模型，但问的时机由服务端确定性地掐——这就是「不靠自觉」。
+    """
+    plan_text = _plan_text(progress)
+    left = unfinished_steps(plan_text)
+    trace["stale"] = bool(left)
+    if not left:
+        return None
+    trace["unfinished"] = len(left)
+    try:
+        raw = await complete(FINALIZE_SYSTEM,
+                             finalize_user_prompt(plan_text, _tool_exec_summary(steps)))
+        merged = merge_finalized(plan_text, json.loads(_strip_fence(raw)))
+    except Exception as e:   # noqa: BLE001
+        log.warning("清单收尾调用失败，保留原样（前端会如实标『状态未知』）：%s", e)
+        trace["finalize_error"] = f"{type(e).__name__}: {e}"[:200]
+        return None
+    if merged is None:       # 模型改了标题/条数/没给终态 → 驳回，宁可不收尾也不显示错清单
+        log.warning("清单收尾结果不可信（条数/标题/状态不合规），保留原样")
+        trace["finalize_error"] = "rejected"
+        return None
+    trace["finalized"] = True
+    return Progress(scope="plan", text=json.dumps(merged, ensure_ascii=False), key="plan")
+
+
 def make_chat_router(harness, store, config, question_store=None, wrong_store=None,
                      verifier=None, attachment_store=None, run_manager=None,
                      knowledge_service=None, quiz_service=None,
@@ -222,6 +259,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
     # 简答题判分用 judge completer（考试判分中间件用；客观题不需要模型）
     from ..completion import build_judge_completer
     _exam_judge = build_judge_completer(harness.client, config)
+    # 清单收尾用 judge completer：活很简单（照工具摘要把 4 条填终态），但每次都要在
+    # 交付前串行跑一次，所以用便宜/快的那个端点；未配 judge_model 时自动回退主模型。
+    _plan_finalizer = build_judge_completer(harness.client, config)
     # 断点续传：一轮生成跑成脱离请求的后台任务，事件走 RunManager 内存总线（见 app/run_manager.py）。
     # 未注入时退化为每路由独立实例（测试/无续传场景），行为仍正确、只是跨请求接不上。
     if run_manager is None:
@@ -349,12 +389,16 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         # read_attachment 根本没注册（见 _build_registry），此时还介绍它们的用法，等于
         # 告诉模型一批它没有的工具——比浪费 token 更糟。
         attachment_guide = ATTACHMENT_GUIDE if has_attachments else ""
+        # 清单收尾结果 → 并进 context 列，供统计「模型多久不收一次尾 / 补救成没成」
+        plan_trace: dict = {}
+        ctx_trace: dict = {}      # 上下文组装结果 → finish_turn 落 context 列，供 stats 统计
         base_ctx = await _assembler.build_manager(
             harness.system_prompt + profile_block + EXAM_GUIDE + attachment_guide
             + SOURCE_GUIDE + _today_guide(),
-            history, req.message, req.conversation_id)
-        log.info("上下文组装 conv=%s 历史%d条 耗时%dms",
-                 req.conversation_id, len(history), round((time.time() - _ctx_t0) * 1000))
+            history, req.message, req.conversation_id, trace=ctx_trace)
+        log.info("上下文组装 conv=%s 历史%d条 耗时%dms %s",
+                 req.conversation_id, len(history), round((time.time() - _ctx_t0) * 1000),
+                 ctx_trace)
 
         def _new_loop(run_id_a: str) -> AgentLoop:
             ctx = base_ctx
@@ -717,6 +761,19 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         yield _acc(TextDelta(text=chunk))
                     yield RunFinished(message=Message(role=Role.ASSISTANT, content=delivered))
 
+                # 清单收尾：交付门开与不开两条路径都会漏，故放在二者汇合处。仅当模型真的
+                # 没把清单更新完才会花那一次调用（实测约 1/6 的多步任务会）。答案已定稿，
+                # 这里只动清单。errored 时不补：运行都没跑完，那些步骤本就该显示为未完成。
+                if not errored:
+                    _plan_ev = await _finalize_stale_plan(
+                        _plan_finalizer, progress, steps, plan_trace)
+                    if _plan_ev is not None:
+                        # 与 update_plan 同 key → 前端同键覆盖；同时写进 progress 列，
+                        # 否则刷新后又退回那份没收尾的（progress 才是刷新后的唯一依据）
+                        progress.append({"scope": _plan_ev.scope, "text": _plan_ev.text,
+                                         "status": _plan_ev.status, "key": _plan_ev.key,
+                                         "agent": _plan_ev.agent})
+                        yield _plan_ev
                 # 正常完成：先把来源推给在途客户端，再 UPDATE 占位消息为最终态
                 if delivered_sources:
                     yield _emit_sources(delivered_sources)
@@ -729,7 +786,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                   status=status, sources=delivered_sources or None,
                                   tokens=_usage.get("tokens"), cost=_usage.get("cost"),
                                   elapsed_ms=_elapsed, reasoning=collect.get("reasoning") or None,
-                                  verify=verify_trace)
+                                  verify=verify_trace,
+                                  context={**ctx_trace, "plan": plan_trace} if plan_trace
+                                  else (ctx_trace or None))
                 log.info("聊天完成 status=%s 耗时%dms tokens=%s 工具%d次 来源%d条 重答%s次",
                          status, _elapsed, _usage.get("tokens"), len(steps),
                          len(delivered_sources),
@@ -749,7 +808,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     delivered or "".join(parts) or "（已停止）",
                     steps=steps or None, progress=progress or None, status="stopped",
                     elapsed_ms=round((time.time() - turn_start) * 1000),
-                    verify=verify_trace)   # 中断时保留已发生的重答记录
+                    verify=verify_trace,   # 中断时保留已发生的重答记录
+                    context=ctx_trace or None)
                 raise
             except Exception as e:  # noqa: BLE001  意外异常也要把占位落成 error，别永远 streaming
                 store.finish_turn(
@@ -757,7 +817,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     delivered or "".join(parts) or "（本轮未能完成，请重试）",
                     steps=steps or None, progress=progress or None, status="error",
                     elapsed_ms=round((time.time() - turn_start) * 1000),
-                    verify=verify_trace)   # 出错时保留已发生的重答记录
+                    verify=verify_trace,   # 出错时保留已发生的重答记录
+                    context=ctx_trace or None)
                 yield RunError(error=str(e))
 
         turn_run_id = uuid4().hex

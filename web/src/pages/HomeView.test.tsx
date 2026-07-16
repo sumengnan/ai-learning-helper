@@ -50,6 +50,10 @@ const OV: StatsOverview = {
         { bucket: "80-89", count: 0 }, { bucket: "90-100", count: 0 },
       ],
     },
+    context: {
+      turns: 0, layered_turns: 0, evicted_total: 0, amnesia_turns: 0,
+      summary_errors: 0, retrieval_errors: 0, summary_ok: 0,
+    },
   },
 };
 

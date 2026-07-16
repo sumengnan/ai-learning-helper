@@ -174,21 +174,94 @@ async def test_layered_preserves_tool_pairing_with_blocks():
     assert count_message_tokens(built, "gpt-4o-mini") <= cfg.context_window_tokens
 
 
-async def test_layered_summary_failure_degrades_gracefully():
+class _Boom:
+    def __init__(self):
+        self.calls = 0
+
+    async def ensure(self, conv_id, evicted):
+        self.calls += 1
+        raise RuntimeError("LLM 挂了")
+
+
+def _layered_cfg():
     cfg = _Cfg()
     cfg.context_strategy = "layered"
-    cfg.context_working_ratio = 0.0
+    cfg.context_working_ratio = 0.0      # L1 额度归零 → 全部历史被挤出
     cfg.context_enable_retrieval = False
+    return cfg
 
-    class _Boom:
-        async def ensure(self, conv_id, evicted):
-            raise RuntimeError("LLM 挂了")
 
-    hist = _turn("轮1", "答1")
-    asm = ContextAssembler(cfg, "gpt-4o-mini", summarizer=_Boom())
+async def test_layered_summary_failure_degrades_gracefully():
+    # 必须 ≥2 轮：WindowStrategy 恒保留最后一个完整轮（chosen=starts[-1]，无视预算），
+    # 只给一轮则 evicted 为空、摘要器根本不会被调用，这个测试就成了空转。
+    boom = _Boom()
+    hist = _turn("轮1", "答1") + _turn("轮2", "答2")
+    asm = ContextAssembler(_layered_cfg(), "gpt-4o-mini", summarizer=boom)
     mgr = await asm.build_manager("s", hist, "q", "c1")   # 不抛异常
     built = mgr.build(RunState(run_id="r"))
     assert built[0].role == Role.SYSTEM
+    assert boom.calls == 1, "摘要器没被调到 → 这个测试没在测降级"
+
+
+# ---- L2/L3 失败的可观测性：降级可以，无声不行 ----
+
+async def test_summary_failure_is_logged_and_traced(caplog):
+    """摘要失败时模型是真丢了历史且不自知 —— 必须留下痕迹，否则事后无从得知。"""
+    hist = _turn("轮1", "答1") + _turn("轮2", "答2")
+    trace: dict = {}
+    with caplog.at_level("WARNING", logger="app.context"):
+        await ContextAssembler(_layered_cfg(), "gpt-4o-mini", summarizer=_Boom()
+                               ).build_manager("s", hist, "q", "c1", trace=trace)
+    assert "L2 摘要失败" in caplog.text
+    assert "LLM 挂了" in caplog.text          # 原因要在日志里，不能只说「失败了」
+    assert trace["summary"] == "error"
+    assert "RuntimeError" in trace["summary_error"]
+    assert trace["evicted"] > 0               # 丢了多少条要记下 —— 这是危害度
+
+
+async def test_trace_records_success_path():
+    class _Ok:
+        async def ensure(self, conv_id, evicted):
+            return "摘要正文"
+
+    trace: dict = {}
+    await ContextAssembler(_layered_cfg(), "gpt-4o-mini", summarizer=_Ok()
+                           ).build_manager("s", _turn("轮1", "答1") + _turn("轮2", "答2"),
+                                           "q", "c1", trace=trace)
+    assert trace["summary"] == "ok"
+    assert "summary_error" not in trace
+
+
+async def test_full_strategy_traces_strategy_only():
+    """full 策略下没有 L1/L2/L3 之分，不该假装有 evicted/summary 指标。"""
+    trace: dict = {}
+    await ContextAssembler(_Cfg(), "gpt-4o-mini").build_manager(
+        "s", _turn("a", "b"), "q", "c1", trace=trace)
+    assert trace == {"strategy": "full"}
+
+
+async def test_summary_disabled_is_off_not_error():
+    """开关关掉是有意为之，不能和「该摘却摘挂了」混为一谈 —— 后者要人来查。"""
+    cfg = _layered_cfg()
+    cfg.context_enable_summary = False
+    trace: dict = {}
+    await ContextAssembler(cfg, "gpt-4o-mini", summarizer=_Boom()).build_manager(
+        "s", _turn("轮1", "答1") + _turn("轮2", "答2"), "q", "c1", trace=trace)
+    assert trace["summary"] == "off"
+
+
+async def test_trace_is_optional_and_per_call():
+    """assembler 由所有并发请求共用，trace 绝不能挂在实例上；不传就该完全无副作用。"""
+    asm = ContextAssembler(_layered_cfg(), "gpt-4o-mini", summarizer=_Boom())
+    two, three = _turn("轮1", "答1") + _turn("轮2", "答2"), _turn("a", "b") * 3
+    await asm.build_manager("s", two, "q", "c1")   # 不传 trace 也不炸
+    t1: dict = {}
+    t2: dict = {}
+    await asm.build_manager("s", two, "q", "c1", trace=t1)
+    await asm.build_manager("s", three, "q", "c2", trace=t2)
+    # 末轮恒保留 → 挤出的是「总数 - 最后一轮」；两次调用互不污染
+    assert t1["evicted"] == 2 and t2["evicted"] == 4
+    assert not hasattr(asm, "trace") and not hasattr(asm, "_trace")
 
 
 # ---- 输入总量的策略上限（分档计价场景）----
