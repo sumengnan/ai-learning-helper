@@ -125,17 +125,15 @@ async def test_fast_completer_disables_thinking_even_when_falling_back_to_main(
     assert seen["thinking"] is False
 
 
-@pytest.mark.asyncio
-async def test_fast_completer_honours_enable_thinking_config(make_mock, text_turn):
-    inner = make_mock([text_turn("摘要")])
-    seen = _spy_thinking(inner)
-    await build_fast_completer(inner, _jcfg(fast_enable_thinking=True))("s", "u")
-    assert seen["thinking"] is True
+def test_fast_tier_has_no_thinking_switch():
+    """快速档不该有思考开关：机械活开思考是自相矛盾的组合，配置项只留给真取舍。
+    留着它就是留一把「把快速档配成慢档」的枪（同 judge 档，也不给开关）。"""
+    assert not hasattr(_jcfg(), "fast_enable_thinking")
 
 
 @pytest.mark.asyncio
-async def test_fast_thinking_config_wins_over_ambient_override(make_mock, text_turn):
-    """外层（聊天页开关）即使开着思考，摘要也按自己的配置走——它本就够不着那个开关。"""
+async def test_fast_completer_ignores_ambient_toggle(make_mock, text_turn):
+    """外层（聊天页开关）即使开着思考，快速档也恒关——它本就够不着那个开关。"""
     from harness.llm.openai_compat import set_extra_body_override, reset_extra_body_override
     inner = make_mock([text_turn("摘要")])
     seen = _spy_thinking(inner)

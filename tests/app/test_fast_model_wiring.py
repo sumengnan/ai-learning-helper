@@ -75,14 +75,23 @@ def test_autotitle_goes_through_fast_completer():
     assert spy.seen[0].get("enable_thinking") is False
 
 
-def test_autotitle_honours_fast_enable_thinking():
+def test_autotitle_thinking_stays_off_under_ambient_toggle():
+    """外层即使开着思考，起标题也恒关——快速档没有开关，也不受环境覆盖影响。
+
+    对照组价值：证明上一条拿到的 False 是快速档显式发的，而不是「碰巧没人设过」。
+    """
+    from harness.llm.openai_compat import set_extra_body_override, reset_extra_body_override
     spy = _ThinkingSpy()
-    client = TestClient(_app(spy, fast_enable_thinking=True))
+    client = TestClient(_app(spy))
     h = _auth(client)
     cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
-    client.post(f"/api/conversations/{cid}/autotitle",
-                json={"message": "你好"}, headers=h)
-    assert spy.seen[0].get("enable_thinking") is True
+    tok = set_extra_body_override({"enable_thinking": True})
+    try:
+        client.post(f"/api/conversations/{cid}/autotitle",
+                    json={"message": "你好"}, headers=h)
+    finally:
+        reset_extra_body_override(tok)
+    assert spy.seen[0].get("enable_thinking") is False
 
 
 def test_question_importer_wired_to_fast_completer(monkeypatch):

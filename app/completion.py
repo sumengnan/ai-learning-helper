@@ -104,12 +104,14 @@ def build_check_completer(client, config):
 
 def build_fast_completer(client, config):
     """构造「快速模型」档 completer：配了 fast_model 则起独立 client（可指向独立端点/key），
-    否则回退传入的主 client/主模型。供压缩/命名/提炼这类机械活用——当前是 L2 摘要、
-    对话自动命名、记忆写入的事实提炼。
+    否则回退传入的主 client/主模型。供压缩/命名/解析这类机械活用——当前是 L2 摘要、
+    对话自动命名、记忆写入的事实提炼、记忆整合蒸馏、HyDE 改写、导入题目解析。
 
-    思考模式由 fast_enable_thinking 决定（默认关）。它必须自己指定：这些都是旁路调用，
-    够不着聊天页那个思考开关（它只作用于本轮任务的模型调用）。
+    思考链恒关（同 judge 档，不给配置）：机械活开思考纯烧 token 与延迟。且必须自己显式
+    关——这些都是旁路调用，够不着聊天页那个思考开关（它只作用于本轮任务的模型调用），
+    不表态就由服务端默认决定。这与「换不换模型」无关：没配 fast_model、回退主模型时
+    同样关，不配独立模型的人也该省下这份开销。
     """
     base = _build_alt_completer(
         client, config, config.fast_model, config.fast_base_url, config.fast_api_key)
-    return _with_thinking(base, bool(config.fast_enable_thinking))
+    return _with_thinking(base, False)
