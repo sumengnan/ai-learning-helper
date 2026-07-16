@@ -322,6 +322,16 @@ def emit_gate_span(tracer, vt: dict, t0_ns: int) -> None:
         sp.end()
 
 
+def _is_retrieval_tool(name: str) -> bool:
+    """该工具是否为「联网检索/抓取外部内容」——其结果与知识库同属模型作答的检索依据。
+    覆盖内置 browse/http_request 与各类 MCP 搜索工具（名字含 search/web，如
+    mcp__websearch__bailian_web_search），故用前缀/关键词而非硬编码具体工具名。"""
+    n = name or ""
+    if n in ("browse", "http_request"):
+        return True
+    return n.startswith("mcp__") and ("search" in n or "web" in n)
+
+
 def _plan_text(progress: list[dict]) -> str:
     """从进度事件里取最后一次任务拆分（scope=plan 的 JSON 文本），供轨迹 judge 回看。"""
     plans = [p["text"] for p in progress if p.get("scope") == "plan"]
@@ -667,7 +677,15 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             if st["tool"] in ("search_memory", "run_python", "run_node", "run_java"):
                                 collect["grounding"].append(
                                     {"tool": st["tool"], "content": ev.result.content,
-                                     "is_error": ev.result.is_error})
+                                     "is_error": ev.result.is_error,
+                                     # 联网检索与知识库同为「检索到的依据」；标 retrieval=True 供
+                                     # grounding 校验一并纳入——否则联网来的事实会被判「不在知识库」。
+                                     "retrieval": st["tool"] == "search_memory"})
+                            elif _is_retrieval_tool(st["tool"]):
+                                # 联网检索/抓取网页：也是模型据以作答的外部依据，纳入 grounding
+                                collect["grounding"].append(
+                                    {"tool": st["tool"], "content": ev.result.content,
+                                     "is_error": ev.result.is_error, "retrieval": True})
                     elif isinstance(ev, ReasoningDelta):
                         # 累积思考过程供落库，刷新后仍能还原（前端仍实时收到该事件流式展示）
                         collect["reasoning"] = collect.get("reasoning", "") + ev.text

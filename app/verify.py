@@ -3,7 +3,7 @@
 
 AnswerVerifier.verify 按配置逐项校验一版候选答案，短路优先低成本项：
   1. format    —— 无 LLM：非空、代码围栏闭合、非空转。【硬门】
-  2. grounding —— LLM：本轮检索到的知识库资料是否逐条支撑答案论断（仅当有检索命中）。【软门】
+  2. grounding —— LLM：本轮检索到的资料（知识库 或 联网检索）是否逐条支撑答案论断（仅当有检索命中）。【软门】
   3. code      —— 在会话沙箱内实跑答案里的代码块（python/node/java），报错即不过。【硬门】
   4. facts     —— 答案中引用的 http(s) 链接是否可达（2xx/3xx）。【软门】
   5. judge     —— 独立 judge 模型 + 挑错视角打分，低于阈值不过。【软门】
@@ -65,7 +65,7 @@ _HARD_CHECKS = frozenset({"format", "code", "empty"})
 
 # 校验层名 → 中文，供前端展示「未通过的是哪一层」
 _LAYER_ZH = {
-    "format": "格式/完整性", "grounding": "知识库依据", "code": "代码可运行",
+    "format": "格式/完整性", "grounding": "检索依据", "code": "代码可运行",
     "judge": "质量评分", "facts": "引用链接", "trajectory": "整体质量", "empty": "未产出答案",
 }
 
@@ -75,8 +75,8 @@ def failed_layers_zh(failed: list[str]) -> str:
     return "、".join(_LAYER_ZH.get(f, f) for f in failed)
 
 GROUNDING_SYSTEM = (
-    "你是事实核查员。给你「知识库检索到的资料」和「待核查回答」。"
-    "只核查回答里【关于主题的客观事实性陈述】是否能被资料支撑。"
+    "你是事实核查员。给你「检索到的资料」（可能来自用户知识库，也可能来自联网检索）和"
+    "「待核查回答」。只核查回答里【关于主题的客观事实性陈述】是否能被资料支撑。"
     "以下内容不属于核查范围，一律不算缺依据、绝不要列入 unsupported："
     "问候语与开场白、收尾语与鼓励的话、给用户的建议/操作提示/下一步指引、"
     "AI 对自己将做或已做什么的说明、常识、以及基于资料的合理推理与分析。"
@@ -115,6 +115,23 @@ _LANG_TOOL = {
     "java": "run_java",
 }
 _NO_HIT = "（未在知识库中检索到相关内容）"
+_GROUNDING_CONTEXT_MAX = 12000     # grounding 核查上下文上限（含知识库+联网），防撑爆核查模型
+
+
+def _dedup_join(passages: list[str]) -> str:
+    """按出现顺序拼接检索片段，去掉完全相同的重复（多次搜索常返回同一条）。"""
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in passages:
+        key = (p or "").strip()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(p)
+    return "\n\n".join(out)
+
+
+def _cap(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit] + "…（检索资料过长已截断）"
 _URL_RE = re.compile(r"https?://[^\s)\]}>\"'，。；、]+")
 _HTTP_STATUS_RE = re.compile(r"HTTP\s+(\d{3})")
 
@@ -242,16 +259,23 @@ class AnswerVerifier:
             if _looks_truncated(ans):
                 return Verdict._make(["format"], ["回答疑似被截断（代码围栏未闭合）"])
 
-        # 2) grounding —— 仅当本轮检索到知识库资料时才判
+        # 2) grounding —— 触发条件仍是「本轮命中了知识库」（不扩大到纯联网轮，避免给大量
+        # 联网问答新增 grounding 噪音）。但核查上下文要把【联网检索的结果也算进去】：否则
+        # 「知识库+联网」混用时，联网来的事实会因不在知识库而被误判缺依据（本次要修的 bug）。
         if cfg.gate_check_grounding:
-            passages = [g["content"] for g in grounding
-                        if g.get("tool") == "search_memory" and not g.get("is_error")
+            def _live(entries):
+                return [g["content"] for g in entries if not g.get("is_error")
                         and g.get("content") and _NO_HIT not in g["content"]]
-            if passages:
-                ok, fb = await self._judge_grounding("\n\n".join(passages), ans)
+            kb = _live([g for g in grounding if g.get("tool") == "search_memory"])
+            web = _live([g for g in grounding
+                         if g.get("retrieval") and g.get("tool") != "search_memory"])
+            if kb:                                    # 有知识库依据才做 grounding
+                # 知识库 + 联网 一并作为核查资料；可能很长，拼接去重后截断
+                context = _cap(_dedup_join(kb + web), _GROUNDING_CONTEXT_MAX)
+                ok, fb = await self._judge_grounding(context, ans)
                 if not ok:
                     failed.append("grounding")
-                    feedbacks.append(fb or "回答存在缺乏知识库依据的论断")
+                    feedbacks.append(fb or "回答存在缺乏检索依据的论断")
 
         # 3) code —— 在会话沙箱内实跑答案里的代码块
         if cfg.gate_check_code and registry is not None:
@@ -277,7 +301,7 @@ class AnswerVerifier:
         return Verdict._make(failed, feedbacks)
 
     async def _judge_grounding(self, context: str, answer: str) -> tuple[bool, str]:
-        user = f"知识库资料：\n{context}\n\n待核查回答：\n{answer}\n\n请逐条判断回答是否都有资料支撑。"
+        user = f"检索资料：\n{context}\n\n待核查回答：\n{answer}\n\n请逐条判断回答是否都有资料支撑。"
         try:
             v = await call_json(self._complete, GROUNDING_SYSTEM, user)
             grounded = bool(v.get("grounded", True))

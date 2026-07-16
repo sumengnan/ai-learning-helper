@@ -66,6 +66,41 @@ async def test_grounding_skipped_when_no_retrieval():
     assert verdict.ok is True and "grounding" not in verdict.failed
 
 
+async def test_grounding_includes_web_retrieval_context():
+    """核心修复：联网检索的结果也是「检索依据」，须一并交给核查模型。
+    否则「知识库+联网」混用时，联网来的事实会因不在知识库而被误判缺依据。"""
+    seen = {}
+
+    async def complete(system, user):
+        if "事实核查" in system:
+            seen["context"] = user            # 记下核查模型实际看到的资料
+            return json.dumps({"grounded": True, "feedback": ""})
+        return json.dumps({"score": 95, "feedback": ""})
+
+    v = AnswerVerifier(complete, _cfg(gate_check_code=False))
+    grounding = [
+        {"tool": "search_memory", "content": "知识库：光合作用发生在叶绿体",
+         "is_error": False, "retrieval": True},
+        {"tool": "mcp__websearch__bailian_web_search",
+         "content": "联网：2026 年 Spring AI 发布 2.0", "is_error": False, "retrieval": True},
+    ]
+    verdict = await v.verify("问", "光合作用在叶绿体；Spring AI 2026 出了 2.0。", grounding, None)
+    assert verdict.ok is True                 # 两条论断各有依据 → 不该判缺依据
+    assert "叶绿体" in seen["context"] and "Spring AI" in seen["context"]  # 两类来源都进了核查上下文
+
+
+async def test_grounding_not_expanded_to_web_only():
+    """纯联网轮（无知识库命中）不触发 grounding —— 刻意不扩大触发面，避免给大量联网
+    问答新增 grounding 噪音。本次只修「知识库+联网混用时联网内容被误判」，不改触发条件。"""
+    complete = _fake_complete({"事实核查": {"grounded": False, "feedback": "不该被调用"},
+                               "质检": {"score": 95, "feedback": ""}})
+    v = AnswerVerifier(complete, _cfg(gate_check_code=False))
+    grounding = [{"tool": "browse", "content": "网页内容：只讲了 A", "is_error": False,
+                  "retrieval": True}]
+    verdict = await v.verify("问", "答案含 B 这条论断。", grounding, None)
+    assert verdict.ok is True and "grounding" not in verdict.failed   # 无知识库锚点 → 跳过
+
+
 async def test_grounding_skipped_on_no_hit_sentinel():
     complete = _fake_complete({"事实核查": {"grounded": False, "feedback": "不该被调用"},
                                "质检": {"score": 95, "feedback": ""}})

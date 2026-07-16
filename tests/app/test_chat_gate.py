@@ -838,3 +838,15 @@ def test_retry_that_redoes_still_purges_the_old_file(make_mock, tool_turn, text_
     steps = [s for m in msgs if m["role"] == "assistant" for s in (m.get("steps") or [])]
     old = steps[0]
     assert "已作废删除" in old["result"] and "〔下载ID:d1〕" not in old["result"]
+
+
+def test_is_retrieval_tool_covers_web_and_mcp_search():
+    """联网检索/抓取类工具须被认作检索依据（喂给 grounding），代码/写库类不算。"""
+    from app.api.chat import _is_retrieval_tool
+    for yes in ("browse", "http_request",
+                "mcp__websearch__bailian_web_search", "mcp__search__foo", "mcp__x__web_lookup"):
+        assert _is_retrieval_tool(yes) is True, yes
+    for no in ("run_python", "run_shell", "save_download", "remember",
+               "sample_questions", "calculator", "search_memory", ""):
+        # 注：search_memory 单独在收集处标 retrieval，不经本谓词
+        assert _is_retrieval_tool(no) is False, no
