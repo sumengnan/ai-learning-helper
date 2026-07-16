@@ -160,7 +160,7 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
             ) : (
               <Stack spacing={0.75}>
                 {learn.recent_downloads.map((d) => {
-                  const canPreview = previewKind(d.content_type) !== "none";
+                  const canPreview = previewKind(d.content_type, d.filename) !== "none";
                   const meta = fileMeta(d.content_type);
                   const hue = meta.color && meta.color !== "default"
                     ? theme.palette[meta.color].main : theme.palette.text.secondary;
