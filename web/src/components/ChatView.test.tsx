@@ -325,6 +325,30 @@ describe("ChatView", () => {
     expect(screen.getByText("校验")).toBeTruthy();
   });
 
+  it("交付门重答：初版流式 → reset 清屏 → 修正版流式，最终只见修正版", async () => {
+    vi.mocked(streamChat).mockImplementationOnce(
+      async (_cid: string, _msg: string, onEvent: (e: any) => void) => {
+        // 初版逐字流给用户
+        onEvent({ type: "TextDelta", data: { text: "初版" } });
+        onEvent({ type: "TextDelta", data: { text: "答案" } });
+        // 未过校验 → 重答：清屏
+        onEvent({ type: "Progress", data: { scope: "verify", text: "重答中…", status: "running" } });
+        onEvent({ type: "Progress", data: { scope: "reset", text: "" } });
+        // 修正版从头流式
+        onEvent({ type: "TextDelta", data: { text: "修正" } });
+        onEvent({ type: "TextDelta", data: { text: "版" } });
+        onEvent({ type: "Progress", data: { scope: "verify", text: "校验通过", status: "ok", key: "k" } });
+        onEvent({ type: "RunFinished", data: {} });
+      });
+    render(<ChatView conversationId="c1" initial={[]} />);
+    fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "hi" } });
+    fireEvent.click(screen.getByText("发送"));
+    // 收尾后气泡只剩修正版：初版被 reset 清掉，不残留
+    await waitFor(() => expect(screen.getByText("修正版")).toBeTruthy());
+    expect(screen.queryByText(/初版答案/)).toBeNull();
+    expect(screen.queryByText(/初版答案修正版/)).toBeNull();   // 没拼接残留
+  });
+
   it("『展示数据来源和引用』开关：默认展示来源，关闭后隐藏（issue 4）", async () => {
     render(
       <MemoryRouter>

@@ -13,7 +13,7 @@ export interface GateStat {
   turns: number;
   retries: number;
   avg_retries: number;
-  degraded: number;          // 用尽重答次数仍不过 → 带 ⚠️ 降级交付
+  degraded: number;          // 用尽重答次数仍不过 → 保留最后一版、红徽章标未通过
   degraded_rate: number;
   first_pass_rate: number;   // 一次就过的比例
   gate_errors: number;       // 校验器自身故障而跳过校验（fail-open）的轮数：这些「通过」并非真通过

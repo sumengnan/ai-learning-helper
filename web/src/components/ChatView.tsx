@@ -268,6 +268,10 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
           : s;
       });
     });
+    // 清屏（scope=reset）：交付门里上一版正文没过校验、要重答，先清空已流式显示的内容，
+    // 让新版从头打字机输出。只清正文，不动 steps/progress/校验历史（那是过程轨迹，另有 purged
+    // 事件处理失效产物）。特判、不入 progress 列。
+    else if (e.type === "Progress" && e.data.scope === "reset") upd((a) => { a.content = ""; });
     else if (e.type === "Progress") upd((a) => { (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text, status: e.data.status, key: e.data.key, agent: e.data.agent }); });
     else if (e.type === "RunStarted") runIdRef.current = e.data.run_id;
     else if (e.type === "ApprovalRequired") setApproval({ approvalId: e.data.approval_id, command: e.data.command, reason: e.data.reason });

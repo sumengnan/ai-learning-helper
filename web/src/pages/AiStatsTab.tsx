@@ -83,7 +83,7 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
             <StatTile label="降级交付" value={String(gate.degraded)}
               hint={gate.gate_errors > 0
                 ? `另有 ${gate.gate_errors} 轮因校验器故障未真校验`
-                : `占 ${fmtPct(gate.degraded_rate)} · 带 ⚠️ 告示交付`}
+                : `占 ${fmtPct(gate.degraded_rate)} · 红徽章标未通过，正文原样交付`}
               stripe={gate.degraded > 0 ? theme.palette.error.main : theme.palette.success.main} />
           </Box>
           <Box sx={{ display: "grid", gap: 1.75, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
