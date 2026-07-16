@@ -121,3 +121,12 @@ class AppConfig(HarnessConfig):
     context_retrieval_top_k: int = 5               # L3 召回条数
     context_enable_summary: bool = True            # layered 下是否启用 L2 摘要
     context_enable_retrieval: bool = True          # layered 下是否启用 L3 检索
+    # L2 摘要专用模型（同 judge_*：空则回退主模型/主端点/主 key）。摘要是把挤出窗口的历史
+    # 压成短文的机械活，用便宜小模型足矣，没必要占用主模型。
+    summary_model: str = ""                        # 独立摘要模型；空则回退主 model
+    summary_base_url: str = ""                     # 摘要独立端点；空则回退主 base_url
+    summary_api_key: str = ""                      # 摘要独立 key；空则回退主 api_key
+    # 摘要是否开思考链。默认 false：压缩历史不需要推理，开着纯烧 token 与延迟（同 judge 的
+    # 取舍）。此前既不发这个参数、也够不着聊天页那个开关（它只作用于本轮任务的模型调用，
+    # 而摘要早在上下文组装阶段就跑完了），实际由模型服务端默认决定——Qwen3 系默认是开的。
+    summary_enable_thinking: bool = False

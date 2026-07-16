@@ -30,7 +30,7 @@ from harness.tools.builtins.memory_search import SearchMemoryTool
 from harness.types import Message, Role
 
 from ..auth import current_user
-from ..completion import build_completer
+from ..completion import build_summary_completer
 from ..context_assembly import ContextAssembler
 from ..conversation_memory import ConversationMemoryService
 from ..profile import render_profile_block
@@ -311,8 +311,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         if getattr(config, "context_enable_summary", True):
             _summarizer = RollingSummarizer(
                 SummaryStore(conn=store._conn),           # 复用 app.db 连接
-                build_completer(harness.client, config.model),
-                model=config.model,
+                build_summary_completer(harness.client, config),
+                # 计数模型须跟着摘要模型走：它决定 max_summary_tokens 按谁的分词器量
+                model=config.summary_model or config.model,
                 max_summary_tokens=config.context_summary_max_tokens)
         if getattr(config, "context_enable_retrieval", True) and \
                 getattr(harness, "memory", None) is not None:
