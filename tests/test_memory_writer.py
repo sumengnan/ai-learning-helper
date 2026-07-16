@@ -1,4 +1,7 @@
 # tests/test_memory_writer.py
+import json
+import logging
+
 from harness.memory.record import MemType
 from harness.memory.record import MemoryFilter, MemoryRecord
 from harness.memory.reranker import NoOpReranker
@@ -243,3 +246,58 @@ async def test_writer_no_ttl_by_default(mock_embedder):
     w = MemoryWriter(backend, emb, retr, comp)
     ids = await w.write("u1", "k", "今天练习了")
     assert backend.get(ids)[0].expires_at == 0
+
+
+# ---- 静默退化必须出声（否则「调和在不在工作」不可观测）----
+
+def test_parse_facts_warns_when_output_not_json(caplog):
+    """解析失败 = 本轮一条记忆都不写，而写入本就 best-effort、调用方看不出区别。"""
+    with caplog.at_level(logging.WARNING, logger="harness.memory.writer"):
+        assert _parse_facts("这不是 JSON") == []
+    assert "记忆提炼" in caplog.text and "不写入任何记忆" in caplog.text
+
+
+def test_parse_facts_warns_when_output_not_a_list(caplog):
+    with caplog.at_level(logging.WARNING, logger="harness.memory.writer"):
+        assert _parse_facts('{"text": "被包成对象了"}') == []
+    assert "不是数组" in caplog.text
+
+
+def test_parse_ops_warns_when_degrading_to_all_add(caplog):
+    """退化为全 ADD = 调和等于没跑：不去重、不消矛盾，记忆库会灌满重复与矛盾。"""
+    facts = [ExtractedFact(text="a", mem_type=MemType.SEMANTIC),
+             ExtractedFact(text="b", mem_type=MemType.SEMANTIC)]
+    with caplog.at_level(logging.WARNING, logger="harness.memory.writer"):
+        ops = _parse_ops("模型今天不想吐 JSON", facts)
+    assert [o.op for o in ops] == ["ADD", "ADD"]          # 行为不变：仍兜底
+    assert "记忆调和" in caplog.text and "不去重、不消矛盾" in caplog.text
+
+
+def test_parse_ops_warns_on_partial_degradation(caplog):
+    """部分退化同样是悄悄漏判：这些事实没经调和就直接进库。"""
+    facts = [ExtractedFact(text="a", mem_type=MemType.SEMANTIC),
+             ExtractedFact(text="b", mem_type=MemType.SEMANTIC)]
+    raw = json.dumps([{"op": "NOOP", "fact_index": 0},      # 只判了第 0 条
+                      {"op": "BOGUS", "fact_index": 1}])    # 无效判定
+    with caplog.at_level(logging.WARNING, logger="harness.memory.writer"):
+        ops = _parse_ops(raw, facts)
+    assert [o.op for o in ops] == ["NOOP", "ADD"]
+    assert "1 项判定无效被跳过" in caplog.text and "1/2 条事实没拿到判定" in caplog.text
+
+
+def test_parse_ops_silent_when_fully_covered(caplog):
+    """全部判到就不该报警——告警要能指示真问题，不能天天喊狼来了。"""
+    facts = [ExtractedFact(text="a", mem_type=MemType.SEMANTIC)]
+    with caplog.at_level(logging.WARNING, logger="harness.memory.writer"):
+        _parse_ops(json.dumps([{"op": "NOOP", "fact_index": 0}]), facts)
+    assert caplog.text == ""
+
+
+def test_parse_failure_logs_no_user_content(caplog):
+    """日志只记数量：raw 是从用户对话里提炼的事实，不该进日志（同 log.info 的既有惯例）。"""
+    secret = "用户的身份证号是 110101199001011234"
+    with caplog.at_level(logging.WARNING, logger="harness.memory.writer"):
+        _parse_facts(secret)
+        _parse_ops(secret, [ExtractedFact(text="x", mem_type=MemType.SEMANTIC)])
+    assert "110101199001011234" not in caplog.text
+    assert str(len(secret)) in caplog.text          # 只报长度
