@@ -712,3 +712,115 @@ def test_retry_prompt_tells_model_to_redo_the_download(make_mock, tool_turn, tex
     assert "save_download" in corrective                # 点名了上一版调过的工具
     assert "7天AI学习计划.md" in corrective              # 点名了具体文件，模型才知道重做什么
     assert "必须重新调用相应工具再存一次" in corrective
+
+
+# ---- 兜底：模型没照重做指令执行时，不能让用户空手 ----
+
+def test_split_stale_fx_purges_only_what_delivered_version_remade():
+    from app.api.chat import _split_stale_fx
+    stale = {"download": ["d1"], "knowledge": ["k1"], "questions": ["q1"]}
+    cur = {"download": ["d2"], "knowledge": [], "questions": []}   # 只重做了下载
+    purge, keep = _split_stale_fx(stale, cur)
+    assert purge == {"download": ["d1"], "knowledge": [], "questions": []}   # 被取代 → 删
+    assert keep == {"download": [], "knowledge": ["k1"], "questions": ["q1"]}  # 没重做 → 留
+
+
+def test_split_stale_fx_purges_all_when_everything_remade():
+    from app.api.chat import _split_stale_fx
+    purge, keep = _split_stale_fx(
+        {"download": ["d1"], "knowledge": [], "questions": []},
+        {"download": ["d2"], "knowledge": [], "questions": []})
+    assert purge["download"] == ["d1"] and not any(keep.values())
+
+
+def test_mark_carried_over_keeps_mark_and_notes_provenance():
+    from app.api.chat import _mark_carried_over
+    steps = [{"tool": "save_download", "result": "已保存：a.md。〔下载ID:d1〕"}]
+    _mark_carried_over(steps, {"download": ["d1"], "knowledge": [], "questions": []})
+    # 标记必须留着：产物还在，下载按钮得能用
+    assert "〔下载ID:d1〕" in steps[0]["result"]
+    assert "未通过校验的那一版生成" in steps[0]["result"]
+
+
+class _StoreSpy:
+    """内存版 download_store 替身：真的 SaveDownloadTool 会被注入进来用它，故接口要对得上。"""
+    def __init__(self) -> None:
+        self.files: dict[str, dict] = {}
+        self.deleted: list[str] = []
+        self._n = 0
+
+    def create(self, _uid, filename, data, content_type) -> dict:
+        self._n += 1
+        did = f"d{self._n}"
+        rec = {"id": did, "filename": filename, "size": len(data),
+               "content_type": content_type}
+        self.files[did] = rec
+        return rec
+
+    def delete(self, _uid, did) -> bool:
+        self.deleted.append(did)
+        return self.files.pop(did, None) is not None
+
+
+def _download_gate_client(turns, verifier, dl_spy):
+    reg = ToolRegistry()          # save_download 由 _build_registry 按 download_store 注入
+    traj = TrajectoryStore(":memory:")
+    harness = Harness(client=turns, registry=reg, checkpoint_store=CheckpointStore(":memory:"),
+                      trajectory_store=traj, sink=TrajectorySink(traj), system_prompt="你是助手")
+    harness.download_store = dl_spy
+    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,
+                    enable_answer_gate=True, answer_gate_max_retries=1)
+    store = ConversationStore(":memory:")
+    app = create_app(config=cfg, harness=harness, store=store,
+                     doc_store=DocumentStore(":memory:"), verifier=verifier)
+    return TestClient(app), store
+
+
+def test_retry_without_redo_keeps_the_file(make_mock, tool_turn, text_turn):
+    """重答没再存文件 → 上一版那个文件必须留下，不能删成两手空空。
+
+    _redo_fx_note 已要求模型重做，但那是提示词、管不住。这是确定性兜底。
+    """
+    spy = _StoreSpy()
+    client, store = _download_gate_client(
+        make_mock([
+            tool_turn("save_download", '{"filename":"计划.md","content":"正文"}', call_id="d1"),
+            text_turn("已保存"),          # 第一版 → 校验不通过
+            text_turn("修正版"),          # 重答：没再调 save_download
+        ]),
+        _StubVerifier([Verdict(ok=False, failed=["judge"], critique="太笼统", summary="judge"),
+                       Verdict(ok=True)]),
+        spy)
+    h = _auth(client)
+    cid, _ = _run_chat(client, h, "帮我制定一份 7 天的 AI 学习计划")
+
+    assert spy.deleted == [], "交付版没重做同类产物 → 旧文件不该被删"
+    msgs = store.ui_messages(cid)
+    steps = [s for m in msgs if m["role"] == "assistant" for s in (m.get("steps") or [])]
+    dl = next(s for s in steps if s["tool"] == "save_download")
+    assert "〔下载ID:d1〕" in dl["result"]              # 按钮仍可用
+    assert "未通过校验的那一版生成" in dl["result"]      # 但已标明出处
+    assert "已作废删除" not in dl["result"]
+
+
+def test_retry_that_redoes_still_purges_the_old_file(make_mock, tool_turn, text_turn):
+    """重答重新存了文件 → 旧的仍须删掉，否则并排两个按钮、点旧的是废文件。"""
+    spy = _StoreSpy()
+    client, store = _download_gate_client(
+        make_mock([
+            tool_turn("save_download", '{"filename":"计划.md","content":"v1"}', call_id="d1"),
+            text_turn("已保存"),
+            tool_turn("save_download", '{"filename":"计划.md","content":"v2"}', call_id="d2"),
+            text_turn("修正版：已重新保存"),
+        ]),
+        _StubVerifier([Verdict(ok=False, failed=["judge"], critique="太笼统", summary="judge"),
+                       Verdict(ok=True)]),
+        spy)
+    h = _auth(client)
+    cid, _ = _run_chat(client, h, "帮我制定一份 7 天的 AI 学习计划")
+
+    assert spy.deleted == ["d1"], "旧版文件应被删（本版已重新产出）"
+    msgs = store.ui_messages(cid)
+    steps = [s for m in msgs if m["role"] == "assistant" for s in (m.get("steps") or [])]
+    old = steps[0]
+    assert "已作废删除" in old["result"] and "〔下载ID:d1〕" not in old["result"]

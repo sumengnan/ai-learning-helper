@@ -223,6 +223,39 @@ def _drop_purged_marks(steps: list[dict], fx: dict[str, list[str]]) -> None:
         s["result"] = r.rstrip() + "\n（该版本未通过校验，此产物已作废删除）"
 
 
+def _split_stale_fx(stale: dict[str, list[str]], cur: dict[str, list[str]]
+                    ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """把未通过轮的产物按类分成「该删的」与「该留的」。
+
+    删：交付的那一版自己产出了同类产物 → 旧的已被它取代，留着就是指向废内容的死按钮。
+    留：交付的那一版一件同类产物都没有 → 这是唯一的一份，删了用户就彻底空手。
+
+    后者是 _redo_fx_note 的确定性兜底：那条纠正指令只是「告诉」模型重做，管不住它照不照
+    做；真没照做时，宁可留下上一版的产物（并在步骤里标明出处），也不能让用户什么都拿不到。
+    """
+    purge = {k: (v if cur.get(k) else []) for k, v in stale.items()}
+    keep = {k: ([] if cur.get(k) else v) for k, v in stale.items()}
+    return purge, keep
+
+
+def _mark_carried_over(steps: list[dict], fx: dict[str, list[str]]) -> None:
+    """给保留下来的上一版产物在步骤结果里标明出处（机读标记留着，下载按钮仍可用）。
+
+    产物出自未通过校验的那一版，而最终答案是另一版写的——不说清楚，用户会默认二者一致。
+    """
+    marks = [f"〔下载ID:{i}〕" for i in fx["download"]]
+    marks += [f"〔知识ID:{i}〕" for i in fx["knowledge"]]
+    if not marks:
+        return
+    for s in steps or []:
+        r = s.get("result") or ""
+        if not any(m in r for m in marks):
+            continue
+        s["result"] = (r.rstrip()
+                       + "\n（此产物由未通过校验的那一版生成；最终回答未重新生成它，"
+                         "已为你保留，请对照最终回答确认后再用）")
+
+
 def emit_gate_span(tracer, vt: dict, t0_ns: int) -> None:
     """把交付门判定补发成一个 answer_gate span（每次尝试一个 verify.attempt event）。
 
@@ -645,6 +678,22 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         _drop_purged_marks(steps, fx)
                         return list(fx["download"])
 
+                    def _settle_stale_fx(stale, cur) -> list[str]:
+                        """交付时结算未通过轮的产物：被本版取代的删掉，本版没重做的留下。
+
+                        返回被删的下载 id（供 _emit_purged 告知在途客户端）。
+                        """
+                        _purge, _keep = _split_stale_fx(stale, cur)
+                        _mark_carried_over(steps, _keep)
+                        if any(_keep.values()):
+                            # 模型没照 _redo_fx_note 的指令重做 —— 提示词管不住的那种情况。
+                            # 兜底已保住产物，但这条日志是唯一能统计其发生频率的地方。
+                            log.warning(
+                                "交付版未重做上一版的副作用产物，已保留旧产物 conv=%s 保留=%s",
+                                req.conversation_id,
+                                {k: len(v) for k, v in _keep.items() if v})
+                        return _purge_side_effects(_purge)
+
                     # 告诉在途客户端「本轮开了校验门」。必须赶在 agent 跑之前发：工具执行
                     # 先于首个「校验中…」，前端要据此在交付前一直不显示生成的文件——未通过会
                     # 重答、届时这些产物被 _purge_side_effects 清掉，提前显示等于给用户一个
@@ -737,8 +786,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             yield _emit_verify("校验通过", status="ok", key=ekey)
                             delivered = draft
                             delivered_sources = source_sink.snapshot()
-                            # 交付本轮，删掉之前失败轮的副作用产物
-                            for _ev in _emit_purged(_purge_side_effects(stale_fx)):
+                            # 交付本轮：只删被本版取代的旧产物，本版没重做的那类予以保留
+                            for _ev in _emit_purged(_settle_stale_fx(stale_fx, cur_fx)):
                                 yield _ev
                             break
                         # error 事件的 text 携带完整原因（critique），供前端展开显示
@@ -755,8 +804,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             if verdict.summary:
                                 delivered = (f"⚠️ 此回答未通过自动校验（{verdict.summary}），"
                                              f"请谨慎参考。\n\n" + delivered)
-                            # 降级交付本轮，清理之前失败轮的副作用产物
-                            for _ev in _emit_purged(_purge_side_effects(stale_fx)):
+                            # 降级交付本轮：同样只删被本版取代的那类旧产物
+                            for _ev in _emit_purged(_settle_stale_fx(stale_fx, cur_fx)):
                                 yield _ev
                             break
                         for _k in stale_fx:   # 本轮未通过、将重答，其副作用产物作废待清理
