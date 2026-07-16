@@ -89,8 +89,12 @@ JUDGE_SYSTEM = (
     "你是严格的答案质检员。评估「回答是否达成用户目标」，综合考量相关性、准确性、完整性、安全性。"
     "重要：若任务主要通过工具执行完成（如已生成/保存/查询/下载成功），简洁的完成确认就是恰当的回答，"
     "不要因为「正文没有展开罗列细节」而扣分——以是否真正达成用户意图为准，成果可能体现在工具执行结果里。"
-    "对话是多轮的：当用户本轮输入无效、残缺或有歧义（如答题时输入了无效选项、指令不清），"
-    "AI 提示重新输入、请求澄清或合理追问都是恰当的对话推进，不能因「本轮没有直接给出最终答案」判为未达成；"
+    "对话是多轮的：给出【最近几轮对话】时，必须结合它来解读用户本轮输入——"
+    "用户本轮往往是在接着往下回应。若近几轮里 AI 给过选项/清单（如「回复 A/B/C/D」「选一个方案」），"
+    "用户回「A」「第二个」「好」「就它」等简短内容就是【明确的选择】，AI 据此直接执行完全正确，"
+    "绝不能判成「输入含义不明」「AI 未澄清就动手」——那是没读上下文的误判。"
+    "只有在【结合最近对话后】用户输入仍然无效/残缺/有歧义时，AI 才应请求澄清；此时 AI 提示重新输入、"
+    "请求澄清或合理追问也是恰当推进，不能因「本轮没有直接给出最终答案」判为未达成；"
     "只有在用户需求明确、AI 却答非所问或无理回避时才算未达成。"
     "只输出 JSON：{\"score\": 0-100 的整数, \"feedback\": \"一句话点评（指出主要问题）\"}，不要多余文字。")
 
@@ -246,7 +250,8 @@ class AnswerVerifier:
         self._config = config
 
     async def verify(self, question: str, answer: str, grounding: list[dict],
-                     registry, steps: list[dict] | None = None) -> Verdict:
+                     registry, steps: list[dict] | None = None,
+                     recent_dialogue: str = "") -> Verdict:
         cfg = self._config
         failed: list[str] = []
         feedbacks: list[str] = []
@@ -293,7 +298,7 @@ class AnswerVerifier:
 
         # 5) judge —— 独立模型 + 挑错视角打分
         if cfg.gate_check_judge:
-            score, fb = await self._judge_score(question, ans, steps)
+            score, fb = await self._judge_score(question, ans, steps, recent_dialogue)
             if score is not None and score < cfg.answer_pass_score:
                 failed.append("judge")
                 feedbacks.append(fb or f"质量评分 {score} 低于阈值 {cfg.answer_pass_score}")
@@ -316,9 +321,15 @@ class AnswerVerifier:
             return True, ""
 
     async def _judge_score(self, question: str, answer: str,
-                           steps: list[dict] | None = None) -> tuple[int | None, str]:
+                           steps: list[dict] | None = None,
+                           recent_dialogue: str = "") -> tuple[int | None, str]:
         tools = _tool_exec_summary(steps)
-        parts = [f"用户问题：{question}"]
+        parts = []
+        if recent_dialogue:
+            # 最近几轮对话是解读用户本轮输入的关键上下文：没有它，"A"/"好"/"第二个"
+            # 这类简短回复会被误判为含义不明，反过来怪 AI 没澄清就动手（真实误判）。
+            parts.append(f"【最近几轮对话（用户本轮在接着往下回应）】：\n{recent_dialogue}")
+        parts.append(f"用户本轮输入：{question}")
         if tools:
             parts.append(f"AI 为完成此任务调用的工具及结果（成果可能在此、而非正文）：\n{tools}")
         parts.append(f"回答：\n{answer}")

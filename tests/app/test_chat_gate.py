@@ -55,17 +55,44 @@ def test_side_effect_ids_tracks_generate_questions_too():
 
 
 class _StubVerifier:
-    """按序返回预设 Verdict；记录调用次数与看到的答案。"""
+    """按序返回预设 Verdict；记录调用次数、看到的答案与 recent_dialogue。"""
     def __init__(self, verdicts):
         self._v = list(verdicts)
         self.calls = 0
         self.seen: list[str] = []
+        self.prev_replies: list[str] = []
 
-    async def verify(self, question, answer, grounding, registry, steps=None):
+    async def verify(self, question, answer, grounding, registry, steps=None, recent_dialogue=""):
         self.seen.append(answer)
+        self.prev_replies.append(recent_dialogue)
         v = self._v[min(self.calls, len(self._v) - 1)]
         self.calls += 1
         return v
+
+
+def test_gate_passes_prev_assistant_turn_to_judge(make_mock, text_turn):
+    """端到端接线：上一轮 AI 给了菜单、用户回「A」，交付门要把上一轮 AI 的话作为
+    recent_dialogue 传给校验器——否则 judge 会把「A」误判为含义不明。"""
+    verifier = _StubVerifier([Verdict(ok=True), Verdict(ok=True)])
+    client, store = _client(make_mock,
+                            [text_turn("请回复 A / B / C 选择方案"), text_turn("按方案 A 执行完毕")],
+                            verifier)
+    h = _auth(client)
+    cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
+    _run_chat_on(client, h, cid, "帮我出个方案")     # 第一轮：AI 摆出菜单
+    _run_chat_on(client, h, cid, "A")                # 第二轮：用户选 A
+
+    # 第二次校验拿到的 recent_dialogue 应是上一轮 AI 的菜单
+    assert "A / B / C" in verifier.prev_replies[-1]
+    # 第一轮无上一轮 AI 话 → recent_dialogue 为空，不硬塞
+    assert verifier.prev_replies[0] == ""
+
+
+def _run_chat_on(client, h, cid, message):
+    with client.stream("POST", "/api/chat",
+                       json={"conversation_id": cid, "message": message}, headers=h) as resp:
+        assert resp.status_code == 200
+        return _events(resp)
 
 
 def _harness(make_mock, turns):
@@ -357,7 +384,7 @@ class _BoomVerifier:
     def __init__(self):
         self.calls = 0
 
-    async def verify(self, question, answer, grounding, registry, steps=None):
+    async def verify(self, question, answer, grounding, registry, steps=None, recent_dialogue=""):
         self.calls += 1
         raise RuntimeError("verifier 内部炸了")
 
@@ -583,7 +610,7 @@ class _CodeRunningVerifier:
     def __init__(self):
         self.ran = False
 
-    async def verify(self, question, answer, grounding, registry, steps=None):
+    async def verify(self, question, answer, grounding, registry, steps=None, recent_dialogue=""):
         tool = registry.get("run_python")
         if tool is not None:
             await tool.run(tool.Params(code="print(6*7)"))
@@ -850,3 +877,55 @@ def test_is_retrieval_tool_covers_web_and_mcp_search():
                "sample_questions", "calculator", "search_memory", ""):
         # 注：search_memory 单独在收集处标 retrieval，不经本谓词
         assert _is_retrieval_tool(no) is False, no
+
+
+def test_recent_dialogue_skips_tool_noise_and_keeps_order():
+    """渲染最近几轮 user/assistant 正文：跳过纯工具调用/工具结果消息，按时间正序。"""
+    from app.api.chat import _recent_dialogue
+    from harness.types import Message, Role, ToolCall
+    hist = [
+        Message(role=Role.USER, content="帮我做个方案"),
+        Message(role=Role.ASSISTANT, tool_calls=[ToolCall(id="c", name="search_memory", arguments={})]),
+        Message(role=Role.TOOL, tool_call_id="c", content="检索结果…"),
+        Message(role=Role.ASSISTANT, content="请回复 A / B / C 选择方案"),
+    ]
+    out = _recent_dialogue(hist)
+    assert "用户：帮我做个方案" in out
+    assert "AI：请回复 A / B / C 选择方案" in out
+    assert "检索结果" not in out                       # 工具噪音不进
+    assert out.index("帮我做个方案") < out.index("A / B / C")  # 时间正序
+
+
+def test_recent_dialogue_covers_clarification_detour():
+    """单轮不够的正是这种：菜单 → 用户先问澄清 → AI 解释 → 用户才回「A」。
+    菜单不在上一条 assistant 里，但仍须落在最近几轮窗口内。"""
+    from app.api.chat import _recent_dialogue
+    from harness.types import Message, Role
+    hist = [
+        Message(role=Role.ASSISTANT, content="请回复 A / B / C 选择方案"),
+        Message(role=Role.USER, content="C 是什么意思？"),
+        Message(role=Role.ASSISTANT, content="C 指的是走缓存方案。"),
+    ]
+    out = _recent_dialogue(hist)
+    assert "A / B / C" in out and "走缓存方案" in out    # 菜单和澄清都在
+
+
+def test_recent_dialogue_bounded_by_msgs_and_chars():
+    from app.api.chat import _recent_dialogue
+    from harness.types import Message, Role
+    hist = [Message(role=Role.USER if i % 2 == 0 else Role.ASSISTANT, content=f"消息{i}")
+            for i in range(20)]
+    out = _recent_dialogue(hist, max_msgs=4)
+    assert out.count("消息") == 4 and "消息19" in out and "消息0" not in out  # 只保留最近 4 条
+    # 字数上限：单条超限时也不会无界增长
+    big = [Message(role=Role.ASSISTANT, content="x" * 5000)]
+    assert len(_recent_dialogue(big, max_chars=2000)) <= 5000 + 10
+
+
+def test_recent_dialogue_empty_and_multimodal():
+    from app.api.chat import _recent_dialogue
+    from harness.types import Message, Role
+    assert _recent_dialogue([]) == "" and _recent_dialogue(None) == ""
+    hist = [Message(role=Role.ASSISTANT,
+                    content=[{"type": "text", "text": "看这两个方案，回 A 或 B"}])]
+    assert "回 A 或 B" in _recent_dialogue(hist)

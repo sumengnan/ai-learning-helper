@@ -118,6 +118,36 @@ async def test_judge_low_score_fails():
     assert verdict.ok is False and "judge" in verdict.failed and "跑题" in verdict.critique
 
 
+async def test_judge_gets_recent_dialogue_for_terse_input():
+    """核心修复：上一轮 AI 给了菜单、用户回「A」，judge 必须拿到上一轮才能把「A」读成
+    选择而非含义不明。验证 recent_dialogue 确实进了 judge 的输入。"""
+    seen = {}
+
+    async def complete(system, user):
+        if "质检" in system:
+            seen["judge_input"] = user
+            return json.dumps({"score": 95, "feedback": ""})
+        return json.dumps({"grounded": True, "feedback": ""})
+
+    v = AnswerVerifier(complete, _cfg(gate_check_code=False))
+    verdict = await v.verify(
+        "A", "好的，正在按方案 A 生成文件……", [], None,
+        recent_dialogue="请回复 A / B / C / D / E + 补充说明，我据此立即执行。")
+    assert verdict.ok is True
+    # 上一轮菜单与本轮输入都进了 judge 的上下文
+    assert "A / B / C / D" in seen["judge_input"]
+    assert "用户本轮输入：A" in seen["judge_input"]
+
+
+async def test_judge_works_without_recent_dialogue():
+    """首轮无上一轮（recent_dialogue 空）时，judge 仍照常打分，不崩、不硬塞空上下文。"""
+    complete = _fake_complete({"事实核查": {"grounded": True, "feedback": ""},
+                               "质检": {"score": 90, "feedback": ""}})
+    v = AnswerVerifier(complete, _cfg(gate_check_code=False))
+    verdict = await v.verify("讲讲光合作用", "光合作用是……", [], None)
+    assert verdict.ok is True
+
+
 class _StubCodeTool:
     """假代码工具：run 成功或按需抛 ToolError。"""
     class Params:

@@ -332,6 +332,45 @@ def _is_retrieval_tool(name: str) -> bool:
     return n.startswith("mcp__") and ("search" in n or "web" in n)
 
 
+def _msg_text(m) -> str:
+    """取消息正文（兼容多模态 content 为 parts 列表的情形）。"""
+    c = m.content
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        return " ".join(p.get("text", "") for p in c if isinstance(p, dict))
+    return ""
+
+
+def _recent_dialogue(history, max_msgs: int = 6, max_chars: int = 2000) -> str:
+    """渲染最近几轮 user/assistant 正文，供 judge 解读用户本轮的简短回复。
+
+    只传上一条 assistant 不够：菜单后可能夹着澄清往返，或用户回应的是几轮前的列表。
+    故取最近若干条对话（跳过纯工具调用/工具结果消息——噪音大且冗长），从最新往回收，
+    到条数或字数上限即止，保证保留最贴近本轮的上下文（列表/菜单通常就在这里）。
+    仍有边界：引用远超窗口的内容、或只出现在工具结果里的选项，judge 未必拿得到——
+    但那已是少数，且模型本身有完整窗口，judge 这里给足最近对话即可覆盖绝大多数。
+    """
+    picked: list[str] = []
+    used = 0
+    for m in reversed(history or []):
+        role = getattr(m.role, "value", m.role)
+        if role not in ("user", "assistant"):
+            continue
+        text = _msg_text(m).strip()
+        if not text:                      # 纯工具调用的 assistant 消息无正文 → 跳过
+            continue
+        line = f"{'用户' if role == 'user' else 'AI'}：{text}"
+        if picked and used + len(line) > max_chars:
+            break
+        picked.append(line)
+        used += len(line)
+        if len(picked) >= max_msgs:
+            break
+    picked.reverse()                      # 收集是倒序，输出按时间正序
+    return "\n".join(picked)
+
+
 def _plan_text(progress: list[dict]) -> str:
     """从进度事件里取最后一次任务拆分（scope=plan 的 JSON 文本），供轨迹 judge 回看。"""
     plans = [p["text"] for p in progress if p.get("scope") == "plan"]
@@ -727,6 +766,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             log.info("聊天开始 msg=%d字 附件=%d 交付门=%s 思考=%s",
                      len(req.message or ""), len(attachment_metas), gate_on, req.think)
             question = req.message
+            # 最近几轮对话：交给 judge 解读本轮简短回复（如「A」是从刚给的菜单里选的）。
+            # 没有它，judge 会把「A」当成含义不明、反过来怪 AI 没澄清就动手（真实误判）。
+            recent_dialogue = _recent_dialogue(history)
             delivered = None
             delivered_sources: list[dict] = []   # 交付那次尝试的权威来源
             errored = False
@@ -906,7 +948,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                 with source_sink.paused():
                                     verdict = await verifier.verify(
                                         question, draft, collect["grounding"], registry,
-                                        steps=collect["steps"])
+                                        steps=collect["steps"], recent_dialogue=recent_dialogue)
                             except Exception as e:   # noqa: BLE001
                                 # 校验器自身故障（非回答质量问题）→ fail-open：跳过校验照常交付。
                                 # 交付门是质量增强，它坏了不该连累用户丢掉一份好答案；且门本就

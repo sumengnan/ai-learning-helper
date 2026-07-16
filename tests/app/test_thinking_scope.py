@@ -47,7 +47,7 @@ class _SpyVerifier:
     def __init__(self) -> None:
         self.thinking_at_verify: list = []
 
-    async def verify(self, question, answer, grounding, registry, steps=None):
+    async def verify(self, question, answer, grounding, registry, steps=None, recent_dialogue=""):
         self.thinking_at_verify.append(get_extra_body_override().get("enable_thinking"))
         return Verdict(ok=True)
 
