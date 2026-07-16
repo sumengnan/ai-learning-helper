@@ -110,7 +110,7 @@ export default function DownloadsView() {
             <AnimatePresence initial={false}>
             {shown.map((d) => {
               const meta = fileMeta(d.content_type);
-              const canPreview = previewKind(d.content_type) !== "none";
+              const canPreview = previewKind(d.content_type, d.filename) !== "none";
               return (
               <motion.div key={d.id} layout variants={listItemVariants}
                 initial="initial" animate="animate" exit="exit">

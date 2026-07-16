@@ -7,6 +7,7 @@ import {
 import CloseIcon from "@mui/icons-material/Close";
 import { api } from "../api/client";
 import { previewKind } from "./downloadsUtils";
+import { Markdown } from "../components/Markdown";
 
 export type PreviewFile = { id: string; filename: string; content_type: string };
 
@@ -18,7 +19,7 @@ export function DownloadPreviewDialog({ file, onClose }: {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const kind = file ? previewKind(file.content_type) : "none";
+  const kind = file ? previewKind(file.content_type, file.filename) : "none";
 
   useEffect(() => {
     if (!file || kind === "none") return;
@@ -28,7 +29,7 @@ export function DownloadPreviewDialog({ file, onClose }: {
     api.downloads.blob(file.id)
       .then(async (blob) => {
         if (cancelled) return;
-        if (kind === "text") {
+        if (kind === "text" || kind === "markdown") {
           setText(await blob.text());
         } else {
           objUrl = URL.createObjectURL(blob);
@@ -56,6 +57,11 @@ export function DownloadPreviewDialog({ file, onClose }: {
         {!loading && !error && kind === "pdf" && url && (
           <Box component="iframe" title={file?.filename} src={url}
             sx={{ width: "100%", height: "70vh", border: 0 }} />
+        )}
+        {!loading && !error && kind === "markdown" && text !== null && (
+          <Box sx={{ maxHeight: "70vh", overflow: "auto", fontSize: 14 }}>
+            <Markdown>{text}</Markdown>
+          </Box>
         )}
         {!loading && !error && kind === "text" && text !== null && (
           <Box component="pre" sx={{

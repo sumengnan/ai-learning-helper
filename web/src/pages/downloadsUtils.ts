@@ -9,14 +9,18 @@ import DescriptionIcon from "@mui/icons-material/Description";
 import FolderZipIcon from "@mui/icons-material/FolderZip";
 import InsertDriveFileIcon from "@mui/icons-material/InsertDriveFile";
 
-export type PreviewKind = "image" | "text" | "pdf" | "none";
+export type PreviewKind = "image" | "text" | "markdown" | "pdf" | "none";
 
-export function previewKind(contentType: string): PreviewKind {
+// filename 可选：.md/.markdown 后缀优先判为 markdown。后端 content_type 由
+// mimetypes.guess_type 猜，各平台对 .md 结果不一（text/markdown、text/plain 甚至 None），
+// 只认 content_type 会漏；而后缀是文件名事实，可靠。
+export function previewKind(contentType: string, filename?: string): PreviewKind {
   const c = (contentType || "").toLowerCase();
   if (c.startsWith("image/")) return "image";
   if (c.includes("pdf")) return "pdf";
+  if (c.includes("markdown") || /\.(md|markdown)$/i.test(filename || "")) return "markdown";
   if (c.startsWith("text/") || c.includes("json") || c.includes("xml")
-      || c.includes("markdown") || c.includes("csv") || c.includes("javascript"))
+      || c.includes("csv") || c.includes("javascript"))
     return "text";
   return "none";
 }
