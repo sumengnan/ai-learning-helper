@@ -126,3 +126,27 @@ def test_update_plan_registered_and_prompt_has_guidance():
     h = build_harness(_cfg())
     assert h.registry.get("update_plan") is not None
     assert "update_plan" in h.system_prompt
+
+
+# ---- 快速模型档的接线 ----
+
+def test_memory_writer_extract_uses_fast_completer_reconcile_stays_main():
+    """提炼走快速档、调和留主模型。
+
+    这是「快速模型」改造在 assembly 侧的全部内容：单测 MemoryWriter 本身管不到接线，
+    把 extract_complete= 那行删掉，那些单测照样全绿。
+
+    调和之所以必须留主模型：它判 REPLACE 就会 set_superseded 永久作废旧记忆，
+    判错不是省钱是毁数据。
+    """
+    h = build_harness(_cfg(memory_write_extract=True, enable_browser=False,
+                           enable_sandbox=False))
+    w = h.memory_writer
+    assert w is not None, "memory_write_extract=true 时应装配 MemoryWriter"
+    assert w._extract_complete is not w._complete, "提炼与调和须是两个不同的 completer"
+
+
+def test_memory_writer_not_built_when_extract_disabled():
+    h = build_harness(_cfg(memory_write_extract=False, enable_browser=False,
+                           enable_sandbox=False))
+    assert h.memory_writer is None

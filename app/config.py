@@ -128,12 +128,15 @@ class AppConfig(HarnessConfig):
     context_retrieval_top_k: int = 5               # L3 召回条数
     context_enable_summary: bool = True            # layered 下是否启用 L2 摘要
     context_enable_retrieval: bool = True          # layered 下是否启用 L3 检索
-    # L2 摘要专用模型（同 judge_*：空则回退主模型/主端点/主 key）。摘要是把挤出窗口的历史
-    # 压成短文的机械活，用便宜小模型足矣，没必要占用主模型。
-    summary_model: str = ""                        # 独立摘要模型；空则回退主 model
-    summary_base_url: str = ""                     # 摘要独立端点；空则回退主 base_url
-    summary_api_key: str = ""                      # 摘要独立 key；空则回退主 api_key
-    # 摘要是否开思考链。默认 false：压缩历史不需要推理，开着纯烧 token 与延迟（同 judge 的
-    # 取舍）。此前既不发这个参数、也够不着聊天页那个开关（它只作用于本轮任务的模型调用，
-    # 而摘要早在上下文组装阶段就跑完了），实际由模型服务端默认决定——Qwen3 系默认是开的。
-    summary_enable_thinking: bool = False
+    # 「快速模型」档：压缩/命名/提炼这类机械活的专用模型（同 judge_*：空则回退主模型/
+    # 端点/key）。当前三处在用：L2 滚动摘要、对话自动命名、记忆写入的事实提炼（_extract）。
+    # 这三件事压差了都无害——摘要糙了下轮重压、标题丑了用户改、事实提炼漏了下次再提。
+    # 刻意不含记忆调和（_reconcile）：那是判断题且后果不可逆（判 REPLACE 会 set_superseded
+    # 永久作废旧记忆），判错不是省钱是毁数据，故留在主模型。
+    fast_model: str = ""                           # 独立快速模型；空则回退主 model
+    fast_base_url: str = ""                        # 快速模型独立端点；空则回退主 base_url
+    fast_api_key: str = ""                         # 快速模型独立 key；空则回退主 api_key
+    # 快速档是否开思考链。默认 false：这些机械活不需要推理，开着纯烧 token 与延迟（同 judge
+    # 的取舍）。此前既不发这个参数、也够不着聊天页那个开关（它只作用于本轮任务的模型调用，
+    # 而这些旁路调用不在其中），实际由模型服务端默认决定——Qwen3 系默认是开的。
+    fast_enable_thinking: bool = False

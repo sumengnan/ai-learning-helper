@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..auth import current_user
-from ..completion import build_completer
+from ..completion import build_fast_completer
 from ..titling import make_title
 
 
@@ -24,10 +24,11 @@ class _AutoTitle(BaseModel):
 def make_conversations_router(store, harness=None, attachment_store=None,
                               config=None) -> APIRouter:
     router = APIRouter()
-    # 自动命名用的单发 completer（有 harness+config 才装配；缺失则接口降级为不改名）
+    # 自动命名用的单发 completer（有 harness+config 才装配；缺失则接口降级为不改名）。
+    # 走快速模型档：给对话起个名是最机械的活，起丑了用户改一下即可。
     title_completer = None
     if harness is not None and config is not None:
-        title_completer = build_completer(harness.client, config.model)
+        title_completer = build_fast_completer(harness.client, config)
 
     @router.get("/api/conversations")
     async def list_conversations(user_id: str = Depends(current_user)):

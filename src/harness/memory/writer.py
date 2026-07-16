@@ -133,12 +133,19 @@ class MemoryWriter:
     """LLM 驱动的智能写入：提炼 → 找候选 → 调和 → 应用。"""
 
     def __init__(self, backend, embedder, retriever, complete, *,
-                 candidate_k: int = 5, ttl_by_type: dict | None = None,
-                 now_fn=None) -> None:
+                 extract_complete=None, candidate_k: int = 5,
+                 ttl_by_type: dict | None = None, now_fn=None) -> None:
+        """complete 用于调和（_reconcile），extract_complete 用于提炼（_extract）。
+
+        两步吃的能力不同，故可分开配：提炼是机械活，换便宜小模型无妨；调和是判断题且
+        后果不可逆——判 REPLACE 会 set_superseded 永久作废旧记忆，判错不是省钱是毁数据，
+        默认就该用主模型。extract_complete 省略时二者同源，行为与旧版一致。
+        """
         self._backend = backend
         self._embedder = embedder
         self._retriever = retriever
         self._complete = complete
+        self._extract_complete = extract_complete or complete
         self._candidate_k = candidate_k
         self._ttl_by_type = ttl_by_type
         import time
@@ -146,7 +153,7 @@ class MemoryWriter:
 
     async def _extract(self, text: str) -> list[ExtractedFact]:
         try:
-            raw = await self._complete(_EXTRACT_SYS, text)
+            raw = await self._extract_complete(_EXTRACT_SYS, text)
         except Exception as e:
             log.warning("memory extract LLM failed: %s", e)
             return []

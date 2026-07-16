@@ -88,13 +88,14 @@ def build_judge_completer(client, config):
     return _with_thinking(base, False)
 
 
-def build_summary_completer(client, config):
-    """构造 L2 摘要专用 completer：配了 summary_model 则起独立 client（可指向独立端点/key），
-    否则回退传入的主 client/主模型。摘要是把挤出窗口的历史压成短文的机械活，用便宜小模型足矣。
+def build_fast_completer(client, config):
+    """构造「快速模型」档 completer：配了 fast_model 则起独立 client（可指向独立端点/key），
+    否则回退传入的主 client/主模型。供压缩/命名/提炼这类机械活用——当前是 L2 摘要、
+    对话自动命名、记忆写入的事实提炼。
 
-    思考模式由 summary_enable_thinking 决定（默认关）。它必须自己指定：摘要跑在上下文组装
-    阶段，早于 gen() 里那句按请求的 set_extra_body_override，够不着聊天页的思考开关。
+    思考模式由 fast_enable_thinking 决定（默认关）。它必须自己指定：这些都是旁路调用，
+    够不着聊天页那个思考开关（它只作用于本轮任务的模型调用）。
     """
     base = _build_alt_completer(
-        client, config, config.summary_model, config.summary_base_url, config.summary_api_key)
-    return _with_thinking(base, bool(config.summary_enable_thinking))
+        client, config, config.fast_model, config.fast_base_url, config.fast_api_key)
+    return _with_thinking(base, bool(config.fast_enable_thinking))

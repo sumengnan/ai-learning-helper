@@ -301,3 +301,39 @@ def test_parse_failure_logs_no_user_content(caplog):
         _parse_ops(secret, [ExtractedFact(text="x", mem_type=MemType.SEMANTIC)])
     assert "110101199001011234" not in caplog.text
     assert str(len(secret)) in caplog.text          # 只报长度
+
+
+# ---- 提炼/调和可用不同模型（提炼走快速档，调和留主模型）----
+
+async def test_extract_uses_extract_completer_when_given(mock_embedder):
+    """提炼是机械活 → 可换便宜小模型。"""
+    fast = ScriptedCompleter(['[{"text":"用户在学 Python","mem_type":"episodic"}]'])
+    main = ScriptedCompleter([])
+    w = MemoryWriter(backend=None, embedder=mock_embedder(dimension=64),
+                     retriever=None, complete=main, extract_complete=fast)
+    facts = await w._extract("我最近在学 Python")
+    assert len(facts) == 1
+    assert len(fast.calls) == 1 and main.calls == []      # 提炼没打扰主模型
+
+
+async def test_reconcile_always_uses_main_completer(mock_embedder):
+    """调和是判断题、判 REPLACE 会永久作废旧记忆 → 绝不能落到快速档上。"""
+    fast = ScriptedCompleter([])
+    main = ScriptedCompleter(['[{"op":"NOOP","fact_index":0}]'])
+    w = MemoryWriter(backend=None, embedder=mock_embedder(dimension=64),
+                     retriever=None, complete=main, extract_complete=fast)
+    facts = [ExtractedFact(text="a", mem_type=MemType.SEMANTIC)]
+    cand = [MemoryRecord(owner_id="u1", kind="k", mem_type=MemType.SEMANTIC,
+                         text="a", embedding=[0.0] * 64)]
+    ops = await w._reconcile(facts, cand)
+    assert [o.op for o in ops] == ["NOOP"]
+    assert len(main.calls) == 1 and fast.calls == []      # 调和没落到快速档
+
+
+async def test_extract_completer_defaults_to_main(mock_embedder):
+    """省略 extract_complete → 二者同源，行为与旧版一致（harness 库调用方不受影响）。"""
+    main = ScriptedCompleter(['[{"text":"x","mem_type":"semantic"}]'])
+    w = MemoryWriter(backend=None, embedder=mock_embedder(dimension=64),
+                     retriever=None, complete=main)
+    await w._extract("随便")
+    assert len(main.calls) == 1

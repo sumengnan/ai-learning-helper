@@ -143,9 +143,13 @@ def build_harness(config) -> Harness:
                 "semantic": config.ttl_semantic_days * 86400,
                 "procedural": config.ttl_procedural_days * 86400,
             }
+            from app.completion import build_fast_completer
             memory_writer = MemoryWriter(
                 mem_store, embedder, _retriever,
+                # 调和：判断题，判 REPLACE 会永久作废旧记忆 → 留主模型
                 build_completer(client, config.model),
+                # 提炼：机械活 → 快速档
+                extract_complete=build_fast_completer(client, config),
                 candidate_k=config.memory_write_candidate_k,
                 ttl_by_type=_ttl_by_type)
         _search_tool = SearchMemoryTool(mem, default_k=config.search_top_k)
