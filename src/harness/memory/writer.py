@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 
 from .record import MemType, MemoryFilter, MemoryRecord
@@ -49,11 +50,17 @@ def _strip_fence(raw: str) -> str:
 
 
 def _parse_facts(raw: str) -> list[ExtractedFact]:
+    # 解析失败即「本轮一条记忆都不写」，且调用方看不出区别（写入本就 best-effort）——
+    # 必须出声，否则智能写入整个停工都无人知晓。日志只记数量：raw 是用户事实，不入日志。
     try:
         data = json.loads(_strip_fence(raw))
     except (json.JSONDecodeError, TypeError):
+        log.warning("记忆提炼：模型输出不是合法 JSON（%d 字），本轮不写入任何记忆",
+                    len(raw or ""))
         return []
     if not isinstance(data, list):
+        log.warning("记忆提炼：模型输出是 %s、不是数组，本轮不写入任何记忆",
+                    type(data).__name__)
         return []
     facts: list[ExtractedFact] = []
     for item in data:
@@ -84,31 +91,42 @@ _RECONCILE_SYS = (
 
 
 def _parse_ops(raw: str, facts: list[ExtractedFact]) -> list[MemoryOp]:
+    # 「退化为全部 ADD」= 调和这步等于没跑：不去重、不消矛盾，记忆库会慢慢灌满重复与自相
+    # 矛盾的条目，而全程无声。必须出声。日志只记数量：raw 是用户事实，不入日志。
     try:
         data = json.loads(_strip_fence(raw))
         if not isinstance(data, list):
             raise ValueError("not a list")
     except (json.JSONDecodeError, TypeError, ValueError):
+        log.warning("记忆调和：模型输出不是 JSON 数组（%d 字），退化为全部 ADD"
+                    "——本轮不去重、不消矛盾", len(raw or ""))
         return [MemoryOp("ADD", f) for f in facts]
     ops: list[MemoryOp] = []
     covered: set[int] = set()
+    bad = 0
     for item in data:
         if not isinstance(item, dict):
+            bad += 1
             continue
         op = item.get("op")
         idx = item.get("fact_index")
         if op not in ("ADD", "NOOP", "REPLACE"):
+            bad += 1
             continue
         if not isinstance(idx, int) or not (0 <= idx < len(facts)):
+            bad += 1
             continue
         covered.add(idx)
         sup = item.get("supersede_ids", []) if op == "REPLACE" else []
         if not isinstance(sup, list):
             sup = []
         ops.append(MemoryOp(op, facts[idx], [str(x) for x in sup]))
-    for i, f in enumerate(facts):
-        if i not in covered:
-            ops.append(MemoryOp("ADD", f))
+    uncovered = [i for i in range(len(facts)) if i not in covered]
+    for i in uncovered:
+        ops.append(MemoryOp("ADD", facts[i]))
+    if bad or uncovered:      # 部分退化：这些事实没经调和就直接进库，同样是悄悄漏判
+        log.warning("记忆调和：%d 项判定无效被跳过，%d/%d 条事实没拿到判定、按 ADD 处理",
+                    bad, len(uncovered), len(facts))
     return ops
 
 
@@ -116,12 +134,19 @@ class MemoryWriter:
     """LLM 驱动的智能写入：提炼 → 找候选 → 调和 → 应用。"""
 
     def __init__(self, backend, embedder, retriever, complete, *,
-                 candidate_k: int = 5, ttl_by_type: dict | None = None,
-                 now_fn=None) -> None:
+                 extract_complete=None, candidate_k: int = 5,
+                 ttl_by_type: dict | None = None, now_fn=None) -> None:
+        """complete 用于调和（_reconcile），extract_complete 用于提炼（_extract）。
+
+        两步吃的能力不同，故可分开配：提炼是机械活，换便宜小模型无妨；调和是判断题且
+        后果不可逆——判 REPLACE 会 set_superseded 永久作废旧记忆，判错不是省钱是毁数据，
+        默认就该用主模型。extract_complete 省略时二者同源，行为与旧版一致。
+        """
         self._backend = backend
         self._embedder = embedder
         self._retriever = retriever
         self._complete = complete
+        self._extract_complete = extract_complete or complete
         self._candidate_k = candidate_k
         self._ttl_by_type = ttl_by_type
         import time
@@ -129,7 +154,7 @@ class MemoryWriter:
 
     async def _extract(self, text: str) -> list[ExtractedFact]:
         try:
-            raw = await self._complete(_EXTRACT_SYS, text)
+            raw = await self._extract_complete(_EXTRACT_SYS, text)
         except Exception as e:
             log.warning("memory extract LLM failed: %s", e)
             return []
@@ -197,15 +222,33 @@ class MemoryWriter:
         """智能写入：提炼→找候选→调和→应用，返回新写入记录 id。best-effort，异常安全。"""
         if not text or not text.strip():
             return []
+        # 分阶段计时：本方法被 chat 的 gen() await，跑完这轮 run 才算结束、SSE 流才关闭、
+        # 前端才解除 busy —— 也就是说它不拖慢答案（RunFinished 早已送出），却拖着用户
+        # 不能发下一句。要不要把它改成 fire-and-forget（代价：进程重启会丢在写的记忆），
+        # 得看真实耗时；而分到阶段才知道该改哪儿——若大头在调和，先关它的思考链可能就够了。
+        _t = time.monotonic()
         facts = await self._extract(text)
+        ms_ext = round((time.monotonic() - _t) * 1000)
         if not facts:
             return []
+        _t = time.monotonic()
         try:
             candidates = await self._gather_candidates(owner_id, kind, facts)
         except Exception as e:                           # 找候选失败：降级为无候选（全 ADD）
             log.warning("memory gather candidates failed: %s", e)
             candidates = []
+        ms_cand = round((time.monotonic() - _t) * 1000)
+        _t = time.monotonic()
         ops = await self._reconcile(facts, candidates)
+        ms_rec = round((time.monotonic() - _t) * 1000)
+        _t = time.monotonic()
         new_ids = await self._apply(owner_id, kind, ops)
-        log.info("记忆写入 提炼=%d条 候选=%d 新增=%d", len(facts), len(candidates), len(new_ids))
+        ms_apply = round((time.monotonic() - _t) * 1000)
+        # 判定分布是「调和到底在不在工作」的正面信号：有候选却清一色 ADD、NOOP/REPLACE 恒为 0，
+        # 就说明它在空转（模型没判、或判定被静默丢弃），光靠失败告警看不出这种情况。
+        _dist = {k: sum(1 for o in ops if o.op == k) for k in ("ADD", "NOOP", "REPLACE")}
+        log.info("记忆写入 提炼=%d条 候选=%d 判定=%s 新增=%d 耗时=%dms"
+                 "（提炼%d/候选%d/调和%d/落库%d）",
+                 len(facts), len(candidates), _dist, len(new_ids),
+                 ms_ext + ms_cand + ms_rec + ms_apply, ms_ext, ms_cand, ms_rec, ms_apply)
         return new_ids

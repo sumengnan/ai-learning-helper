@@ -120,18 +120,22 @@ def build_harness(config) -> Harness:
             use_hyde=config.retrieval_use_hyde,
             multi_query_n=config.retrieval_multi_query_n,
             query_plan_timeout_s=config.retrieval_query_plan_timeout_s)
-        from app.completion import build_completer
-        # 查询期召回增强的 LLM（三路默认关时不会被调用；开启才在检索时用）
+        from app.completion import build_completer, build_fast_completer
+        # 查询期召回增强的 LLM（三路默认关时不会被调用；开启才在检索时用）。
+        # 走快速档：它卡在聊天首字的关键路径上、还带 2 秒超时，越快越好，思考链是找死。
+        # 且必须自己表态——它既会被 build_manager 调（在 pump 外）、也会被 SearchMemoryTool
+        # 调（在 pump 内），不显式声明就会「同一个 completer 两种行为」，取决于谁调它。
         _retriever = Retriever(mem_store, embedder, reranker, _rcfg,
-                               complete=build_completer(client, config.model))
+                               complete=build_fast_completer(client, config))
         mem = Memory(mem_store, embedder, config.chunk_size, config.chunk_overlap,
                      retriever=_retriever, chunk_hard_max=config.chunk_hard_max)
         memory = mem
         memory_store = mem_store
         from harness.memory.maintainer import ConsolidationConfig, MemoryMaintainer
-        from app.completion import build_completer
+        # 整合的蒸馏走快速档：「把同主题的 N 条压成一条」与 L2 摘要同形，是机械活。
+        # 破坏性的那步（set_superseded 作废原 episodic）由余弦聚类决定，不归模型判。
         memory_maintainer = MemoryMaintainer(
-            mem_store, embedder, build_completer(client, config.model),
+            mem_store, embedder, build_fast_completer(client, config),
             ConsolidationConfig(
                 sim_threshold=config.consolidation_sim_threshold,
                 min_cluster=config.consolidation_min_cluster,
@@ -143,9 +147,13 @@ def build_harness(config) -> Harness:
                 "semantic": config.ttl_semantic_days * 86400,
                 "procedural": config.ttl_procedural_days * 86400,
             }
+            from app.completion import build_fast_completer
             memory_writer = MemoryWriter(
                 mem_store, embedder, _retriever,
+                # 调和：判断题，判 REPLACE 会永久作废旧记忆 → 留主模型
                 build_completer(client, config.model),
+                # 提炼：机械活 → 快速档
+                extract_complete=build_fast_completer(client, config),
                 candidate_k=config.memory_write_candidate_k,
                 ttl_by_type=_ttl_by_type)
         _search_tool = SearchMemoryTool(mem, default_k=config.search_top_k)

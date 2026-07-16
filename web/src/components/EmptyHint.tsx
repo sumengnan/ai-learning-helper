@@ -18,16 +18,14 @@ type Suggestion = { text: string; icon: ReactNode; color: string };
 
 // 顺序即 2 列 grid 的 row-major 填充：左列取奇数条，右列取偶数条
 export const SUGGESTIONS: Suggestion[] = [
+  { text: "总结 AI 未来 2 年的发展情况", icon: <TrendingUpIcon />, color: "#059669" },
+  { text: "帮我制定一份 7 天的 AI 学习计划", icon: <EventNoteIcon />, color: "#0891b2" },
   { text: "搜索最新的 AI 资讯，保存到知识库", icon: <TravelExploreIcon />, color: "#2563eb" },
-  { text: "把知识库里关于 AI 的内容整理成学习笔记", icon: <AutoStoriesIcon />, color: "#db2777" },
-  { text: "总结 AI 未来 3 年的发展情况", icon: <TrendingUpIcon />, color: "#059669" },
-  { text: "帮我制定一份 30 天 AI 学习计划", icon: <EventNoteIcon />, color: "#0891b2" },
-  { text: "随机生成 5 道 AI 相关的单选题，保存到题库", icon: <QuizIcon />, color: "#7c3aed" },
-  { text: "从题库抽取 5 道题考试", icon: <SchoolIcon />, color: "#d97706" },
-  { text: "生成我的学习报告：掌握了哪些、薄弱点在哪", icon: <AssessmentIcon />, color: "#dc2626" },
-  { text: "随机生成一段 Python、Java 或 JS 代码并执行", icon: <TerminalIcon />, color: "#475569" },
-  { text: "用最简单的话给我讲一个我总答错的概念", icon: <LightbulbIcon />, color: "#ca8a04" },
-  { text: "根据我的错题，针对性地再出 5 道相似的题", icon: <AutorenewIcon />, color: "#4f46e5" },
+  { text: "把知识库里 AI 的内容整理成学习笔记", icon: <AutoStoriesIcon />, color: "#db2777" },
+  { text: "生成 5 道 AI 相关的单选题，保存到题库", icon: <QuizIcon />, color: "#7c3aed" },
+  { text: "从题库抽取 5 道 AI 题，考考我", icon: <SchoolIcon />, color: "#d97706" },
+  { text: "生成一段 Python、Java 或 JS 代码执行", icon: <TerminalIcon />, color: "#475569" },
+  { text: "根据我的错题，再出 5 道相似的题考考我", icon: <AutorenewIcon />, color: "#4f46e5" },
 ];
 
 // 空对话引导：新建但未聊天、或尚未选中对话时展示；点击卡片即以该问题发问

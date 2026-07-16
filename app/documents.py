@@ -31,12 +31,30 @@ class DocumentStore:
             migrate(self._conn)
 
     def create(self, user_id: str, doc_id: str, filename: str, size: int,
-               chunk_ids: list[str], excerpt: str = "") -> None:
+               chunk_ids: list[str], excerpt: str = "", content_hash: str = "") -> None:
         self._conn.execute(
-            "INSERT INTO documents(id, user_id, filename, size, num_chunks, chunk_ids, uploaded_at, excerpt) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (doc_id, user_id, filename, size, len(chunk_ids), json.dumps(chunk_ids), _now(), excerpt))
+            "INSERT INTO documents(id, user_id, filename, size, num_chunks, chunk_ids, "
+            "uploaded_at, excerpt, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (doc_id, user_id, filename, size, len(chunk_ids), json.dumps(chunk_ids),
+             _now(), excerpt, content_hash or None))
         self._conn.commit()
+
+    def find_by_hash(self, user_id: str, content_hash: str) -> dict | None:
+        """按正文 hash 找该用户已有的同内容文档（供导入去重）。
+
+        取最早的一条：重复导入应回指最初那份，而不是让「已存在的那个」随导入次数漂移。
+        hash 为空（旧库遗留行）不参与匹配 —— 空 hash 之间不该互相认成重复。
+        """
+        if not content_hash:
+            return None
+        r = self._conn.execute(
+            "SELECT id, filename, size, num_chunks, uploaded_at, excerpt FROM documents "
+            "WHERE user_id = ? AND content_hash = ? ORDER BY uploaded_at LIMIT 1",
+            (user_id, content_hash)).fetchone()
+        if r is None:
+            return None
+        return {"id": r[0], "filename": r[1], "size": r[2], "num_chunks": r[3],
+                "uploaded_at": r[4], "excerpt": r[5] or "", "category": _category(r[1])}
 
     def list(self, user_id: str, limit: int | None = None, offset: int = 0) -> list[dict]:
         sql = ("SELECT id, filename, size, num_chunks, uploaded_at, excerpt FROM documents "

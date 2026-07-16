@@ -163,7 +163,11 @@ class GenerateQuestionsTool(Tool):
                     "请先把资料存入知识库，或改用 add_questions 直接整理入库。")
         except QuizError:
             return "出题失败：生成结果无有效题目，请调整主题或稍后重试。"
-        return f"已从知识库生成并入库 {len(qs)} 道题（主题：{params.topic}）。"
+        ids = [q["id"] for q in qs if q.get("id")]
+        msg = f"已从知识库生成并入库 {len(qs)} 道题（主题：{params.topic}）。"
+        # 末尾带机读标记〔题目ID:id,id〕：交付门据此清理失败轮误入库的题（前端剥离不展示）；
+        # 也让后续「就考刚才这几道」能用 start_exam(source=ids) 精确取到这批题
+        return f"{msg}〔题目ID:{','.join(ids)}〕" if ids else msg
 
 
 class ListQuestionsTool(Tool):
@@ -257,7 +261,12 @@ class StartExamTool(Tool):
         "开始一场由系统托管的模拟考试。开考后，每题的判分与「答错自动入错题集」都由系统"
         "在后台确定性完成——你【无需也不要】再调用 save_wrong_answer。你只负责呈现题目、"
         "并在系统给出判定后讲解。\n"
-        "source：题源，bank=从题库抽题、wrong=从错题集抽题重考、adhoc=你现编题目考。\n"
+        "source：题源，bank=从题库随机抽题、ids=只考指定的题库题目、"
+        "wrong=从错题集抽题重考、adhoc=你现编题目考。\n"
+        "当用户指名要考某几道题（如「刚才生成的那几道」「就考这几题」）时【必须】用 "
+        "source=ids 并在 question_ids 传入那些题的 id，按传入顺序出题；"
+        "此时 count 与 types 忽略。题目 id 来自 add_questions/generate_questions 返回的"
+        "〔题目ID:...〕标记，或 list_questions。切勿改用 bank——那是全库随机抽，考的不会是指定的题。\n"
         "adhoc 时【必须】在 questions 传入题目（含答案），每题形如 "
         "{\"type\":\"single|multiple|truefalse|short\",\"stem\":\"题干\","
         "\"options\":[\"选项\"]或null,\"answer\":单选选项索引/多选索引数组/判断true或false/简答参考答案,"
@@ -270,6 +279,7 @@ class StartExamTool(Tool):
         types: _OptIdList = None
         mode: str = "instant"
         questions: _QuestionList | None = None
+        question_ids: _OptIdList = None
 
     def __init__(self, exam_store, user_id: str, conv_id: str,
                  question_store=None, wrong_store=None) -> None:
@@ -285,7 +295,24 @@ class StartExamTool(Tool):
         mode = "graded" if params.mode == "graded" else "instant"
         count = _clamp(params.count)
         questions: list[dict] = []
-        if params.source == "adhoc":
+        note = ""
+        if params.source == "ids":
+            if self._qs is None:
+                return "题库不可用。"
+            ids = [i for i in (params.question_ids or []) if i][:50]
+            if not ids:
+                return "无法开始考试：source=ids 需在 question_ids 传入至少一道题的 id。"
+            questions = self._qs.get_many(self._uid, ids)
+            if not questions:
+                return ("无法开始考试：question_ids 里没有一道能在题库中找到（可能已被删除）。"
+                        "可用 list_questions 核对题目 id，不要改用 bank 随机抽题冒充。")
+            found = {q["id"] for q in questions}
+            if len(found) < len(set(ids)):
+                # 少考了题必须让用户知道，否则「考刚才那几道」会静默变成考其中几道
+                note = (f"注意：指定的 {len(set(ids))} 道题中有 "
+                        f"{len(set(ids)) - len(found)} 道在题库中找不到（可能已被删除），"
+                        f"本场只考找到的 {len(questions)} 道。请如实告知用户。\n\n")
+        elif params.source == "adhoc":
             for q in (params.questions or []):
                 if _valid(q, ALL_TYPES):
                     questions.append({"type": q["type"], "stem": q["stem"],
@@ -311,5 +338,5 @@ class StartExamTool(Tool):
         self._exam.start(self._uid, self._conv, questions, mode)
         mode_zh = "打分式" if mode == "graded" else "即时式"
         first = present_question(questions[0], 0, len(questions))
-        return (f"已开始考试：共 {len(questions)} 题，{mode_zh}。请把下面第一题原样呈现给用户，"
+        return (f"{note}已开始考试：共 {len(questions)} 题，{mode_zh}。请把下面第一题原样呈现给用户，"
                 f"等其作答；判分与错题保存由系统自动完成。\n\n{first}")

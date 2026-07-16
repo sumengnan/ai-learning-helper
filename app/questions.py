@@ -56,6 +56,23 @@ class QuestionStore:
             (qid, user_id)).fetchone()
         return self._row(r) if r else None
 
+    def get_many(self, user_id: str, ids: list[str]) -> list[dict]:
+        """按传入 ids 的先后顺序返回题目（SQL 的 IN 不保序，故在此重排）。
+        不存在或不属于该用户的 id 直接跳过；重复 id 只返回一次。"""
+        if not ids:
+            return []
+        ph = ",".join("?" * len(ids))
+        rows = self._db.execute(
+            f"SELECT {self._COLS} FROM questions WHERE user_id=? AND id IN ({ph})",
+            (user_id, *ids)).fetchall()
+        by_id = {r[0]: self._row(r) for r in rows}
+        out, seen = [], set()
+        for i in ids:
+            if i in by_id and i not in seen:
+                seen.add(i)
+                out.append(by_id[i])
+        return out
+
     def _filter(self, user_id: str, type, source, q):
         clauses = ["user_id=?"]
         params: list = [user_id]

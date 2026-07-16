@@ -60,14 +60,21 @@ def _client(make_mock, turns=None):
     return TestClient(app), store
 
 
-def _client_with_kb(make_mock, mock_embedder):
+def _client_with_kb(make_mock, mock_embedder, turns=None):
     from harness.memory.memory import Memory
     from harness.memory.sqlite_backend import SqliteVecBackend
+    from harness.tools.builtins.memory_search import SearchMemoryTool
     from app.documents import DocumentStore
     mstore = SqliteVecBackend(":memory:", dimension=64)
     mem = Memory(mstore, mock_embedder(dimension=64), 1000, 0)
     traj = TrajectoryStore(":memory:")
-    harness = Harness(client=make_mock([]), registry=ToolRegistry(),
+    reg = ToolRegistry()
+    # 照 assembly.py:151 原样注册全局 search_memory（用默认 collection="knowledge"，即
+    # owner=_global）—— 忠实复现生产：chat 的 _build_registry 必须用用户级的把它覆盖掉，
+    # 否则模型搜的是 _global、永远看不到 knowledge:{user_id} 里的文档。registry 留空的话
+    # 就变成测「工具没注册」，测不到真正的 collection 错配。
+    reg.register(SearchMemoryTool(mem))
+    harness = Harness(client=make_mock(turns or []), registry=reg,
                       checkpoint_store=CheckpointStore(":memory:"),
                       trajectory_store=traj, sink=TrajectorySink(traj), system_prompt="s",
                       memory=mem, memory_store=mstore)
@@ -384,3 +391,61 @@ def test_delete_question_without_related_deletes_directly(make_mock):
     resp = client.delete(f"/api/questions/{qid}", headers=h).json()
     assert resp == {"deleted": True, "related_wrong": 0}
     assert qs.get(uid, qid) is None
+
+
+
+def test_uploaded_doc_is_searchable_from_chat(make_mock, mock_embedder, tool_turn, text_turn):
+    """回归（端到端）：上传文档 → 聊天里模型调 search_memory → 必须能检索到。
+
+    此前 search_memory 用默认 collection="knowledge"（无冒号 → owner 判成 "_global"），
+    而知识库写的是 "knowledge:{user_id}" —— 两个 owner 永不相交，模型在聊天里永远搜不到
+    用户上传的文档；还连带让交付门的 grounding 校验因「检索恒无命中」而形同虚设。
+
+    这条链路此前**没有任何测试跨越**，正是它活下来的原因：test_memory_tools/test_memory_facade
+    等只用无冒号的 "knowledge"，与生产犯了同样的错、因而一致地通过。
+    """
+    client = _client_with_kb(
+        make_mock, mock_embedder,
+        turns=[tool_turn("search_memory", '{"query": "光合作用"}'),
+               text_turn("根据你的资料，光合作用把二氧化碳转化为氧气。")])
+    h = _auth_headers(client)
+    up = client.post("/api/documents",
+                     files={"file": ("bio.txt", "光合作用 把 二氧化碳 转化为 氧气".encode(),
+                                     "text/plain")}, headers=h)
+    assert up.status_code == 200
+
+    cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
+    with client.stream("POST", "/api/chat",
+                       json={"conversation_id": cid, "message": "我的资料里讲了光合作用什么"},
+                       headers=h) as resp:
+        events = _sse_events(resp)
+
+    finished = [e for e in events if e["type"] == "ToolFinished"]
+    assert finished, "模型应调用了 search_memory"
+    content = finished[-1]["data"]["result"]["content"]
+    assert "未在知识库中检索到相关内容" not in content, \
+        f"聊天里应能检索到自己上传的文档，实得：{content}"
+    assert "光合作用" in content
+
+
+def test_chat_search_memory_does_not_leak_across_users(make_mock, mock_embedder,
+                                                       tool_turn, text_turn):
+    """隔离的另一半：搜到的只能是自己的。修 collection 时若图省事写成无冒号，
+    两个用户会共用 _global，等于互相看得见对方的资料。"""
+    client = _client_with_kb(
+        make_mock, mock_embedder,
+        turns=[tool_turn("search_memory", '{"query": "机密"}'), text_turn("没找到。")])
+    # alice 上传
+    ha = _auth_headers(client, username="alice")
+    client.post("/api/documents",
+                files={"file": ("s.txt", "机密 内容 只属于 alice".encode(), "text/plain")},
+                headers=ha)
+    # bob 去搜
+    hb = _auth_headers(client, username="bob")
+    cid = client.post("/api/conversations", json={}, headers=hb).json()["id"]
+    with client.stream("POST", "/api/chat",
+                       json={"conversation_id": cid, "message": "查机密"}, headers=hb) as resp:
+        events = _sse_events(resp)
+    finished = [e for e in events if e["type"] == "ToolFinished"]
+    assert finished
+    assert "只属于 alice" not in finished[-1]["data"]["result"]["content"], "不该看到别人的资料"

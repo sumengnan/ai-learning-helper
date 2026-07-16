@@ -40,3 +40,15 @@ def test_guide_requires_explicit_saved_notice_to_user():
 def test_adhoc_must_pass_content_not_only_id():
     # 保留：即席题必须传内容，不能只传 question_id
     assert "question_id" in EXAM_GUIDE and "stem/type/answer" in EXAM_GUIDE
+
+
+def test_guide_routes_named_questions_to_ids_source():
+    """「刚才生成的那 5 道题，考试」必须走 source=ids。
+
+    背景：start_exam 原先只有 bank/wrong/adhoc，模型只能退回 bank，而 bank 是
+    ORDER BY RANDOM() 全库抽题——用户要考的那几道被换成了随机题。提示词须显式指路，
+    否则模型不知道 ids 这条路，也不知道题目 id 从〔题目ID:...〕标记里取。
+    """
+    assert 'source="ids"' in EXAM_GUIDE and "question_ids" in EXAM_GUIDE
+    assert "〔题目ID:" in EXAM_GUIDE            # 指明 id 从哪来
+    assert "source=bank 顶替" in EXAM_GUIDE     # 明确禁止退回随机抽

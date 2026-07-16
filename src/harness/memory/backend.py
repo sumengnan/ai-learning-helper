@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from .record import MemoryFilter, MemoryHit, MemoryRecord
+from .record import MemoryFilter, MemoryHit, MemoryRecord, MemType
 
 
 @runtime_checkable
@@ -42,8 +42,9 @@ class MemoryBackend(Protocol):
         """按 owner+kind 列举未废弃记录（rowid 降序）。"""
         ...
 
-    def count_by_owner(self, owner_id: str, kind: str) -> int:
-        """owner+kind 未废弃记录数。"""
+    def count_by_owner(self, owner_id: str, kind: str, *,
+                       mem_type: "MemType | str | None" = None) -> int:
+        """owner+kind 未废弃记录数；mem_type 非空则只数该型（None=全部）。"""
         ...
 
     def set_superseded(self, ids: list[str]) -> None:

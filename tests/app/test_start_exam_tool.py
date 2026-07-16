@@ -50,6 +50,58 @@ async def test_start_adhoc_validates_and_stores():
     assert es.get_active("u1", "c1")["mode"] == "graded"
 
 
+async def test_start_from_ids_exams_exactly_those_questions_in_order():
+    """「刚才的 5 道题，考试」：题库里另有大量干扰题，也必须只考指定的那几道、按给定顺序。"""
+    qs = QuestionStore(":memory:"); es = ExamSessionStore(":memory:")
+    for i in range(20):
+        qs.create("u1", _q(stem=f"干扰题{i}"))
+
+    picked = [qs.create("u1", _q(stem=f"刚生成的题{i}")) for i in range(5)]
+    t = StartExamTool(es, "u1", "c1", question_store=qs)
+    out = await t.run(t.Params(source="ids", question_ids=list(reversed(picked))))
+    assert "已开始考试：共 5 题" in out
+    sess = es.get_active("u1", "c1")
+    assert [q["stem"] for q in sess["questions"]] == [f"刚生成的题{i}" for i in reversed(range(5))]
+
+
+async def test_start_from_ids_requires_ids():
+    qs = QuestionStore(":memory:"); es = ExamSessionStore(":memory:")
+    qs.create("u1", _q())
+    t = StartExamTool(es, "u1", "c1", question_store=qs)
+    out = await t.run(t.Params(source="ids", question_ids=[]))
+    assert "无法开始考试" in out
+    assert es.get_active("u1", "c1") is None
+
+
+async def test_start_from_ids_all_missing_does_not_fall_back_to_random():
+    """指定的题都找不到时必须报错，绝不能静默降级成全库随机抽。"""
+    qs = QuestionStore(":memory:"); es = ExamSessionStore(":memory:")
+    qs.create("u1", _q(stem="别的题"))
+    t = StartExamTool(es, "u1", "c1", question_store=qs)
+    out = await t.run(t.Params(source="ids", question_ids=["nope1", "nope2"]))
+    assert "无法开始考试" in out
+    assert es.get_active("u1", "c1") is None
+
+
+async def test_start_from_ids_partial_hit_tells_model_to_disclose():
+    qs = QuestionStore(":memory:"); es = ExamSessionStore(":memory:")
+    kept = qs.create("u1", _q(stem="还在的题"))
+    t = StartExamTool(es, "u1", "c1", question_store=qs)
+    out = await t.run(t.Params(source="ids", question_ids=[kept, "已删除的id"]))
+    assert "找不到" in out and "如实告知" in out
+    assert len(es.get_active("u1", "c1")["questions"]) == 1
+
+
+async def test_start_from_ids_does_not_leak_other_users_questions():
+    qs = QuestionStore(":memory:"); es = ExamSessionStore(":memory:")
+    mine = qs.create("u1", _q(stem="我的题"))
+    theirs = qs.create("u2", _q(stem="别人的题"))
+    t = StartExamTool(es, "u1", "c1", question_store=qs)
+    out = await t.run(t.Params(source="ids", question_ids=[mine, theirs]))
+    assert [q["stem"] for q in es.get_active("u1", "c1")["questions"]] == ["我的题"]
+    assert "找不到" in out
+
+
 async def test_start_empty_bank_does_not_create_session():
     qs = QuestionStore(":memory:"); es = ExamSessionStore(":memory:")
     t = StartExamTool(es, "u1", "c1", question_store=qs)

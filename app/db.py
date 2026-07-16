@@ -20,9 +20,12 @@ _SCHEMA = (
          tool_call_id TEXT, steps TEXT, progress TEXT, sources TEXT, verify TEXT,
          context TEXT, created_at TEXT,
          PRIMARY KEY(conv_id, seq))""",
+    # content_hash：正文的 sha256，用于「同一用户重复导入同一内容」的去重（见 KnowledgeService.ingest）。
+    # 存的是**解析后正文**的 hash 而非原始字节：同一份内容存成 .txt 与 .md 上传两次，
+    # 字节不同但切出来的向量完全一样，按正文 hash 才拦得住。
     """CREATE TABLE IF NOT EXISTS documents(
          id TEXT PRIMARY KEY, user_id TEXT, filename TEXT, size INTEGER, num_chunks INTEGER,
-         chunk_ids TEXT, uploaded_at TEXT, excerpt TEXT)""",
+         chunk_ids TEXT, uploaded_at TEXT, excerpt TEXT, content_hash TEXT)""",
     """CREATE TABLE IF NOT EXISTS questions(
          id TEXT PRIMARY KEY, user_id TEXT, type TEXT, stem TEXT, options TEXT,
          answer TEXT, explanation TEXT, source TEXT, created_at TEXT)""",
@@ -71,7 +74,9 @@ _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
                               "run_id": "TEXT", "status": "TEXT", "sources": "TEXT",
                               "tokens": "INTEGER", "cost": "REAL", "elapsed_ms": "INTEGER",
                               "reasoning": "TEXT", "verify": "TEXT", "context": "TEXT"},
-    "documents": {"user_id": "TEXT", "excerpt": "TEXT"},
+    # content_hash 对旧库为 NULL：老文档不参与去重（不去回算 hash，正文已不在库里），
+    # 只有新导入的才互相比对。这是有意的向后兼容，不是遗漏。
+    "documents": {"user_id": "TEXT", "excerpt": "TEXT", "content_hash": "TEXT"},
     "questions": {"user_id": "TEXT"},
     "wrong_answers": {"user_id": "TEXT"},
     "downloads": {"user_id": "TEXT"},

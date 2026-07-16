@@ -17,7 +17,7 @@ from harness.approval import reset_context, resolve, set_context
 from harness.events import (
     ModelUsage, Progress, ReasoningDelta, RunError, RunFinished, TextDelta,
     ToolFinished, ToolStarted)
-from harness.llm.openai_compat import set_extra_body_override
+from harness.llm.openai_compat import reset_extra_body_override, set_extra_body_override
 from harness.loop.agent_loop import AgentLoop
 from harness.persistence.serialize import event_to_dict
 from harness.progress import reset_emitter, set_emitter
@@ -26,10 +26,11 @@ from opentelemetry.trace import Status, StatusCode
 from harness.reliability.budget import BudgetTracker
 from harness.telemetry.tracer import get_tracer
 from harness.tools.base import ToolRegistry
+from harness.tools.builtins.memory_search import SearchMemoryTool
 from harness.types import Message, Role
 
 from ..auth import current_user
-from ..completion import build_completer
+from ..completion import build_fast_completer
 from ..context_assembly import ContextAssembler
 from ..conversation_memory import ConversationMemoryService
 from ..profile import render_profile_block
@@ -39,6 +40,7 @@ from ..summarizer import RollingSummarizer
 from ..sources import SOURCE_GUIDE, SourceSink, wrap_tool
 from ..url_blocklist import guard_fetch_tool
 from ..tools.attachment_tools import ListAttachmentsTool, ReadAttachmentTool
+from ..tools.plan_tool import reset_plan_clock, set_plan_clock
 from ..exam_flow import grade_exam_turn
 from ..tools.exam_tools import (
     AddQuestionsTool,
@@ -54,6 +56,7 @@ from ..tools.exam_tools import (
 from ..tools.knowledge_tools import SaveToKnowledgeTool
 from ..tools.plan_tool import (
     FINALIZE_SYSTEM, finalize_user_prompt, merge_finalized, unfinished_steps)
+from ..tools.validating import ValidatingTool, relevance_check
 from ..tools.save_download import SaveDownloadTool
 from ..quiz_service import _strip_fence
 from ..logging_setup import set_log_context
@@ -75,10 +78,15 @@ def _chunks(text: str, size: int = _DELIVER_CHUNK):
 
 EXAM_GUIDE = (
     "\n\n你具备「题库 / 错题集 / 模拟考试」能力：\n"
-    "- 【正式模拟考试优先用 start_exam 开考】：从题库(source=bank)/错题集(source=wrong)抽题，"
+    "- 【正式模拟考试优先用 start_exam 开考】：从题库随机抽题(source=bank)/错题集抽题(source=wrong)，"
     "或即席出题(source=adhoc，需在 questions 传入含答案的题)。开考后每题的判分与「答错自动存错题集」"
     "都由系统在后台确定性完成——你【无需也不要】调用 save_wrong_answer，只需把系统返回的题目呈现给用户，"
     "并在系统给出「[考试系统判定]…」提示后据其讲解、再呈现系统给的下一题。\n"
+    "- 【用户指名要考某几道题时必须用 source=ids】：如「刚才生成的那 5 道题，考试」「就考这几题」，"
+    "把那批题的 id 传给 start_exam(source=\"ids\", question_ids=[...])，按传入顺序出题。"
+    "题目 id 来自 add_questions/generate_questions 返回末尾的〔题目ID:...〕标记（即那批新题，按出题顺序），"
+    "也可用 list_questions 查。此时【绝不能用 source=bank 顶替】——那是全库随机抽，"
+    "考出来的不是用户要的那几道，属于明确的错误。\n"
     "- 以下是未用 start_exam 时的零散练习指引：\n"
     "- 当用户想模拟考试/刷题时，用 sample_questions 从题库抽题；"
     "想「用错题重考/复习错题」时用 sample_wrong_answers 从错题集抽题；题库为空时可即席出题。\n"
@@ -147,7 +155,7 @@ def _side_effect_ids(steps: list[dict]) -> dict[str, list[str]]:
     """提取本轮各副作用工具成功产物的 id（下载/知识/题目），供失败轮清理。
 
     工具在结果里带机读标记：save_download→〔下载ID:x〕、save_to_knowledge→〔知识ID:x〕、
-    add_questions→〔题目ID:x,y〕。失败步（is_error）不计。"""
+    add_questions/generate_questions→〔题目ID:x,y〕。失败步（is_error）不计。"""
     out: dict[str, list[str]] = {"download": [], "knowledge": [], "questions": []}
     for s in steps or []:
         if s.get("is_error"):
@@ -158,10 +166,45 @@ def _side_effect_ids(steps: list[dict]) -> dict[str, list[str]]:
             out["download"] += _DL_ID_RE.findall(r)
         elif tool == "save_to_knowledge":
             out["knowledge"] += _KB_ID_RE.findall(r)
-        elif tool == "add_questions":
+        elif tool in ("add_questions", "generate_questions"):
             for grp in _Q_ID_RE.findall(r):
                 out["questions"] += [x for x in grp.split(",") if x]
     return out
+
+
+# 副作用工具 → 产物的说法（供重答提示点名，让模型知道要重做什么）
+_FX_KIND = {
+    "save_download": "文件",
+    "save_to_knowledge": "知识库条目",
+    "add_questions": "题库题目",
+    "generate_questions": "题库题目",
+}
+
+
+def _redo_fx_note(steps: list[dict]) -> str:
+    """重答提示的附注：点名上一版产生的副作用产物，要求重新调用工具再存一次。
+
+    每次 attempt 都是全新 RunState，context 只含系统提示 + 会话历史 + 纠正指令——模型
+    看不到上一版自己调过哪些工具。而上一版存下的文件/知识/题目会在交付时被
+    _purge_side_effects 删掉（它们属于未通过的那版）。两件事一叠加：模型不知道该重存、
+    旧产物又被删，用户最终一个文件都拿不到。故必须在纠正指令里明说。
+    """
+    made: list[str] = []
+    for s in steps or []:
+        if s.get("is_error"):
+            continue
+        kind = _FX_KIND.get(s.get("tool") or "")
+        if not kind:
+            continue
+        args = s.get("args") if isinstance(s.get("args"), dict) else {}
+        name = str(args.get("filename") or "").strip()
+        made.append(f"{s['tool']}（{kind}{f'《{name}》' if name else ''}）")
+    if not made:
+        return ""
+    return ("\n注意：你上一版曾调用 " + "、".join(dict.fromkeys(made))
+            + "，这些产物已随未通过的那一版一并作废删除。本次回答若仍应产出它们，"
+              "【必须重新调用相应工具再存一次】——上一版存过不算数，不重新调用就真的"
+              "什么都没留下，用户会以为文件已保存却找不到。")
 
 
 def _drop_purged_marks(steps: list[dict], fx: dict[str, list[str]]) -> None:
@@ -181,6 +224,39 @@ def _drop_purged_marks(steps: list[dict], fx: dict[str, list[str]]) -> None:
         for m in hit:
             r = r.replace(m, "")
         s["result"] = r.rstrip() + "\n（该版本未通过校验，此产物已作废删除）"
+
+
+def _split_stale_fx(stale: dict[str, list[str]], cur: dict[str, list[str]]
+                    ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """把未通过轮的产物按类分成「该删的」与「该留的」。
+
+    删：交付的那一版自己产出了同类产物 → 旧的已被它取代，留着就是指向废内容的死按钮。
+    留：交付的那一版一件同类产物都没有 → 这是唯一的一份，删了用户就彻底空手。
+
+    后者是 _redo_fx_note 的确定性兜底：那条纠正指令只是「告诉」模型重做，管不住它照不照
+    做；真没照做时，宁可留下上一版的产物（并在步骤里标明出处），也不能让用户什么都拿不到。
+    """
+    purge = {k: (v if cur.get(k) else []) for k, v in stale.items()}
+    keep = {k: ([] if cur.get(k) else v) for k, v in stale.items()}
+    return purge, keep
+
+
+def _mark_carried_over(steps: list[dict], fx: dict[str, list[str]]) -> None:
+    """给保留下来的上一版产物在步骤结果里标明出处（机读标记留着，下载按钮仍可用）。
+
+    产物出自未通过校验的那一版，而最终答案是另一版写的——不说清楚，用户会默认二者一致。
+    """
+    marks = [f"〔下载ID:{i}〕" for i in fx["download"]]
+    marks += [f"〔知识ID:{i}〕" for i in fx["knowledge"]]
+    if not marks:
+        return
+    for s in steps or []:
+        r = s.get("result") or ""
+        if not any(m in r for m in marks):
+            continue
+        s["result"] = (r.rstrip()
+                       + "\n（此产物由未通过校验的那一版生成；最终回答未重新生成它，"
+                         "已为你保留，请对照最终回答确认后再用）")
 
 
 def emit_gate_span(tracer, vt: dict, t0_ns: int) -> None:
@@ -275,8 +351,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         if getattr(config, "context_enable_summary", True):
             _summarizer = RollingSummarizer(
                 SummaryStore(conn=store._conn),           # 复用 app.db 连接
-                build_completer(harness.client, config.model),
-                model=config.model,
+                build_fast_completer(harness.client, config),
+                # 计数模型须跟着摘要模型走：它决定 max_summary_tokens 按谁的分词器量
+                model=config.fast_model or config.model,
                 max_summary_tokens=config.context_summary_max_tokens)
         if getattr(config, "context_enable_retrieval", True) and \
                 getattr(harness, "memory", None) is not None:
@@ -286,6 +363,47 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 sample_rate=config.memory_write_sample_rate)
     _assembler = ContextAssembler(config, config.model,
                                   summarizer=_summarizer, conv_memory=_conv_memory)
+    # 记忆整合：在途会话集合，防同一会话并发整合互抢 set_superseded
+    _consolidating: set[str] = set()
+
+    def _maybe_consolidate(conv_id: str) -> None:
+        """本会话 episodic 攒够了就在后台整合成 semantic。
+
+        【不 await】：gen() 还没返回前，这个 run 在 RunManager 里仍算「在途」，而
+        active_run_for_conv 是并发守卫——等整合跑完（每簇一次 LLM）会让用户的下一句
+        直接吃 409。故 fire-and-forget，失败只记日志。
+
+        计数按 episodic 而非总数：consolidate 只吃 episodic，用总数会让「一堆 semantic、
+        零 episodic」的会话每轮都空转一次聚类。整合后 episodic 被标 superseded、计数
+        回落，自然不会每轮重触发。
+        """
+        _maintainer = getattr(harness, "memory_maintainer", None)
+        _mstore = getattr(harness, "memory_store", None)
+        _after = getattr(config, "memory_consolidate_after", 0)
+        if _maintainer is None or _mstore is None or _after <= 0:
+            return
+        if conv_id in _consolidating:          # 上一轮的整合还在跑
+            return
+        try:
+            from harness.memory.record import MemType
+            n = _mstore.count_by_owner(conv_id, "conversation", mem_type=MemType.EPISODIC)
+        except Exception:                      # 计数失败不该影响聊天
+            return
+        if n < _after:
+            return
+
+        async def _run() -> None:
+            try:
+                r = await _maintainer.maintain(conv_id, "conversation")
+                log.info("记忆整合 conv=%s episodic=%d → %s", conv_id, n, r)
+            except Exception as e:             # noqa: BLE001
+                log.warning("记忆整合失败 conv=%s：%s", conv_id, e, exc_info=True)
+            finally:
+                _consolidating.discard(conv_id)
+
+        _consolidating.add(conv_id)
+        asyncio.create_task(_run())
+
     # 交付门插桩：未装 OTel provider 时 get_tracer 返回 no-op tracer，零开销
     _tracer = get_tracer("app.chat")
 
@@ -304,6 +422,16 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         if dstore is not None:
             _reg(SaveDownloadTool(
                 dstore, config.download_max_mb * 1024 * 1024, user_id))
+        # 知识库检索：必须按用户覆盖全局那个。assembly 里构造的是默认 collection="knowledge"
+        # （无冒号 → collection_to_scope 判成 owner=_global），而知识库写入的是
+        # knowledge:{user_id} —— 两个 owner 永不相交，不覆盖的话模型在聊天里永远搜不到
+        # 用户上传的文档，还会连带让交付门的 grounding 校验因「检索恒无命中」而形同虚设。
+        # 保持与 assembly.py 同款的 ValidatingTool 包装，别把每步校验弄丢了。
+        _mem = getattr(harness, "memory", None)
+        if _mem is not None:
+            _st = SearchMemoryTool(_mem, collection=f"knowledge:{user_id}",
+                                   default_k=config.search_top_k)
+            _reg(ValidatingTool(_st, relevance_check) if config.enable_step_check else _st)
         # 知识库保存：按用户隔离，写入 knowledge:{user_id} 并建立文档记录，
         # 使内容出现在「知识库」菜单（区别于 remember 写入的私有记忆）。
         if knowledge_service is not None:
@@ -427,6 +555,11 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 token = set_emitter(queue.put_nowait)
                 atoken = set_context(run_id=run_id_a, timeout=config.sandbox_approval_timeout)
                 stoken = set_sandbox_conv(req.conversation_id)
+                ptoken = set_plan_clock()   # 本轮步骤计时表；重答的每次尝试各自重新计时
+                # 思考模式（按请求）：只包住主循环——聊天页那个开关的语义是「我这个问题不用
+                # 想那么久」，管的是回答用户的那些调用，而不是交付门校验、记忆调和、记忆整合
+                # 这些旁路。此前它设在 gen() 里且从不 reset，那些旁路全都悄悄继承了它。
+                btoken = set_extra_body_override({"enable_thinking": req.think})
                 try:
                     # 本轮附件播种进会话沙箱 /workspace/uploads/，供模型直接执行（写盘≠给模型）
                     if attachment_metas and harness.sandbox is not None:
@@ -445,6 +578,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 except Exception as e:  # 兜底成 RunError，避免流卡死
                     queue.put_nowait(RunError(error=str(e)))
                 finally:
+                    reset_extra_body_override(btoken)
+                    reset_plan_clock(ptoken)
                     reset_sandbox_conv(stoken)
                     reset_context(atoken)
                     reset_emitter(token)
@@ -510,8 +645,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             turn_start = time.time()     # 本轮墙钟起点，用于落库耗时（刷新后仍可展示）
             # 关联 id：本轮（后台任务）内每条日志都带 conv/run，便于把一次请求串起来看
             set_log_context(conv_id=req.conversation_id, run_id=turn_run_id)
-            # 思考模式（按请求）：透传 enable_thinking 给 LLM 客户端；仅作用于本轮任务的模型调用
-            set_extra_body_override({"enable_thinking": req.think})
+            # 思考模式按请求透传，但设在 pump() 里、只包主循环（见那里的注释）：设在此处会
+            # 一路漏给交付门校验、记忆调和、记忆整合——它们与「我这个问题不用想那么久」无关。
             log.info("聊天开始 msg=%d字 附件=%d 交付门=%s 思考=%s",
                      len(req.message or ""), len(attachment_metas), gate_on, req.think)
             question = req.message
@@ -634,6 +769,22 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         _drop_purged_marks(steps, fx)
                         return list(fx["download"])
 
+                    def _settle_stale_fx(stale, cur) -> list[str]:
+                        """交付时结算未通过轮的产物：被本版取代的删掉，本版没重做的留下。
+
+                        返回被删的下载 id（供 _emit_purged 告知在途客户端）。
+                        """
+                        _purge, _keep = _split_stale_fx(stale, cur)
+                        _mark_carried_over(steps, _keep)
+                        if any(_keep.values()):
+                            # 模型没照 _redo_fx_note 的指令重做 —— 提示词管不住的那种情况。
+                            # 兜底已保住产物，但这条日志是唯一能统计其发生频率的地方。
+                            log.warning(
+                                "交付版未重做上一版的副作用产物，已保留旧产物 conv=%s 保留=%s",
+                                req.conversation_id,
+                                {k: len(v) for k, v in _keep.items() if v})
+                        return _purge_side_effects(_purge)
+
                     # 告诉在途客户端「本轮开了校验门」。必须赶在 agent 跑之前发：工具执行
                     # 先于首个「校验中…」，前端要据此在交付前一直不显示生成的文件——未通过会
                     # 重答、届时这些产物被 _purge_side_effects 清掉，提前显示等于给用户一个
@@ -726,8 +877,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             yield _emit_verify("校验通过", status="ok", key=ekey)
                             delivered = draft
                             delivered_sources = source_sink.snapshot()
-                            # 交付本轮，删掉之前失败轮的副作用产物
-                            for _ev in _emit_purged(_purge_side_effects(stale_fx)):
+                            # 交付本轮：只删被本版取代的旧产物，本版没重做的那类予以保留
+                            for _ev in _emit_purged(_settle_stale_fx(stale_fx, cur_fx)):
                                 yield _ev
                             break
                         # error 事件的 text 携带完整原因（critique），供前端展开显示
@@ -744,15 +895,16 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             if verdict.summary:
                                 delivered = (f"⚠️ 此回答未通过自动校验（{verdict.summary}），"
                                              f"请谨慎参考。\n\n" + delivered)
-                            # 降级交付本轮，清理之前失败轮的副作用产物
-                            for _ev in _emit_purged(_purge_side_effects(stale_fx)):
+                            # 降级交付本轮：同样只删被本版取代的那类旧产物
+                            for _ev in _emit_purged(_settle_stale_fx(stale_fx, cur_fx)):
                                 yield _ev
                             break
                         for _k in stale_fx:   # 本轮未通过、将重答，其副作用产物作废待清理
                             stale_fx[_k] += cur_fx[_k]
                         yield _emit_verify("重答中…", status="running")
                         corrective = (f"你上一版回答未通过自动校验。问题：{verdict.critique}。"
-                                      f"请针对性修正后，重新完整回答原问题：{question}")
+                                      f"请针对性修正后，重新完整回答原问题：{question}"
+                                      + _redo_fx_note(collect["steps"]))
 
                     emit_gate_span(_tracer, verify_trace, gate_t0)
                     # 交付：终稿以 TextDelta 补发（保留打字机）+ 合成 RunFinished
@@ -801,6 +953,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             f"用户：{req.message}\n助手：{final_content}")
                     except Exception:
                         pass
+                    _maybe_consolidate(req.conversation_id)
             except asyncio.CancelledError:
                 # stop：落已生成部分 + stopped，再放行取消
                 store.finish_turn(

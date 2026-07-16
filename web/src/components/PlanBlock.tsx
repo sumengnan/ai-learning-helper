@@ -1,3 +1,4 @@
+import { type ReactNode } from "react";
 import { Box, Typography, CircularProgress } from "@mui/material";
 import { EllipsisText } from "./EllipsisText";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
@@ -7,9 +8,34 @@ import HelpOutlineIcon from "@mui/icons-material/HelpOutlined";
 import StopCircleIcon from "@mui/icons-material/StopCircle";
 import PlaylistAddCheckIcon from "@mui/icons-material/PlaylistAddCheck";
 import { CollapsibleBlock } from "./CollapsibleBlock";
+import { fmtDuration } from "./duration";
+import { LiveDuration } from "./LiveDuration";
 
 type PlanStatus = "pending" | "running" | "done" | "failed";
-type PlanStepData = { title: string; status: PlanStatus };
+// 计时字段由后端跨 update_plan 快照算出、烤进 plan JSON（见 app/tools/plan_tool.py）：
+// 已结束的步骤给 elapsed_ms（定格值），进行中的给 started_at_ms（epoch 毫秒，供前端读秒）。
+// plan 走 progress 通道落库，故刷新后耗时仍在、进行中的也能接着读。没走过 running 的两者皆无。
+type PlanStepData = {
+  title: string; status: PlanStatus;
+  elapsed_ms?: number | null; started_at_ms?: number | null;
+};
+
+// 步骤耗时多为秒级，fmtDuration 对不足 1 秒会显示「0 秒」，这里改用「<1 秒」避免误读
+const fmtStep = (ms: number) => (ms < 1000 ? "<1 秒" : fmtDuration(ms));
+
+// 行尾耗时：tabular-nums 让读秒时数字不跳宽
+function StepDuration({ children }: { children: ReactNode }) {
+  return (
+    <Typography
+      variant="caption"
+      color="text.secondary"
+      sx={{ flexShrink: 0, ml: "auto", pl: 1, opacity: 0.7,
+            fontVariantNumeric: "tabular-nums" }}
+    >
+      {children}
+    </Typography>
+  );
+}
 
 function parseSteps(text?: string | null): PlanStepData[] {
   if (!text) return [];
@@ -114,6 +140,19 @@ export function PlanBlock({ text, live = false, stopped = false, status }: {
           >
             {s.title}{SUFFIX[fates[i]] ?? ""}
           </Typography>
+          {/* 进行中且确实还在跑 → 读秒；已结束 → 定格耗时。
+              读秒严格以 fate==="live" 为闸：已停止/已中断/已结束的 run 其快照里仍留着
+              running 步骤，照读会一直涨下去（此时该步已按 已取消/状态未知 呈现，
+              再给个跳动的秒数只会误导）。
+              没有 elapsed_ms 的步骤不显示时间：模型跳过 running 直接置 done 时后端拿不到
+              起点，宁可留空也不编（见 plan_tool._apply_timing）。 */}
+          {fates[i] === "live" && s.status === "running" && s.started_at_ms != null ? (
+            <StepDuration>
+              <LiveDuration startedAt={s.started_at_ms} format={fmtStep} />
+            </StepDuration>
+          ) : s.elapsed_ms != null ? (
+            <StepDuration>{fmtStep(s.elapsed_ms)}</StepDuration>
+          ) : null}
         </Box>
       ))}
     </CollapsibleBlock>

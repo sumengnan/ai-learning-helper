@@ -192,6 +192,15 @@ async def test_generate_questions_success():
     assert "2" in out
 
 
+async def test_generate_questions_emits_id_marker():
+    """真实 quiz_service.generate 会给每题带 id；工具须把 id 透出，
+    否则模型接不住「就考刚才生成的那几道」。"""
+    made = [dict(_q(), id="qa"), dict(_q(), id="qb")]
+    tool = GenerateQuestionsTool(_StubQuiz(result=made), "u1")
+    out = await tool.run(tool.Params(topic="光合作用", count=2))
+    assert "〔题目ID:qa,qb〕" in out
+
+
 async def test_generate_questions_no_knowledge():
     from app.quiz_service import NoKnowledge
     tool = GenerateQuestionsTool(_StubQuiz(exc=NoKnowledge("光合作用")), "u1")

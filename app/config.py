@@ -96,9 +96,16 @@ class AppConfig(HarnessConfig):
     attachment_max_mb: int = 100
     attachment_max_count: int = 10
     attachment_vision_max_mb: int = 5
-    memory_write_extract: bool = False
+    # 智能写入：让模型把对话提炼成分型事实（semantic/episodic/procedural）再入库，
+    # 而非原文入库。开着才会产出 episodic —— add_texts 写死 SEMANTIC，故这也是记忆整合
+    # （MemoryMaintainer）唯一的料源，关掉整合就永远空转。代价是每轮多 2 次 LLM
+    # （提炼 + 与既有记忆调和），但它跑在答案交付之后的后台，不拖慢首字。
+    memory_write_extract: bool = True
     memory_write_sample_rate: float = 1.0
     memory_write_candidate_k: int = 5
+    # 记忆整合触发：会话内 episodic 记录数达到此值，就在后台把同主题的零散 episodic
+    # 蒸馏成一条 semantic。0=关。整合后 episodic 被标 superseded、计数回落，故不会每轮重触发。
+    memory_consolidate_after: int = 20
     ttl_episodic_days: int = 0
     ttl_semantic_days: int = 0
     ttl_procedural_days: int = 0
@@ -121,3 +128,14 @@ class AppConfig(HarnessConfig):
     context_retrieval_top_k: int = 5               # L3 召回条数
     context_enable_summary: bool = True            # layered 下是否启用 L2 摘要
     context_enable_retrieval: bool = True          # layered 下是否启用 L3 检索
+    # 「快速模型」档：压缩/命名/提炼这类机械活的专用模型（同 judge_*：空则回退主模型/
+    # 端点/key）。当前三处在用：L2 滚动摘要、对话自动命名、记忆写入的事实提炼（_extract）。
+    # 这三件事压差了都无害——摘要糙了下轮重压、标题丑了用户改、事实提炼漏了下次再提。
+    # 刻意不含记忆调和（_reconcile）：那是判断题且后果不可逆（判 REPLACE 会 set_superseded
+    # 永久作废旧记忆），判错不是省钱是毁数据，故留在主模型。
+    # 思考链恒关，不给配置：机械活开思考纯烧 token 与延迟，「快速档但要思考」是自相矛盾的
+    # 组合（同 judge 档的处理）。注意它必须自己显式关——这些旁路调用够不着聊天页那个思考
+    # 开关（那个只作用于本轮任务的模型调用），不表态就由服务端默认决定，Qwen3 系默认是开的。
+    fast_model: str = ""                           # 独立快速模型；空则回退主 model
+    fast_base_url: str = ""                        # 快速模型独立端点；空则回退主 base_url
+    fast_api_key: str = ""                         # 快速模型独立 key；空则回退主 api_key
