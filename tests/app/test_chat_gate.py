@@ -14,8 +14,9 @@ from app.verify import Verdict
 from app.api.chat import GATE_OPEN_KEY
 from harness.persistence.checkpoint import CheckpointStore
 from harness.persistence.trajectory import TrajectoryStore, TrajectorySink
-from harness.tools.base import ToolRegistry
+from harness.tools.base import Tool, ToolRegistry
 from harness.tools.builtins.calculator import CalculatorTool
+from pydantic import BaseModel
 
 
 @pytest.fixture(autouse=True)
@@ -615,3 +616,99 @@ def test_gate_code_execution_not_credited_as_source(make_mock, text_turn):
     src_events = [e for e in events if e["type"] == "Progress"
                   and e["data"].get("scope") == "sources"]
     assert not src_events                             # SSE 也不该推
+
+
+# ---- 重答时副作用产物的重做提示 ----
+
+def test_redo_fx_note_names_the_artifacts():
+    from app.api.chat import _redo_fx_note
+    note = _redo_fx_note([
+        {"tool": "save_download", "args": {"filename": "7天AI学习计划.md"},
+         "result": "已保存〔下载ID:d1〕", "is_error": False},
+        {"tool": "calculator", "args": {}, "result": "42", "is_error": False},
+    ])
+    assert "save_download" in note and "7天AI学习计划.md" in note
+    assert "必须重新调用相应工具再存一次" in note
+    assert "calculator" not in note          # 非副作用工具不进清单
+
+
+def test_redo_fx_note_skips_failed_steps_and_dedupes():
+    from app.api.chat import _redo_fx_note
+    note = _redo_fx_note([
+        {"tool": "save_download", "args": {"filename": "a.md"}, "is_error": True},   # 失败步不算
+        {"tool": "add_questions", "args": {}, "result": "〔题目ID:q1〕", "is_error": False},
+        {"tool": "add_questions", "args": {}, "result": "〔题目ID:q2〕", "is_error": False},
+    ])
+    assert "a.md" not in note
+    assert note.count("add_questions") == 1  # 同一工具多次调用只说一次
+
+
+def test_redo_fx_note_empty_when_no_side_effects():
+    from app.api.chat import _redo_fx_note
+    assert _redo_fx_note([{"tool": "calculator", "args": {}, "is_error": False}]) == ""
+    assert _redo_fx_note([]) == ""
+
+
+class _FakeDownloadTool(Tool):
+    """替身 save_download：只要工具名与 filename 参数对得上即可驱动重做提示。"""
+    name = "save_download"
+    description = "把内容保存为可下载文件"
+
+    class Params(BaseModel):
+        filename: str
+        content: str = ""
+
+    async def run(self, params: "_FakeDownloadTool.Params") -> str:
+        return f"已保存到下载区：{params.filename}。〔下载ID:d1〕"
+
+
+class _Recorder:
+    """包一层 ModelClient，截下每次调用时模型实际收到的 messages。"""
+    def __init__(self, inner) -> None:
+        self._inner = inner
+        self.seen: list[list] = []
+
+    async def stream(self, messages, tools):
+        self.seen.append(list(messages))
+        async for c in self._inner.stream(messages, tools):
+            yield c
+
+
+def test_retry_prompt_tells_model_to_redo_the_download(make_mock, tool_turn, text_turn):
+    """校验失败重答时，必须告诉模型上一版存的文件已作废、要重存。
+
+    背景（用户实测）：「帮我制定一份 7 天的 AI 学习计划」→ 第一版调了 save_download 存文件，
+    但校验没过要重答；重答是全新 RunState，context 只有系统提示+历史+纠正指令，模型看不到
+    自己上一版调过 save_download，于是没再存；而交付时 _purge_side_effects 又把第一版那个
+    文件删了。两下一叠加，用户最终一个文件都没拿到。
+    """
+    rec = _Recorder(make_mock([
+        tool_turn("save_download", '{"filename":"7天AI学习计划.md","content":"计划正文"}',
+                  call_id="d1"),
+        text_turn("已为你保存学习计划文件"),        # 第一版终稿 → 校验不通过
+        text_turn("修正版：这是学习计划"),           # 重答终稿
+    ]))
+    reg = ToolRegistry(); reg.register(_FakeDownloadTool())
+    traj = TrajectoryStore(":memory:")
+    harness = Harness(client=rec, registry=reg, checkpoint_store=CheckpointStore(":memory:"),
+                      trajectory_store=traj, sink=TrajectorySink(traj), system_prompt="你是助手")
+    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,
+                    enable_answer_gate=True, answer_gate_max_retries=1)
+    verifier = _StubVerifier([
+        Verdict(ok=False, failed=["judge"], critique="太笼统", summary="judge"),
+        Verdict(ok=True),
+    ])
+    store = ConversationStore(":memory:")
+    app = create_app(config=cfg, harness=harness, store=store,
+                     doc_store=DocumentStore(":memory:"), verifier=verifier)
+    client = TestClient(app)
+    h = _auth(client)
+    _run_chat(client, h, "帮我制定一份 7 天的 AI 学习计划")
+
+    # 第 3 次模型调用 = 重答的首次调用；其最后一条用户消息即纠正指令
+    assert len(rec.seen) >= 3, "应发生重答"
+    corrective = rec.seen[2][-1].content
+    assert "太笼统" in corrective                       # 原有的针对性修正意见仍在
+    assert "save_download" in corrective                # 点名了上一版调过的工具
+    assert "7天AI学习计划.md" in corrective              # 点名了具体文件，模型才知道重做什么
+    assert "必须重新调用相应工具再存一次" in corrective

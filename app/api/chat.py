@@ -169,6 +169,41 @@ def _side_effect_ids(steps: list[dict]) -> dict[str, list[str]]:
     return out
 
 
+# 副作用工具 → 产物的说法（供重答提示点名，让模型知道要重做什么）
+_FX_KIND = {
+    "save_download": "文件",
+    "save_to_knowledge": "知识库条目",
+    "add_questions": "题库题目",
+    "generate_questions": "题库题目",
+}
+
+
+def _redo_fx_note(steps: list[dict]) -> str:
+    """重答提示的附注：点名上一版产生的副作用产物，要求重新调用工具再存一次。
+
+    每次 attempt 都是全新 RunState，context 只含系统提示 + 会话历史 + 纠正指令——模型
+    看不到上一版自己调过哪些工具。而上一版存下的文件/知识/题目会在交付时被
+    _purge_side_effects 删掉（它们属于未通过的那版）。两件事一叠加：模型不知道该重存、
+    旧产物又被删，用户最终一个文件都拿不到。故必须在纠正指令里明说。
+    """
+    made: list[str] = []
+    for s in steps or []:
+        if s.get("is_error"):
+            continue
+        kind = _FX_KIND.get(s.get("tool") or "")
+        if not kind:
+            continue
+        args = s.get("args") if isinstance(s.get("args"), dict) else {}
+        name = str(args.get("filename") or "").strip()
+        made.append(f"{s['tool']}（{kind}{f'《{name}》' if name else ''}）")
+    if not made:
+        return ""
+    return ("\n注意：你上一版曾调用 " + "、".join(dict.fromkeys(made))
+            + "，这些产物已随未通过的那一版一并作废删除。本次回答若仍应产出它们，"
+              "【必须重新调用相应工具再存一次】——上一版存过不算数，不重新调用就真的"
+              "什么都没留下，用户会以为文件已保存却找不到。")
+
+
 def _drop_purged_marks(steps: list[dict], fx: dict[str, list[str]]) -> None:
     """把已清理产物的机读标记从步骤结果里抹掉，并注明作废原因。
 
@@ -728,7 +763,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             stale_fx[_k] += cur_fx[_k]
                         yield _emit_verify("重答中…", status="running")
                         corrective = (f"你上一版回答未通过自动校验。问题：{verdict.critique}。"
-                                      f"请针对性修正后，重新完整回答原问题：{question}")
+                                      f"请针对性修正后，重新完整回答原问题：{question}"
+                                      + _redo_fx_note(collect["steps"]))
 
                     emit_gate_span(_tracer, verify_trace, gate_t0)
                     # 交付：终稿以 TextDelta 补发（保留打字机）+ 合成 RunFinished
