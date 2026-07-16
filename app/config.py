@@ -96,9 +96,16 @@ class AppConfig(HarnessConfig):
     attachment_max_mb: int = 100
     attachment_max_count: int = 10
     attachment_vision_max_mb: int = 5
-    memory_write_extract: bool = False
+    # 智能写入：让模型把对话提炼成分型事实（semantic/episodic/procedural）再入库，
+    # 而非原文入库。开着才会产出 episodic —— add_texts 写死 SEMANTIC，故这也是记忆整合
+    # （MemoryMaintainer）唯一的料源，关掉整合就永远空转。代价是每轮多 2 次 LLM
+    # （提炼 + 与既有记忆调和），但它跑在答案交付之后的后台，不拖慢首字。
+    memory_write_extract: bool = True
     memory_write_sample_rate: float = 1.0
     memory_write_candidate_k: int = 5
+    # 记忆整合触发：会话内 episodic 记录数达到此值，就在后台把同主题的零散 episodic
+    # 蒸馏成一条 semantic。0=关。整合后 episodic 被标 superseded、计数回落，故不会每轮重触发。
+    memory_consolidate_after: int = 20
     ttl_episodic_days: int = 0
     ttl_semantic_days: int = 0
     ttl_procedural_days: int = 0

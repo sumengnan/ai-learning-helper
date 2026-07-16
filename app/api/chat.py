@@ -323,6 +323,47 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 sample_rate=config.memory_write_sample_rate)
     _assembler = ContextAssembler(config, config.model,
                                   summarizer=_summarizer, conv_memory=_conv_memory)
+    # 记忆整合：在途会话集合，防同一会话并发整合互抢 set_superseded
+    _consolidating: set[str] = set()
+
+    def _maybe_consolidate(conv_id: str) -> None:
+        """本会话 episodic 攒够了就在后台整合成 semantic。
+
+        【不 await】：gen() 还没返回前，这个 run 在 RunManager 里仍算「在途」，而
+        active_run_for_conv 是并发守卫——等整合跑完（每簇一次 LLM）会让用户的下一句
+        直接吃 409。故 fire-and-forget，失败只记日志。
+
+        计数按 episodic 而非总数：consolidate 只吃 episodic，用总数会让「一堆 semantic、
+        零 episodic」的会话每轮都空转一次聚类。整合后 episodic 被标 superseded、计数
+        回落，自然不会每轮重触发。
+        """
+        _maintainer = getattr(harness, "memory_maintainer", None)
+        _mstore = getattr(harness, "memory_store", None)
+        _after = getattr(config, "memory_consolidate_after", 0)
+        if _maintainer is None or _mstore is None or _after <= 0:
+            return
+        if conv_id in _consolidating:          # 上一轮的整合还在跑
+            return
+        try:
+            from harness.memory.record import MemType
+            n = _mstore.count_by_owner(conv_id, "conversation", mem_type=MemType.EPISODIC)
+        except Exception:                      # 计数失败不该影响聊天
+            return
+        if n < _after:
+            return
+
+        async def _run() -> None:
+            try:
+                r = await _maintainer.maintain(conv_id, "conversation")
+                log.info("记忆整合 conv=%s episodic=%d → %s", conv_id, n, r)
+            except Exception as e:             # noqa: BLE001
+                log.warning("记忆整合失败 conv=%s：%s", conv_id, e, exc_info=True)
+            finally:
+                _consolidating.discard(conv_id)
+
+        _consolidating.add(conv_id)
+        asyncio.create_task(_run())
+
     # 交付门插桩：未装 OTel provider 时 get_tracer 返回 no-op tracer，零开销
     _tracer = get_tracer("app.chat")
 
@@ -848,6 +889,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             f"用户：{req.message}\n助手：{final_content}")
                     except Exception:
                         pass
+                    _maybe_consolidate(req.conversation_id)
             except asyncio.CancelledError:
                 # stop：落已生成部分 + stopped，再放行取消
                 store.finish_turn(

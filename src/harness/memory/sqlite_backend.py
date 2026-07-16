@@ -136,11 +136,15 @@ class SqliteVecBackend:
         rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_record(r) for r in rows]
 
-    def count_by_owner(self, owner_id: str, kind: str) -> int:
-        return self._conn.execute(
-            "SELECT COUNT(*) FROM memory_records "
-            "WHERE owner_id = ? AND kind = ? AND superseded = 0",
-            (owner_id, kind)).fetchone()[0]
+    def count_by_owner(self, owner_id: str, kind: str, *,
+                       mem_type: "MemType | str | None" = None) -> int:
+        sql = ("SELECT COUNT(*) FROM memory_records "
+               "WHERE owner_id = ? AND kind = ? AND superseded = 0")
+        params: list = [owner_id, kind]
+        if mem_type is not None:
+            sql += " AND mem_type = ?"
+            params.append(mem_type.value if isinstance(mem_type, MemType) else str(mem_type))
+        return self._conn.execute(sql, params).fetchone()[0]
 
     def list_by_entity(self, owner_id: str, kind: str,
                        entity_key: str) -> list[MemoryRecord]:
