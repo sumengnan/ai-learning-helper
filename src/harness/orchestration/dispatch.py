@@ -26,7 +26,8 @@ class DispatchTool(Tool):
 
     def __init__(self, roster: AgentRoster, tool_pool: dict, client, budget=None,
                  tracer=None, depth: int = 0, max_depth: int = 2,
-                 sub_max_steps: int = 10, model_name: str = "", price_map=None) -> None:
+                 sub_max_steps: int = 10, model_name: str = "", price_map=None,
+                 loop_detect_window: int = 0) -> None:
         self._roster = roster
         self._tool_pool = tool_pool
         self._client = client
@@ -37,6 +38,7 @@ class DispatchTool(Tool):
         self._sub_max_steps = sub_max_steps
         self._model_name = model_name
         self._price_map = price_map
+        self._loop_detect_window = loop_detect_window
         self.description = (
             "把一个子任务派发给专职子 agent 执行，返回其最终结果。\n"
             + roster.describe())
@@ -52,7 +54,7 @@ class DispatchTool(Tool):
                 self._roster, self._tool_pool, self._client, self._budget, self._tracer,
                 depth=self._depth + 1, max_depth=self._max_depth,
                 sub_max_steps=self._sub_max_steps, model_name=self._model_name,
-                price_map=self._price_map))
+                price_map=self._price_map, loop_detect_window=self._loop_detect_window))
         return reg
 
     async def run(self, params: "DispatchTool.Params") -> str:
@@ -63,7 +65,8 @@ class DispatchTool(Tool):
             client=self._client, registry=self._build_sub_registry(spec),
             context=ContextManager(spec.system_prompt),
             max_steps=self._sub_max_steps, budget=self._budget,
-            tracer=self._tracer, model_name=self._model_name, price_map=self._price_map)
+            tracer=self._tracer, model_name=self._model_name, price_map=self._price_map,
+            loop_detect_window=self._loop_detect_window)
         final = None
         error = None
         scope = f"subagent:{params.agent}"

@@ -214,7 +214,8 @@ def build_harness(config) -> Harness:
             reg.register(DispatchTool(
                 AgentRoster(specs), pool, client, budget=None, tracer=None, depth=0,
                 max_depth=config.max_dispatch_depth, sub_max_steps=config.sub_agent_max_steps,
-                model_name=config.model, price_map=config.price_map))
+                model_name=config.model, price_map=config.price_map,
+                loop_detect_window=config.loop_detect_window))
 
     # 技能（渐进式披露）：扫描技能目录，非空才注册三个工具
     skill_registry = None
