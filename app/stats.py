@@ -27,6 +27,11 @@ from harness.usage import tiered_cost
 
 from .verify import failed_layers_zh
 
+# 统计口径统一按 UTC+8（北京时间）自然日切：「今日」= 北京今天 00:00 到现在，
+# 「近 N 天」= 往前数 N-1 个自然日的 00:00 到现在。存储仍是 UTC（库内时间戳带 +00:00），
+# 仅在此层把边界与分桶换算到 UTC+8。与 app/api/chat.py 的 _CN_TZ 同源。
+_CN_TZ = timezone(timedelta(hours=8))
+
 # 原始工具名 → 面向学习者的「能力」分组（图标, 标签, 归入的工具名集合）。
 # 未列出的工具归入「其他能力」。顺序即展示顺序的兜底（实际按调用次数倒排）。
 _ABILITY_GROUPS: list[tuple[str, str, set[str]]] = [
@@ -64,6 +69,23 @@ def _iso_delta_ms(start: str, end: str) -> float | None:
     except (ValueError, TypeError):
         return None
     return (b - a).total_seconds() * 1000.0
+
+
+def _cn_day(created_at: str) -> str:
+    """UTC ISO 时间戳 → UTC+8 自然日 (YYYY-MM-DD)；空串/解析失败返回空串。
+
+    每日分桶的 key 据此生成，须与 _daily_series 用 now_cn.date() 拉出的日期序列对齐，
+    否则趋势图当天数据会错位到相邻 UTC 日。裸时间戳（无偏移）按 UTC 处理，兜底不崩。
+    """
+    if not created_at:
+        return ""
+    try:
+        dt = datetime.fromisoformat(created_at)
+    except (ValueError, TypeError):
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_CN_TZ).date().isoformat()
 
 
 def _step_bucket(n: int) -> str:
@@ -122,16 +144,24 @@ class StatsService:
     def overview(self, user_id: str | None, days: int = 14) -> dict:
         days = max(1, min(days, 90))
         now = self._now()
-        cutoff = now - timedelta(days=days)
+        if now.tzinfo is None:                       # 约定注入 aware datetime；裸值兜底按 UTC
+            now = now.replace(tzinfo=timezone.utc)
+        # 按 UTC+8 自然日切窗：起点 = 北京今天 00:00 再回退 (days-1) 天（days=1 即今天 00:00）。
+        # 起点转回 UTC ISO 传给 SQL —— 库内时间戳同为 +00:00，字典序比较才等价于时间序。
+        now_cn = now.astimezone(_CN_TZ)
+        start_cn = (now_cn.replace(hour=0, minute=0, second=0, microsecond=0)
+                    - timedelta(days=days - 1))
+        cutoff = start_cn.astimezone(timezone.utc)
         # 一次读盘、两份聚合：learn（「AI 在为我做什么」）按 user 隔离，ops（工程台的运维
         # 口径：全局成功率/延迟/工具健康度）仍看全库——同一台机器上别人的运行也是运维对象。
         events = self._load_events(cutoff.isoformat())
         agg = self._aggregate(events)
-        series = self._daily_series(agg["daily"], now, days)
+        # 趋势序列按 UTC+8 日期拉：传 now_cn，末项即北京今天，与 _cn_day 的分桶 key 对齐。
+        series = self._daily_series(agg["daily"], now_cn, days)
         user_runs = self._user_run_ids(user_id)
         user_events = [e for e in events if e[0] in user_runs]
         user_agg = self._aggregate(user_events)
-        user_series = self._daily_series(user_agg["daily"], now, days)
+        user_series = self._daily_series(user_agg["daily"], now_cn, days)
         app_counts = self._app_counts(user_id)
         return {
             "range_days": days,
@@ -279,11 +309,13 @@ class StatsService:
         run_end: dict[str, str] = {}
 
         for run_id, typ, created_at, d in events:
-            day = (created_at or "")[:10]
+            # day（UTC+8 自然日）只在 RunStarted/ModelUsage 两个分支用到，惰性算，
+            # 避免为占绝大多数的 TextDelta/ReasoningDelta 事件白解析时间戳。
             if typ == "RunStarted":
                 runs_started.add(run_id)
                 if created_at:
                     run_start[run_id] = created_at
+                day = _cn_day(created_at)
                 if day:
                     daily[day]["runs"] += 1
             elif typ == "RunFinished":
@@ -301,6 +333,7 @@ class StatsService:
                 total_completion += u.get("completion", 0) or 0
                 tok = u.get("total", 0) or 0
                 total_tokens += tok
+                day = _cn_day(created_at)
                 if day:
                     daily[day]["tokens"] += tok
                 lat = d.get("latency_ms")
