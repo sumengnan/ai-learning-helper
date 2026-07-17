@@ -48,6 +48,26 @@ async def test_save_tool_empty_content_reports_failure(mock_embedder):
     assert svc.list_fragments("u1", 1, 10)["total"] == 0
 
 
+def test_strip_citations_removes_inline_markers():
+    from app.sources import strip_citations
+    assert strip_citations("叶绿体中[1]，光照[2][3]。") == "叶绿体中，光照。"
+    assert strip_citations("中 [1] 后") == "中 后"      # 角标连同前导空格一起去掉
+    assert strip_citations("无角标文本") == "无角标文本"
+    assert strip_citations("") == ""
+
+
+async def test_save_tool_strips_citation_markers(mock_embedder):
+    """保存到知识库时去掉正文里的来源角标 [1]，其余内容保留。"""
+    svc = _service(mock_embedder)
+    tool = SaveToKnowledgeTool(svc, "u1")
+    await tool.run(tool.Params(
+        title="笔记", text="光合作用发生在叶绿体中[1]，需要光照[2][3]。"))
+    page = svc.list_fragments("u1", 1, 10)
+    frag = svc.get_fragment("u1", page["items"][0]["id"])
+    assert "[1]" not in frag["text"] and "[2]" not in frag["text"] and "[3]" not in frag["text"]
+    assert "光合作用发生在叶绿体中" in frag["text"] and "需要光照" in frag["text"]
+
+
 async def test_save_tool_strips_markdown_stores_plain_text(mock_embedder):
     svc = _service(mock_embedder)
     tool = SaveToKnowledgeTool(svc, "u1")

@@ -25,6 +25,20 @@ SOURCE_GUIDE = (
     "〔参考来源 [n]…〕标注。当你在回答正文里用到某条资料时，请在相应语句后写上对应的 "
     "[n]（例如「光合作用发生在叶绿体中[1]」）。只引用真实出现过的编号，不要编造。\n")
 
+# 正文内联来源角标 [1]/[12]…；连同紧邻的前导空格一起吃掉，删后不留孤立空格。
+_CITATION_RE = re.compile(r"[ \t]*\[\d+\]")
+
+
+def strip_citations(text: str) -> str:
+    """去掉正文里的内联来源角标 [n]（见 SOURCE_GUIDE 约定）。
+
+    保存到知识库的是「可检索素材」：编号 [1] 脱离原对话后既无指向、又是语义检索噪声，
+    故入库前剥离。只删纯数字角标 [n]，不动 [文字](链接)——后者已由 strip_markdown 处理。
+    """
+    if not text:
+        return text
+    return _CITATION_RE.sub("", text)
+
 
 def _domain(url: str) -> str:
     try:
