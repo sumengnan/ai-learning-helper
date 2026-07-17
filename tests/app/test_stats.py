@@ -263,6 +263,19 @@ def test_activity_series_length_and_shape():
     assert today["runs"] == 2 and today["tokens"] == 150
 
 
+def test_recent_downloads_respect_time_range():
+    """产物列表跟随时间范围：窗口外的旧产物不列，窗口内无产物则返回空。"""
+    # dl1 落在 2026-07-11T07:00（= 北京 07-11 15:00）。把 now 设到 07-20：
+    late_now = datetime(2026, 7, 20, 12, 0, 0, tzinfo=timezone.utc)
+    svc = StatsService(trajectory_conn=_traj_conn(), app_conn=_app_conn(),
+                       memory_conn=None, now=lambda: late_now)
+    # 14 天窗（起点北京 07-07）：dl1 在窗内，照常列出
+    d14 = svc.overview("u", days=14)["learn"]["recent_downloads"]
+    assert len(d14) == 1 and d14[0]["filename"] == "提纲.md"
+    # 收窄到「今日」（北京 07-20 00:00 起）：dl1 早出窗 → 空，前端据此提示「今日还没有产物生成」
+    assert svc.overview("u", days=1)["learn"]["recent_downloads"] == []
+
+
 def test_run_duration_aggregation():
     tc = _traj_conn()
     _ev(tc, "r1", 0, "RunStarted", {"run_id": "r1"}, created_at="2026-07-11T10:00:00+00:00")

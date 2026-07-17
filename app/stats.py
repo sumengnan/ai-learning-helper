@@ -166,7 +166,8 @@ class StatsService:
         return {
             "range_days": days,
             # 学习主场：本人的运行 + 本人的资产
-            "learn": self._learn_section(user_id, user_agg, user_series, app_counts),
+            "learn": self._learn_section(user_id, user_agg, user_series, app_counts,
+                                         cutoff.isoformat()),
             # AI 运行统计：运维口径，整片全局、不按用户切（含 gate/quality/会话数）
             "ops": self._ops_section(agg, series, self._global_counts(),
                                      self._gate_stats(cutoff.isoformat()),
@@ -599,13 +600,16 @@ class StatsService:
             f"WHERE kind='conversation' AND superseded=0 AND owner_id IN ({ph})",
             tuple(conv_ids))
 
-    def _recent_downloads(self, user_id: str | None) -> list[dict]:
+    def _recent_downloads(self, user_id: str | None, cutoff_iso: str) -> list[dict]:
+        # 跟随右上角时间范围：只列窗口内（按 UTC+8 自然日切）生成的产物；
+        # 窗口内无产物时返回空，由前端给出「该时段还没有产物生成」的提示。
         if self._app is None:
             return []
         try:
             rows = self._app.execute(
-                "SELECT id, filename, content_type, size, created_at FROM downloads WHERE user_id=? "
-                "ORDER BY seq DESC LIMIT 3", (user_id,)).fetchall()
+                "SELECT id, filename, content_type, size, created_at FROM downloads "
+                "WHERE user_id=? AND created_at >= ? "
+                "ORDER BY seq DESC LIMIT 3", (user_id, cutoff_iso)).fetchall()
         except sqlite3.Error:
             return []
         return [{"id": r[0], "filename": r[1], "content_type": r[2], "size": r[3],
@@ -664,7 +668,7 @@ class StatsService:
 
     # ---------- 组装 ----------
 
-    def _learn_section(self, user_id, agg, series, app_counts) -> dict:
+    def _learn_section(self, user_id, agg, series, app_counts, cutoff_iso) -> dict:
         return {
             "assets": {
                 "documents": app_counts["documents"],
@@ -674,7 +678,7 @@ class StatsService:
             },
             "conversations": app_counts["conversations"],
             "messages": app_counts["messages"],
-            "recent_downloads": self._recent_downloads(user_id),
+            "recent_downloads": self._recent_downloads(user_id, cutoff_iso),
             "last_conversation": self._last_conversation(user_id),
             "abilities": self._abilities(agg["tool_counts"]),
             "effort": {
