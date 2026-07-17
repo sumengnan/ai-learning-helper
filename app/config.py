@@ -67,6 +67,10 @@ class AppConfig(HarnessConfig):
     enable_mcp: bool = False          # MCP 客户端总开关；开则按 mcp_config_path 连接 server
     cors_origins: list = ["http://localhost:5173"]
     app_max_upload_mb: int = 20
+    # 题库导入：单块字符数（越小则块越多、并行度越高但请求数越多）与 LLM 抽取并发上限
+    # （无上限会打爆单端点、触发超时重试反而更慢）。
+    import_chunk_chars: int = 1800
+    import_max_concurrency: int = 4
     quiz_max_count: int = 20
     quiz_retrieve_k: int = 6
     short_pass_score: int = 60

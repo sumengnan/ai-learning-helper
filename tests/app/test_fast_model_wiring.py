@@ -105,9 +105,9 @@ def test_question_importer_wired_to_fast_completer(monkeypatch):
     captured = {}
     real = M.QuestionImporter
 
-    def _spy(complete, store):
+    def _spy(complete, store, **kwargs):
         captured["complete"] = complete
-        return real(complete, store)
+        return real(complete, store, **kwargs)
     monkeypatch.setattr(M, "QuestionImporter", _spy)
 
     _app(_ThinkingSpy())          # create_app 内部装配 question_importer

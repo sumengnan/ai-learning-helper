@@ -29,6 +29,8 @@ _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS questions(
          id TEXT PRIMARY KEY, user_id TEXT, type TEXT, stem TEXT, options TEXT,
          answer TEXT, explanation TEXT, source TEXT, created_at TEXT)""",
+    # 题目几乎所有查询（列表/计数/来源/导入去重预载）都按 user_id 过滤，建索引免全表扫。
+    "CREATE INDEX IF NOT EXISTS idx_questions_user ON questions(user_id)",
     """CREATE TABLE IF NOT EXISTS wrong_answers(
          id TEXT PRIMARY KEY, user_id TEXT, question_id TEXT, exam_id TEXT,
          snapshot TEXT, user_answer TEXT, created_at TEXT, seq INTEGER)""",

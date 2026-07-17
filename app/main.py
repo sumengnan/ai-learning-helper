@@ -100,7 +100,9 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
         # 走快速档：把粘贴/上传的文本解析成题目，是纯抽取，与记忆写入的 _extract 同形。
         # 它是独立接口、够不着聊天页那个思考开关，不自己表态就一路跟着服务端默认思考。
         question_importer = QuestionImporter(
-            build_fast_completer(harness.client, config), question_store)
+            build_fast_completer(harness.client, config), question_store,
+            chunk_chars=config.import_chunk_chars,
+            max_concurrency=config.import_max_concurrency)
 
     user_store = user_store if user_store is not None else UserStore(conn=app_conn)
     secret = os.environ.get("AUTH_SECRET") or config.auth_secret

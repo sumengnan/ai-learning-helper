@@ -57,12 +57,18 @@ class QuestionImporter:
 
     长文本切成多块 **并行** 抽取：单次输出短、避免触发模型请求超时重试，且多块并发，
     整体耗时约等于最慢的单块，而非一次生成全部题目的长输出（原先 20 题可耗数分钟）。
+
+    并发有上限（max_concurrency）：无上限地把所有块同时打向单个 LLM 端点，会被服务端
+    排队（并行退化为串行），更会撞请求超时触发重试风暴、反而更慢。有闸后既控住峰值并发，
+    又保住多块并跑的加速。
     """
 
-    def __init__(self, complete, question_store, chunk_chars: int = 1800) -> None:
+    def __init__(self, complete, question_store, chunk_chars: int = 1800,
+                 max_concurrency: int = 4) -> None:
         self._complete = complete
         self._store = question_store
         self._chunk_chars = chunk_chars
+        self._max_concurrency = max(1, max_concurrency)
 
     async def _extract(self, text: str) -> list:
         try:
@@ -75,26 +81,34 @@ class QuestionImporter:
         if len(chunks) == 1:
             parsed = await self._extract(chunks[0])
         else:
-            # 并行抽取；单块失败（LLM 报错/坏 JSON）只丢该块，不影响其余
+            # 并行抽取（并发受 max_concurrency 上限约束）；单块失败（LLM 报错/坏 JSON）
+            # 只丢该块，不影响其余
+            sem = asyncio.Semaphore(self._max_concurrency)
+
+            async def _guarded(c: str) -> list:
+                async with sem:
+                    return await self._extract(c)
+
             results = await asyncio.gather(
-                *(self._extract(c) for c in chunks), return_exceptions=True)
+                *(_guarded(c) for c in chunks), return_exceptions=True)
             parsed = [q for r in results if not isinstance(r, BaseException) for q in r]
-        imported = skipped_invalid = skipped_duplicate = 0
-        seen: set[tuple] = set()
+        # 一次性预载「对库去重」键，之后全程内存判重——避免逐题 SELECT 全表扫。
+        # seen 同时承担批内去重与对库去重，两者命中都计入 skipped_duplicate（语义同原先）。
+        seen: set[tuple] = self._store.existing_dedup_keys(user_id)
+        skipped_invalid = skipped_duplicate = 0
+        to_insert: list[dict] = []
         for q in parsed:
             if not _valid(q, ALL_TYPES):
                 skipped_invalid += 1
                 continue
             key = (q["type"], (q.get("stem") or "").strip())
-            if key in seen:                       # 批内去重
+            if key in seen:                       # 批内 + 对库去重
                 skipped_duplicate += 1
                 continue
             seen.add(key)
             q["source"] = filename
             q["explanation"] = q.get("explanation", "")
-            if self._store.create_deduped(user_id, q) is None:   # 对库去重
-                skipped_duplicate += 1
-            else:
-                imported += 1
-        return {"imported": imported, "skipped_invalid": skipped_invalid,
+            to_insert.append(q)
+        self._store.create_many(user_id, to_insert)   # 单事务批量入库
+        return {"imported": len(to_insert), "skipped_invalid": skipped_invalid,
                 "skipped_duplicate": skipped_duplicate}

@@ -45,6 +45,40 @@ class QuestionStore:
             return None
         return self.create(user_id, q)
 
+    def existing_dedup_keys(self, user_id: str) -> set[tuple[str, str]]:
+        """一次取出该用户全部 (type, 去空白 stem) 判重键，供批量导入时在内存里判重。
+
+        取代逐题 create_deduped 的「每题一次 SELECT」——那条 WHERE 里 TRIM(stem) 作用在
+        列上，使任何索引都失效、每题都全表扫该用户题目（导入 N 题 = N 次全表扫）。
+        """
+        rows = self._db.execute(
+            "SELECT type, stem FROM questions WHERE user_id=?", (user_id,)).fetchall()
+        return {(r[0], (r[1] or "").strip()) for r in rows}
+
+    def create_many(self, user_id: str, questions: list[dict]) -> list[str]:
+        """批量插入，单事务一次提交。返回新建 id 列表（顺序与入参一致）。
+
+        取代逐题 create() 的「每题一次 commit」——WAL 下每次 commit 都 fsync，
+        导入 N 题 = N 次 fsync。调用方须自行完成去重与字段校验。
+        """
+        if not questions:
+            return []
+        now = _now()
+        ids: list[str] = []
+        rows = []
+        for q in questions:
+            qid = uuid4().hex
+            ids.append(qid)
+            rows.append((qid, user_id, q["type"], q["stem"],
+                         json.dumps(q.get("options"), ensure_ascii=False),
+                         json.dumps(q.get("answer"), ensure_ascii=False),
+                         q.get("explanation", ""), q.get("source", ""), now))
+        self._db.executemany(
+            "INSERT INTO questions(id, user_id, type, stem, options, answer, explanation, "
+            "source, created_at) VALUES (?,?,?,?,?,?,?,?,?)", rows)
+        self._db.commit()
+        return ids
+
     def _row(self, r) -> dict:
         return {"id": r[0], "type": r[1], "stem": r[2],
                 "options": json.loads(r[3]), "answer": json.loads(r[4]),
