@@ -1,7 +1,11 @@
 # AI 学习助手
 
+[![在线演示](https://img.shields.io/badge/%F0%9F%9A%80_在线演示-192.144.213.12-brightgreen)](http://192.144.213.12)
 [![Docker Hub](https://img.shields.io/badge/Docker%20Hub-sumengnan%2Fai--learning--helper-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/sumengnan/ai-learning-helper)
 [![Image Size](https://img.shields.io/docker/image-size/sumengnan/ai-learning-helper?sort=semver)](https://hub.docker.com/r/sumengnan/ai-learning-helper/tags)
+
+> ## 🚀 在线演示:**http://192.144.213.12**
+> 无需部署,打开即可体验 —— **可自行注册账号**登录使用。
 
 > 🐳 **Docker 镜像**:[hub.docker.com/r/sumengnan/ai-learning-helper](https://hub.docker.com/r/sumengnan/ai-learning-helper) · 拉取:`docker pull sumengnan/ai-learning-helper`
 
