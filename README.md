@@ -20,6 +20,8 @@ React 前端，提供 AI 聊天、知识库、题库、错题集、学习概览�
   + L3 语义检索，既不超窗又尽量不丢关键信息（详见 [`docs/context-management.md`](docs/context-management.md)）。
 - **记忆管理**：三类长期记忆（语义/情景/程序），从对话自动提炼、去重消矛盾，语义检索找回，
   并会自我整合与过期清理（详见 [`docs/memory-management.md`](docs/memory-management.md)）。
+- **RAG 检索**：知识库资料解析入库、切块向量化，多路召回 + 融合排序 + 去冗余 + 可选重排，
+  检索结果用于问答 grounding 与出题（详见 [`docs/rag-retrieval.md`](docs/rag-retrieval.md)）。
 - **部署自检**：左侧菜单底部版本徽标显示前后端版本，一致=绿 ✓、不一致=橙 ⚠。
 
 ## 技术栈
@@ -113,6 +115,8 @@ cd docker && docker compose up -d --build
   分层、token 预算、降级与可观测、配置项。
 - [`docs/memory-management.md`](docs/memory-management.md) —— 记忆管理（新手友好）：三类记忆、
   智能写入、语义检索、自我整合与过期清理、记忆工具与配置。
+- [`docs/rag-retrieval.md`](docs/rag-retrieval.md) —— RAG 检索（新手友好）：知识库入库、
+  多路召回与融合排序、grounding 与出题、配置与代码位置。
 - [`docs/DEPLOY.md`](docs/DEPLOY.md) —— 部署：服务器准备、GitHub Secrets、版本自检等。
 
 ## 技能框架
