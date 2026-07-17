@@ -39,6 +39,7 @@ AI 不只是"聊天",还能调用工具——联网查资料、在沙箱里跑�
 - **工具能力**:联网 `http_request`(失败/被防抓自动改用浏览器)、代码沙箱(按语言起一次性子沙箱执行)、
   无头浏览器抓取、MCP 客户端(stdio + streamable-http)、多智能体派发。
 - **回答校验门**(可选):交付前对格式 / 知识库 grounding / 代码可运行 / LLM 自评打分做校验,不过则自动带反馈重答(详见 [回答校验门](docs/answer-gate.md))。
+- **循环/停滞防护**:除步数、token、墙钟时间三道硬上限外,agent 循环还做循环检测——连续 N 步发起完全相同的工具调用(同名+同参)即判为原地打转、提前中止,防模型卡在重复动作上白跑(`HARNESS_LOOP_DETECT_WINDOW`,默认 3,<2 关闭)。
 - **上下文管理**:长对话按 `full` / `window` / `layered` 三档策略裁剪(详见 [上下文管理](docs/context-management.md))。
 - **记忆管理**:三类长期记忆(语义/情景/程序),自动提炼、去重消矛盾、自我整合(详见 [记忆管理](docs/memory-management.md))。
 - **部署自检**:左侧菜单底部版本徽标显示前后端版本,一致=绿 ✓、不一致=橙 ⚠。
@@ -58,7 +59,6 @@ flowchart TD
   持久化、可观测。详见 [架构:harness 核心](docs/architecture-harness.md)。
 - **app 应用层**(`app/`):FastAPI 把内核包装成学习助手产品——鉴权、会话、知识库、题库、校验门等。
   详见 [架构:app 层](docs/architecture-app.md)。
-
 ## 技术栈
 
 | 层 | 技术 |

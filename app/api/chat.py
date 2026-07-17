@@ -659,7 +659,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 max_steps=config.max_steps, run_id_factory=lambda: run_id_a,
                 budget=BudgetTracker(config.max_tokens_budget, config.max_wall_seconds),
                 checkpoint_store=harness.checkpoint_store, model_name=config.model,
-                price_map=config.price_map, tool_result_max_chars=config.tool_result_max_chars)
+                price_map=config.price_map, tool_result_max_chars=config.tool_result_max_chars,
+                loop_detect_window=config.loop_detect_window)
 
         async def _drain(loop_obj, run_id_a, message, passthrough, collect):
             """跑一次 AgentLoop，逐事件产出 SSE 串；把 final/steps/grounding 收进 collect。

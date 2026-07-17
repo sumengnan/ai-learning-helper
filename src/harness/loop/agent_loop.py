@@ -61,6 +61,14 @@ def _finalize(acc: dict[int, dict]) -> list[_Finalized]:
     return out
 
 
+def _canonical_args(args) -> str:
+    """把工具参数规范化成稳定字符串，供循环签名比较（键序/空白无关）。"""
+    try:
+        return json.dumps(args, sort_keys=True, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(args)
+
+
 class AgentLoop:
     def __init__(
         self,
@@ -75,6 +83,7 @@ class AgentLoop:
         price_map: dict | None = None,
         tool_result_max_chars: int | None = None,
         checkpoint_store=None,
+        loop_detect_window: int = 0,
     ) -> None:
         self._client = client
         self._registry = registry
@@ -87,6 +96,8 @@ class AgentLoop:
         self._model_name = model_name
         self._price_map = price_map or {}
         self._checkpoint_store = checkpoint_store
+        # 循环/停滞检测窗口：连续 N 步相同工具调用签名即判打转并中止；<2 关闭。
+        self._loop_window = loop_detect_window
 
     async def run(self, user_message: str) -> AsyncIterator[Event]:
         state = RunState(run_id=self._new_run_id())
@@ -120,6 +131,7 @@ class AgentLoop:
         if not resuming:
             yield RunStarted(run_id=state.run_id)
 
+        recent_sigs: list = []          # 最近各步的工具调用签名，供循环检测
         with self._tracer.start_as_current_span("run") as run_span:
             run_span.set_attribute("harness.run_id", state.run_id)
 
@@ -188,6 +200,22 @@ class AgentLoop:
                         if self._checkpoint_store:
                             self._checkpoint_store.delete(state.run_id)
                         return
+
+                    # 循环/停滞检测：连续 N 步发起完全相同的工具调用（同名+同参）判为原地
+                    # 打转，提前中止（避免白跑到 max_steps）。window<2 关闭；参数不同（如翻页）
+                    # 签名不同，不会误伤。
+                    if self._loop_window >= 2:
+                        sig = tuple(sorted(
+                            (tc.name, _canonical_args(tc.arguments)) for tc in tool_calls))
+                        recent_sigs.append(sig)
+                        if (len(recent_sigs) >= self._loop_window
+                                and len(set(recent_sigs[-self._loop_window:])) == 1):
+                            names = "、".join(sorted({tc.name for tc in tool_calls}))
+                            run_span.set_attribute("harness.loop_detected", True)
+                            yield RunError(
+                                error=f"检测到疑似循环：连续 {self._loop_window} 步重复"
+                                      f"相同的工具调用（{names}），已提前中止")
+                            return
 
                     yield ToolCallRequested(tool_calls=tool_calls)
                     for f in finalized:

@@ -15,7 +15,7 @@
 |---|---|---|
 | 可观测性 | OpenTelemetry 插桩：run/step/model/tool span 树 + token/成本/延迟/错误 | 本规格 |
 | 重试 + 自纠正 | 传输层 `RetryingModelClient` 指数退避；循环层显式错误回填自纠正 | 本规格 |
-| 资源上限 | token 预算 + 墙钟时间上限（+ 已有 max_steps）；工具结果截断；calculator 幂运算守卫 | 本规格 |
+| 资源上限 | token 预算 + 墙钟时间上限（+ 已有 max_steps）；循环/停滞检测（连续 N 步相同工具调用签名即 `RunError` 中止，`loop_detect_window` 配置，<2 关闭）；工具结果截断；calculator 幂运算守卫 | 本规格 |
 | ~~断点续跑~~ | checkpoint / RunState 序列化 / 恢复 | **延后到 ③** |
 
 **项目存储栈（全局约定）**：SQLite + sqlite-vec 存业务数据与向量（服务③）；**OpenTelemetry 存可观测性数据**（本规格采用）。
