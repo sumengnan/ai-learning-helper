@@ -63,8 +63,11 @@ GROUNDING_SYSTEM = (
     "「待核查回答」。只核查回答里【关于主题的客观事实性陈述】是否能被资料支撑。"
     "以下内容不属于核查范围，一律不算缺依据、绝不要列入 unsupported："
     "问候语与开场白、收尾语与鼓励的话、给用户的建议/操作提示/下一步指引、"
-    "AI 对自己将做或已做什么的说明、常识、以及基于资料的合理推理与分析。"
-    "仅当某条【关于主题的事实陈述】与资料矛盾、或在资料中完全找不到依据时，才判为缺依据。"
+    "AI 对自己将做或已做什么的说明、常识、基于资料的合理推理与分析、"
+    "以及对资料的忠实改写/归纳/重组/摘要/提炼（如把知识库内容整理成学习笔记、总结、提纲——"
+    "这类只是把既有资料换种方式组织呈现，不是新增事实）。"
+    "另外：检索到的资料往往只是相关资料的一部分，不要因为某句话没在这批片段里逐字出现就判缺依据。"
+    "仅当某条【关于主题的事实陈述】与资料明显矛盾、或明显是资料之外凭空捏造的新事实时，才判为缺依据。"
     "只输出 JSON：{\"grounded\": true 或 false, \"unsupported\": [\"缺依据的事实论断…\"], "
     "\"feedback\": \"一句话说明\"}；全部有据、或回答里只有上述无需核查的内容时，"
     "unsupported 为空数组、grounded 为 true。不要多余文字。")
@@ -258,9 +261,15 @@ class AnswerVerifier:
             kb = _live([g for g in grounding if g.get("tool") == "search_memory"])
             web = _live([g for g in grounding
                          if g.get("retrieval") and g.get("tool") != "search_memory"])
+            # 本轮经 read_attachment/read_file 读入的文档正文：整理成笔记/总结时模型据以作答的
+            # 依据，也纳入核查资料——否则「整理知识库成笔记」会因笔记内容不在本轮 top-k search_memory
+            # 片段里而被误判缺依据。不带 retrieval 标记，故不单独触发 grounding，仅在本轮另有知识库
+            # 命中时作为核查上下文。
+            docs = _live([g for g in grounding
+                          if g.get("tool") in ("read_attachment", "read_file")])
             if kb:                                    # 有知识库依据才做 grounding
-                # 知识库 + 联网 一并作为核查资料；可能很长，拼接去重后截断
-                context = _cap(_dedup_join(kb + web), _GROUNDING_CONTEXT_MAX)
+                # 知识库 + 读入文档 + 联网 一并作为核查资料；可能很长，拼接去重后截断
+                context = _cap(_dedup_join(kb + docs + web), _GROUNDING_CONTEXT_MAX)
                 ok, fb = await self._judge_grounding(context, ans)
                 if not ok:
                     failed.append("grounding")
