@@ -11,11 +11,13 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import SearchIcon from "@mui/icons-material/Search";
 import SourceIcon from "@mui/icons-material/Source";
 import QuizOutlinedIcon from "@mui/icons-material/QuizOutlined";
+import AccessTimeIcon from "@mui/icons-material/AccessTime";
 import { AnimatePresence, motion } from "framer-motion";
 import { api, type Question } from "../api/client";
 import { listItemVariants } from "../components/motion";
 import { EmptyState } from "../components/EmptyState";
 import { QuestionDetailDrawer } from "./QuestionDetailDrawer";
+import { fromNow } from "./statsShared";
 
 const PAGE_SIZE = 10;
 const TYPES = [
@@ -209,6 +211,16 @@ export default function QuestionBankView() {
                         {item.source && (
                           <Chip size="small" variant="outlined" color="info"
                             icon={<SourceIcon />} label={item.source} />
+                        )}
+                        {/* 生成时间：右对齐，相对时间显示（如「3 分钟前」）*/}
+                        {item.created_at && (
+                          <Stack direction="row" spacing={0.4}
+                            sx={{ alignItems: "center", ml: "auto", color: "text.disabled" }}>
+                            <AccessTimeIcon sx={{ fontSize: 14 }} />
+                            <Typography variant="caption" sx={{ fontSize: 12 }}>
+                              {fromNow(item.created_at)}
+                            </Typography>
+                          </Stack>
                         )}
                       </Stack>
                     </Box>

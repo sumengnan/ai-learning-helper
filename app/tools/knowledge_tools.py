@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from harness.tools.base import Tool
 
 from ..knowledge import EmptyDocument, strip_markdown
+from ..sources import strip_citations
 
 
 class SaveToKnowledgeTool(Tool):
@@ -27,8 +28,9 @@ class SaveToKnowledgeTool(Tool):
         self._uid = user_id
 
     async def run(self, params: "SaveToKnowledgeTool.Params") -> str:
-        # 只存纯文字内容：去掉 markdown 排版标记（##、**、列表、表格等），减少检索噪声
-        text = strip_markdown(params.text)
+        # 只存纯文字内容：去掉 markdown 排版标记（##、**、列表、表格等）与正文里的
+        # 来源角标 [1]（脱离对话后无指向、是检索噪声），减少检索噪声
+        text = strip_citations(strip_markdown(params.text))
         try:
             res = await self._knowledge.ingest_text(self._uid, params.title, text)
         except EmptyDocument:

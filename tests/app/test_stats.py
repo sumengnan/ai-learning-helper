@@ -263,6 +263,19 @@ def test_activity_series_length_and_shape():
     assert today["runs"] == 2 and today["tokens"] == 150
 
 
+def test_recent_downloads_respect_time_range():
+    """产物列表跟随时间范围：窗口外的旧产物不列，窗口内无产物则返回空。"""
+    # dl1 落在 2026-07-11T07:00（= 北京 07-11 15:00）。把 now 设到 07-20：
+    late_now = datetime(2026, 7, 20, 12, 0, 0, tzinfo=timezone.utc)
+    svc = StatsService(trajectory_conn=_traj_conn(), app_conn=_app_conn(),
+                       memory_conn=None, now=lambda: late_now)
+    # 14 天窗（起点北京 07-07）：dl1 在窗内，照常列出
+    d14 = svc.overview("u", days=14)["learn"]["recent_downloads"]
+    assert len(d14) == 1 and d14[0]["filename"] == "提纲.md"
+    # 收窄到「今日」（北京 07-20 00:00 起）：dl1 早出窗 → 空，前端据此提示「今日还没有产物生成」
+    assert svc.overview("u", days=1)["learn"]["recent_downloads"] == []
+
+
 def test_run_duration_aggregation():
     tc = _traj_conn()
     _ev(tc, "r1", 0, "RunStarted", {"run_id": "r1"}, created_at="2026-07-11T10:00:00+00:00")
@@ -275,6 +288,39 @@ def test_run_duration_aggregation():
     t = svc.overview("u")["ops"]["totals"]
     assert t["avg_run_duration_ms"] == 4000       # (5000 + 3000) / 2
     assert t["total_run_duration_ms"] == 8000
+
+
+def test_natural_day_window_uses_utc_plus_8_not_utc_or_rolling():
+    """「今日/近N天」按北京自然日切窗 —— 既不是 UTC 日，也不是 now-24h 滚动窗。
+
+    构造 now=UTC 07-16 20:00（= 北京 07-17 04:00），此刻北京「今天」是 07-17、UTC 是 07-16：
+    - r_in  : UTC 07-16 16:30 = 北京 07-17 00:30 → 属北京今天，days=1 必须计入；
+    - r_out : UTC 07-16 15:30 = 北京 07-16 23:30 → 属北京昨天，days=1 必须排除
+              （若沿用旧的 now-24h 滚动窗，cutoff=07-15 20:00 会把它误纳入）。
+    """
+    now = datetime(2026, 7, 16, 20, 0, 0, tzinfo=timezone.utc)
+    tc = _traj_conn()
+    _ev(tc, "r_in", 0, "RunStarted", {"run_id": "r_in"}, created_at="2026-07-16T16:30:00+00:00")
+    _ev(tc, "r_in", 1, "ModelUsage",
+        {"usage": {"prompt": 1, "completion": 1, "total": 10}, "attempts": 1},
+        created_at="2026-07-16T16:30:00+00:00")
+    _ev(tc, "r_in", 2, "RunFinished", {"message": {}}, created_at="2026-07-16T16:30:01+00:00")
+    _ev(tc, "r_out", 0, "RunStarted", {"run_id": "r_out"}, created_at="2026-07-16T15:30:00+00:00")
+    _ev(tc, "r_out", 1, "ModelUsage",
+        {"usage": {"prompt": 1, "completion": 1, "total": 20}, "attempts": 1},
+        created_at="2026-07-16T15:30:00+00:00")
+    _ev(tc, "r_out", 2, "RunFinished", {"message": {}}, created_at="2026-07-16T15:30:01+00:00")
+    tc.commit()
+    svc = StatsService(trajectory_conn=tc, app_conn=_app_conn(), memory_conn=None,
+                       now=lambda: now)
+    day1 = svc.overview("nobody", days=1)["ops"]
+    assert day1["totals"]["runs"] == 1 and day1["totals"]["total_tokens"] == 10  # 只含北京今天
+    # 趋势序列末项是北京今天 07-17（非 UTC 的 07-16），且 r_in 的 token 落在这一天
+    ops2 = svc.overview("nobody", days=2)["ops"]
+    by_day = {d["date"]: d for d in ops2["daily"]}
+    assert ops2["daily"][-1]["date"] == "2026-07-17"
+    assert by_day["2026-07-17"]["tokens"] == 10 and by_day["2026-07-17"]["runs"] == 1
+    assert by_day["2026-07-16"]["tokens"] == 20 and by_day["2026-07-16"]["runs"] == 1
 
 
 def test_empty_databases_do_not_crash():

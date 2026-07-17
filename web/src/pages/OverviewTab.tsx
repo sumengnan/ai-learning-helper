@@ -6,7 +6,6 @@ import {
   Box, Card, CardContent, Typography, Stack, Button, IconButton, Tooltip, useTheme,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
-import { useAuth } from "../auth/AuthProvider";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import DownloadIcon from "@mui/icons-material/Download";
 import VisibilityIcon from "@mui/icons-material/Visibility";
@@ -19,23 +18,12 @@ import { useProfileDrawer } from "./ProfileDrawer";
 import { profileApi, isProfileSet } from "../api/profile";
 import { rangeLabel, fmtTokens, fmtPct, cardSx, Eyebrow, Sparkline, fromNow } from "./statsShared";
 
-// 按当前时段给出问候语与配图
-function greetingOf(hour: number): { text: string; emoji: string } {
-  if (hour < 6) return { text: "夜深了", emoji: "🌙" };
-  if (hour < 12) return { text: "早上好", emoji: "🌅" };
-  if (hour < 14) return { text: "中午好", emoji: "🌤️" };
-  if (hour < 18) return { text: "下午好", emoji: "☀️" };
-  return { text: "晚上好", emoji: "🌆" };
-}
-
 // 我的积累各卡的主题色（各一色，打破清一色白卡的单调）
-type Hue = "info" | "primary" | "warning" | "secondary" | "success";
+type Hue = "info" | "primary" | "warning" | "secondary" | "success" | "error";
 
 export function OverviewTab({ data, days }: { data: StatsOverview; days: number }) {
   const nav = useNavigate();
   const theme = useTheme();
-  const { user } = useAuth();
-  const greet = greetingOf(new Date().getHours());
   const [preview, setPreview] = useState<PreviewFile | null>(null);
   const [memoryOpen, setMemoryOpen] = useState(false);
   // 个性化「已设置/未设置」状态：profile 非 stats 数据，本卡自取；保存后随 savedTick 刷新
@@ -60,23 +48,21 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
   const { learn } = data;
   const abilityMax = Math.max(1, ...learn.abilities.map((a) => a.count));
 
-  const assetCards: { icon: string; lbl: string; v: number | string; sub: string; hue: Hue; act?: boolean; onClick: () => void }[] = [
+  const assetCards: { icon: string; lbl: string; v: number | string; sub: string; hue: Hue; act?: boolean; emphasizeValue?: boolean; onClick: () => void }[] = [
     { icon: "📚", lbl: "知识库", v: learn.assets.documents, sub: "去查看 →", hue: "info", onClick: () => nav("/knowledge") },
     { icon: "✏️", lbl: "题库", v: learn.assets.questions, sub: "去查看 →", hue: "primary", onClick: () => nav("/questions") },
     { icon: "❌", lbl: "错题集", v: learn.assets.wrong_answers, sub: "去查看 →", hue: "warning", onClick: () => nav("/wrong") },
     { icon: "🧠", lbl: "AI 记的偏好", v: learn.assets.memory, sub: "点击查看它记住了什么 →", hue: "secondary", onClick: () => setMemoryOpen(true) },
     // 与「AI 记的偏好」成对：AI 猜的(只读) ↔ 你说的(可编辑)
+    // AI 个性化：未设置标红突出「未设置」告警，已设置标绿突出「已设置」安心
     { icon: "⚙️", lbl: "AI 个性化", v: profileSet == null ? "" : (profileSet ? "已设置" : "未设置"),
-      sub: profileSet ? "编辑 →" : "告诉 AI 你是谁 →", hue: "success", act: !profileSet, onClick: openProfile },
+      sub: profileSet ? "编辑 →" : "去设置，告诉 AI 你是谁 →",
+      hue: profileSet ? "success" : "error", act: !profileSet,
+      emphasizeValue: profileSet != null, onClick: openProfile },
   ];
 
   return (
     <>
-      {/* 问候语：按时段问候 + 用户名 */}
-      <Typography sx={{ fontSize: { xs: 20, md: 24 }, fontWeight: 750, letterSpacing: "-.02em" }}>
-        {greet.emoji} {greet.text}{user?.username ? `，${user.username}` : ""}
-      </Typography>
-
       {/* 我的积累 */}
       <Eyebrow>我的积累</Eyebrow>
       <Box sx={{ display: "grid", gap: 1.75, gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(5,1fr)" } }}>
@@ -94,8 +80,9 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
                   bgcolor: alpha(t.palette[a.hue].main, 0.12) })}>{a.icon}</Box>
                 <Typography sx={{ fontSize: 12.5, color: "text.secondary", fontWeight: 600 }}>{a.lbl}</Typography>
               </Stack>
-              <Typography sx={{ fontSize: 29, fontWeight: 700, letterSpacing: "-.025em",
-                fontVariantNumeric: "tabular-nums", mt: 0.6 }}>{a.v}</Typography>
+              <Typography sx={(t) => ({ fontSize: 29, fontWeight: 700, letterSpacing: "-.025em",
+                fontVariantNumeric: "tabular-nums", mt: 0.6,
+                color: a.emphasizeValue ? t.palette[a.hue].main : undefined })}>{a.v}</Typography>
               <Typography sx={(t) => ({ fontSize: 12, mt: 0.1,
                 color: a.act ? t.palette[a.hue].main : "text.disabled",
                 fontWeight: a.act ? 600 : 400 })}>{a.sub}</Typography>
@@ -152,7 +139,7 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
               <Box sx={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center",
                 justifyContent: "center", textAlign: "center", py: 2, gap: 0.5 }}>
                 <Box sx={{ fontSize: 30 }}>🗂️</Box>
-                <Typography sx={{ fontSize: 13, color: "text.secondary", fontWeight: 600 }}>还没有生成的产物</Typography>
+                <Typography sx={{ fontSize: 13, color: "text.secondary", fontWeight: 600 }}>{rangeLabel(days)}还没有产物生成</Typography>
                 <Typography sx={{ fontSize: 12, color: "text.disabled" }}>
                   让 AI 帮你跑代码、出题或整理资料，产物会出现在这里
                 </Typography>
