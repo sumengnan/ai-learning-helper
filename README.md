@@ -16,6 +16,8 @@ React 前端，提供 AI 聊天、知识库、题库、错题集、学习概览�
   （按语言起一次性子沙箱执行）、无头浏览器抓取、MCP 客户端（stdio + streamable-http）。
 - **回答校验门**（可选）：交付前对格式 / 知识库 grounding / 代码可运行 / LLM 自评打分做校验，
   不过则自动带反馈重答。
+- **上下文管理**：长对话按 `full` / `window` / `layered` 三档策略裁剪——L1 滑动窗口 + L2 滚动摘要
+  + L3 语义检索，既不超窗又尽量不丢关键信息（详见 [`docs/context-management.md`](docs/context-management.md)）。
 - **部署自检**：左侧菜单底部版本徽标显示前后端版本，一致=绿 ✓、不一致=橙 ⚠。
 
 ## 技术栈
@@ -102,6 +104,12 @@ npm run test
 # 需先在项目根准备好 .env（compose 用 ../.env 读它）
 cd docker && docker compose up -d --build
 ```
+
+## 文档
+
+- [`docs/context-management.md`](docs/context-management.md) —— 上下文管理：三档策略、L1/L2/L3
+  分层、token 预算、降级与可观测、配置项。
+- [`docs/DEPLOY.md`](docs/DEPLOY.md) —— 部署：服务器准备、GitHub Secrets、版本自检等。
 
 ## 技能框架
 
