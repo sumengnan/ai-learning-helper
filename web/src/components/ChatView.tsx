@@ -81,7 +81,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
   const [busy, setBusy] = useState(false);
   const [showTools, setShowTools] = useState(() => readBool(SHOW_TOOLS_KEY, true));
   const [showSources, setShowSources] = useState(() => readBool(SHOW_SOURCES_KEY, true));
-  const [think, setThink] = useState(() => readBool(THINK_KEY, true));
+  const [think, setThink] = useState(() => readBool(THINK_KEY, false));  // 思考模式默认关
   const [verify, setVerify] = useState(() => readBool(VERIFY_KEY, true));
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);

@@ -188,16 +188,16 @@ describe("ChatView", () => {
     await waitFor(() => expect(vi.mocked(sendDecision)).toHaveBeenCalledWith("run-1", "a1", true));
   });
 
-  it("『思考模式』默认开并透传 think=true；关闭后持久化为 0", async () => {
+  it("『思考模式』默认关并透传 think=false；开启后持久化为 1", async () => {
     render(<ChatView conversationId="c1" initial={[]} />);
-    expect((screen.getByLabelText("思考模式") as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText("思考模式") as HTMLInputElement).checked).toBe(false);
     fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "hi" } });
     fireEvent.click(screen.getByText("发送"));
     await waitFor(() => expect(vi.mocked(streamChat)).toHaveBeenCalled());
     const calls = vi.mocked(streamChat).mock.calls;
-    expect(calls[calls.length - 1][6]).toBe(true);    // think 为第 7 个参数，默认开
-    fireEvent.click(screen.getByLabelText("思考模式"));   // 关闭
-    expect(localStorage.getItem("chat_think")).toBe("0");
+    expect(calls[calls.length - 1][6]).toBe(false);   // think 为第 7 个参数，默认关
+    fireEvent.click(screen.getByLabelText("思考模式"));   // 开启
+    expect(localStorage.getItem("chat_think")).toBe("1");
   });
 
   it("不再有『考试答错自动保存错题集』开关（答错必存，无从关闭）", async () => {
