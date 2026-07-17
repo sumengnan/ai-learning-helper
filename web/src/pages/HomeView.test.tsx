@@ -157,6 +157,7 @@ describe("HomeView", () => {
       ...OV, learn: { ...OV.learn, recent_downloads: [] },
     });
     renderHome();
-    await waitFor(() => expect(screen.getByText("还没有生成的产物")).toBeTruthy());
+    // 文案随时间范围变（如「今日/近 3 天…还没有产物生成」），断言范围无关的子串
+    await waitFor(() => expect(screen.getByText(/还没有产物生成/)).toBeTruthy());
   });
 });

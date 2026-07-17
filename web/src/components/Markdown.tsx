@@ -8,6 +8,32 @@ function citeNumber(href?: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
+// 段内单换行渲染为 <br>：模型常用单个 \n 表示换行（如逐行列出选项 A./B./C./D.），
+// 但 CommonMark/GFM 会把段内单换行折叠成空格，导致选项挤成一行。这里在 mdast 层把
+// text 节点里的 \n 拆成 break 节点。只动 text 节点，代码块/表格结构/列表项均不受影响
+// （等价 remark-breaks，内联实现免加依赖）。
+function remarkSoftBreaks() {
+  return (tree: any) => {
+    const walk = (node: any) => {
+      if (!node.children) return;
+      const out: any[] = [];
+      for (const child of node.children) {
+        if (child.type === "text" && typeof child.value === "string" && child.value.includes("\n")) {
+          child.value.split("\n").forEach((seg: string, i: number) => {
+            if (i > 0) out.push({ type: "break" });
+            if (seg) out.push({ type: "text", value: seg });
+          });
+        } else {
+          walk(child);
+          out.push(child);
+        }
+      }
+      node.children = out;
+    };
+    walk(tree);
+  };
+}
+
 // AI 回复正文按 Markdown 渲染（标题/列表/代码块/表格/链接等）。
 // onCitationClick 传入时，正文里的 [n] 来源角标可点击。
 export function Markdown({ children, onCitationClick }: {
@@ -48,7 +74,7 @@ export function Markdown({ children, onCitationClick }: {
       },
     }}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkSoftBreaks]}
         components={{
           a({ node: _node, href, children, ...props }: any) {
             const n = citeNumber(href);

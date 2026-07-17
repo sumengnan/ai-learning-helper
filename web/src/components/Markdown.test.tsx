@@ -25,3 +25,22 @@ describe("Markdown 来源角标", () => {
     expect(a.getAttribute("href")).toBe("https://zh.wikipedia.org/x");
   });
 });
+
+describe("Markdown 段内单换行", () => {
+  it("单换行分隔的选项渲染为多行（<br>），不再挤成一行", () => {
+    const { container } = render(
+      <Markdown>{"A. 甲\nB. 乙\nC. 丙\nD. 丁"}</Markdown>,
+    );
+    // 3 个单换行 → 3 个 <br>；四个选项文本都在
+    expect(container.querySelectorAll("br").length).toBe(3);
+    for (const t of ["A. 甲", "B. 乙", "C. 丙", "D. 丁"]) {
+      expect(container.textContent).toContain(t);
+    }
+  });
+
+  it("双换行（段落）不受影响，仍是独立段落而非 <br>", () => {
+    const { container } = render(<Markdown>{"第一段\n\n第二段"}</Markdown>);
+    expect(container.querySelectorAll("p").length).toBe(2);
+    expect(container.querySelectorAll("br").length).toBe(0);
+  });
+});
