@@ -1,7 +1,6 @@
 # AI 学习助手
 
 [![Docker Hub](https://img.shields.io/badge/Docker%20Hub-sumengnan%2Fai--learning--helper-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/sumengnan/ai-learning-helper)
-[![Image Version](https://img.shields.io/docker/v/sumengnan/ai-learning-helper?sort=semver&logo=docker&label=image)](https://hub.docker.com/r/sumengnan/ai-learning-helper/tags)
 [![Image Size](https://img.shields.io/docker/image-size/sumengnan/ai-learning-helper?sort=semver)](https://hub.docker.com/r/sumengnan/ai-learning-helper/tags)
 
 > 🐳 **Docker 镜像**:[hub.docker.com/r/sumengnan/ai-learning-helper](https://hub.docker.com/r/sumengnan/ai-learning-helper) · 拉取:`docker pull sumengnan/ai-learning-helper`
@@ -17,8 +16,6 @@ AI 不只是"聊天",还能调用工具——联网查资料、在沙箱里跑�
 > → [架构:app 层](docs/architecture-app.md) → 其余专题文档(见[文档](#文档))。
 
 ## 截图
-
-> 以下为占位,图片自行放到 `docs/images/` 下(文件名见该目录说明)。
 
 | AI 聊天 | AI 考试 |
 | --- | --- |
@@ -165,7 +162,3 @@ VERSION       部署版本号的「大.中」声明（小版本由 CI 自增）
 **运维**
 - [`docs/DEPLOY.md`](docs/DEPLOY.md) —— 部署:服务器准备、GitHub Secrets、版本自检等。
 
-## 技能框架
-
-本项目集成了 `superpowers-zh` 中文技能框架,配合 Claude Code 使用;约定见
-[`CLAUDE.md`](CLAUDE.md)。
