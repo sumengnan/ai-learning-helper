@@ -98,6 +98,23 @@ jobs:
           sshpass -e scp -P ${{ secrets.SERVER_PORT }} $SSH_OPTS \
             docker/docker-compose.yml "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ env.DEPLOY_DIR }}/docker/docker-compose.yml"
 
+      - name: 写入服务器 .env（来自 GitHub Secret，不进代码库）
+        env:
+          SSHPASS: ${{ secrets.SERVER_PASSWORD }}
+          APP_ENV_FILE: ${{ secrets.APP_ENV_FILE }}
+        run: |
+          # 应用运行时密钥（HARNESS_API_KEY / AUTH_SECRET 等）存在 GitHub Secret APP_ENV_FILE，
+          # 经 stdin 管道写入服务器 <部署目录>/.env（compose 用 ../ 读它），不落代码库、不进日志。
+          # 未设该 secret 时跳过：沿用服务器上已手动放好的 .env，保持向后兼容。
+          if [ -z "$APP_ENV_FILE" ]; then
+            echo "未设置 APP_ENV_FILE secret，跳过写入（沿用服务器上已有的 .env）"
+            exit 0
+          fi
+          SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+          printf '%s' "$APP_ENV_FILE" | sshpass -e ssh -p ${{ secrets.SERVER_PORT }} $SSH_OPTS \
+            "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
+            "cat > ${{ env.DEPLOY_DIR }}/.env && chmod 600 ${{ env.DEPLOY_DIR }}/.env"
+
       - name: 服务器拉取并启动
         env:
           SSHPASS: ${{ secrets.SERVER_PASSWORD }}

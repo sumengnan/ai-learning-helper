@@ -37,6 +37,7 @@
 | `SERVER_PORT` | SSH 端口（如 22） |
 | `DOCKERHUB_USERNAME` | Docker Hub 用户名（`sumengnan`） |
 | `DOCKERHUB_TOKEN` | Docker Hub 访问令牌（Account Settings → Security → New Access Token，Read/Write） |
+| `APP_ENV_FILE` | **可选**。整份应用 `.env` 内容（含 `HARNESS_API_KEY` / `AUTH_SECRET` 等）。设置后每次部署自动写到服务器 `<部署目录>/.env`，无需手动维护；不设则沿用服务器上已放好的 `.env`。用 `gh secret set APP_ENV_FILE < .env` 一键设置。 |
 
 ## 服务器一次性准备
 
@@ -57,6 +58,10 @@ sudo chown -R "$USER" /opt/ai-learning-helper
 #    生产务必设置随机 AUTH_SECRET 与真实 HARNESS_API_KEY
 vim /opt/ai-learning-helper/.env
 ```
+
+> 也可**不手动放** `.env`：把整份 `.env` 存成 GitHub Secret `APP_ENV_FILE`
+> （`gh secret set APP_ENV_FILE < .env`），部署时会自动写到服务器 `<部署目录>/.env`。
+> 这样密钥的唯一真源在 GitHub Secrets（加密、不入库、不进日志），改 key 只改 Secret 重跑即可。
 
 > 镜像仓库 `sumengnan/ai-learning-helper` 为**公开**，服务器免登录直接 `pull`。若日后改为私有，
 > 需在服务器上先 `docker login`（或在 workflow 拉取步骤前加 `docker login`）。
