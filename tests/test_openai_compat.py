@@ -129,6 +129,55 @@ async def test_done_chunk_falls_back_to_tiktoken(monkeypatch):
     assert done.usage.total_tokens > 0   # tiktoken 估算
 
 
+async def test_thinking_adapted_to_deepseek_disabled(monkeypatch):
+    # DeepSeek 端点：enable_thinking 意图翻译成 thinking={"type":"disabled"}（DeepSeek 不认前者）
+    cfg = HarnessConfig(api_key="k", base_url="https://api.deepseek.com",
+                        llm_extra_body={"enable_thinking": False})
+    client = OpenAICompatibleClient(cfg)
+    events = [_FakeEvent(_FakeDelta(content="hi"))]
+
+    async def fake_create(**kwargs):
+        assert kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
+        return _fake_stream(events)
+
+    monkeypatch.setattr(client._client.chat.completions, "create", fake_create)
+    [c async for c in client.stream([Message(role=Role.USER, content="hi")], [])]
+
+
+async def test_thinking_adapted_to_deepseek_enabled(monkeypatch):
+    from harness.llm.openai_compat import reset_extra_body_override, set_extra_body_override
+    cfg = HarnessConfig(api_key="k", base_url="https://api.deepseek.com/v1")
+    client = OpenAICompatibleClient(cfg)
+    events = [_FakeEvent(_FakeDelta(content="hi"))]
+
+    async def fake_create(**kwargs):
+        assert kwargs["extra_body"] == {"thinking": {"type": "enabled"}}
+        return _fake_stream(events)
+
+    monkeypatch.setattr(client._client.chat.completions, "create", fake_create)
+    tok = set_extra_body_override({"enable_thinking": True})
+    try:
+        [c async for c in client.stream([Message(role=Role.USER, content="hi")], [])]
+    finally:
+        reset_extra_body_override(tok)
+
+
+async def test_thinking_kept_as_enable_thinking_for_qwen(monkeypatch):
+    # 百炼(dashscope) 端点原生认 enable_thinking，保持不变、不翻译成 thinking
+    cfg = HarnessConfig(api_key="k",
+                        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                        llm_extra_body={"enable_thinking": False})
+    client = OpenAICompatibleClient(cfg)
+    events = [_FakeEvent(_FakeDelta(content="hi"))]
+
+    async def fake_create(**kwargs):
+        assert kwargs["extra_body"] == {"enable_thinking": False}
+        return _fake_stream(events)
+
+    monkeypatch.setattr(client._client.chat.completions, "create", fake_create)
+    [c async for c in client.stream([Message(role=Role.USER, content="hi")], [])]
+
+
 async def test_extra_body_passed_when_configured(monkeypatch):
     cfg = HarnessConfig(api_key="k", llm_extra_body={"enable_thinking": False})
     client = OpenAICompatibleClient(cfg)

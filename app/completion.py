@@ -60,10 +60,12 @@ def _build_alt_completer(client, config, model: str, base_url: str, api_key: str
 
 
 def _with_thinking(base, enabled: bool):
-    """包一层：本次调用显式指定 enable_thinking，叠加在当前 extra_body 覆盖之上、调用后还原。
+    """包一层：本次调用显式指定思考意图 enable_thinking，叠加在当前 extra_body 覆盖之上、
+    调用后还原。enable_thinking 是厂商中立意图，发送前由 openai_compat._adapt_thinking 按端点
+    翻译成各家参数（Qwen→enable_thinking、DeepSeek→thinking={"type": ...}）。
 
-    必须显式发：不发这个键时由模型服务端的默认决定（Qwen3 系默认开思考），
-    对打分/摘要这类机械活等于白烧 token 与延迟。
+    必须显式发：不发这个键时由服务端默认决定（Qwen3 默认开思考、DeepSeek deepseek-v4-pro
+    也默认开），对打分/校验/摘要这类机械活等于白烧 token 与延迟。
     """
     async def complete(system_prompt: str, user_prompt: str) -> str:
         from harness.llm.openai_compat import (
