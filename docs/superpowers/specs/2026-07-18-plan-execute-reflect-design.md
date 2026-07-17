@@ -36,7 +36,9 @@
 
 ## 2. 架构分层与模块边界
 
-新增确定性控制器 `Orchestrator`，放在 `harness/orchestration/`（与现有 `dispatch.py`、`spec.py` 并列）。
+新增确定性控制器 `Orchestrator`，放在 **`app/orchestration/`**（与 `app/completion.py`、`app/verify.py` 同属 app 层组合逻辑）。
+
+> **落位修正（实现阶段发现）**：规格初稿设想放 `harness/orchestration/`，但 Planner/Critic 需要结构化 JSON 输出，唯一的 JSON 强制+解析设施 `call_json` 在 `app/verify.py`（app 层）。放 harness 会造成 `harness → app` 反向依赖、破坏分层。现有 `dispatch.py` 能待在 harness 是因其子 agent 产出自由文本、无需 `call_json`。故编排器落 `app/orchestration/`，harness 保持纯净。
 
 ```
 app/api/chat.py
@@ -262,13 +264,13 @@ run(user_message):
 
 ## 8. 影响面与新增文件
 
-**新增：**
-- `harness/orchestration/plan.py` —— 数据结构（§3）
-- `harness/orchestration/planner.py` —— Planner
-- `harness/orchestration/executor.py` —— Executor（包 AgentLoop）
-- `harness/orchestration/critic.py` —— Critic
-- `harness/orchestration/orchestrator.py` —— 控制器（含 Scheduler、triage、synthesize）
-- `tests/test_orchestrator_*.py` —— 控制器单元/mock 测试
+**新增（均在 app 层，见 §2 落位修正）：**
+- `app/orchestration/plan.py` —— 数据结构 + 纯 DAG 函数（校验/就绪集）（§3）
+- `app/orchestration/planner.py` —— Planner
+- `app/orchestration/executor.py` —— Executor（包 harness `AgentLoop`）
+- `app/orchestration/critic.py` —— Critic
+- `app/orchestration/orchestrator.py` —— 控制器（含 Scheduler 调度、triage、synthesize）
+- `tests/test_orchestration_*.py` —— 控制器单元/mock 测试
 - `examples/orchestrator_demo.py` —— 手动验收
 
 **改动：**
