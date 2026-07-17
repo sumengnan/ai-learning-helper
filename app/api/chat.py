@@ -455,6 +455,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                   summarizer=_summarizer, conv_memory=_conv_memory)
     # 记忆整合：在途会话集合，防同一会话并发整合互抢 set_superseded
     _consolidating: set[str] = set()
+    # 持有后台任务的强引用，防止 asyncio 在其运行中把 task GC 掉；完成即移除。
+    _bg_tasks: set = set()
 
     def _maybe_consolidate(conv_id: str) -> None:
         """本会话 episodic 攒够了就在后台整合成 semantic。
@@ -493,6 +495,30 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
 
         _consolidating.add(conv_id)
         asyncio.create_task(_run())
+
+    def _spawn_post_turn(conv_id: str, seq: int, text: str) -> None:
+        """把「L3 智能记忆写入 + 记忆整合」挪到后台执行，不阻塞本轮 SSE 流关闭。
+
+        这两件事与答案无关（RunFinished 早已送出）：此前 gen() 直接 await 记忆写入（提炼+调和，
+        最多 2 次 LLM + embedding），会拖着流不关、前端一直转圈、且此 run 仍在 RunManager
+        里在途 → 用户连下一句都发不了。改成独立 task 后 gen() 立即返回：状态即刻变已完成、
+        并发守卫立即释放。代价：进程正好在写记忆时重启会丢这条在写的记忆（best-effort）。
+
+        整合放在写入完成之后串起来，保持「先写 episodic 再按数量整合」的因果（_maybe_consolidate
+        要数本会话 episodic 条数）。"""
+        if _conv_memory is None or not text.strip():
+            return
+
+        async def _run() -> None:
+            try:
+                await _conv_memory.record_turn(conv_id, seq, text)
+            except Exception as e:   # noqa: BLE001  记忆写入 best-effort，失败不影响聊天
+                log.warning("后台记忆写入失败 conv=%s：%s", conv_id, e, exc_info=True)
+            _maybe_consolidate(conv_id)
+
+        t = asyncio.create_task(_run())
+        _bg_tasks.add(t)
+        t.add_done_callback(_bg_tasks.discard)
 
     # 交付门插桩：未装 OTel provider 时 get_tracer 返回 no-op tracer，零开销
     _tracer = get_tracer("app.chat")
@@ -1077,15 +1103,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                          status, _elapsed, _usage.get("tokens"), len(steps),
                          len(delivered_sources),
                          verify_trace["retries"] if verify_trace else "-")
-                # L3：把对话文本写入向量库供后续语义召回（best-effort，不阻断）
-                if _conv_memory is not None and not errored and final_content:
-                    try:
-                        await _conv_memory.record_turn(
-                            req.conversation_id, len(history),
-                            f"用户：{req.message}\n助手：{final_content}")
-                    except Exception:
-                        pass
-                    _maybe_consolidate(req.conversation_id)
+                # L3 记忆写入 + 整合：挪到后台，不阻塞本轮完成（status=done 已在上面落库、
+                # 流随 gen() 返回即刻关闭）。此前在此 await 记忆写入会让「校验通过」后仍转圈半天。
+                if not errored and final_content:
+                    _spawn_post_turn(
+                        req.conversation_id, len(history),
+                        f"用户：{req.message}\n助手：{final_content}")
             except asyncio.CancelledError:
                 # stop：落已生成部分 + stopped，再放行取消
                 store.finish_turn(
