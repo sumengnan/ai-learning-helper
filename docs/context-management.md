@@ -8,7 +8,7 @@
 
 ## 三种策略
 
-由 `HARNESS_CONTEXT_STRATEGY` 配置(默认 `full`):
+由 `HARNESS_CONTEXT_STRATEGY` 配置(默认 `layered`):
 
 | 策略 | 行为 | 适用 |
 | --- | --- | --- |
@@ -126,11 +126,11 @@ harness 内核自带的 `ContextManager`(`src/harness/context/manager.py`)是最
 
 | 环境变量 | 默认 | 说明 |
 | --- | --- | --- |
-| `HARNESS_CONTEXT_STRATEGY` | `full` | `full` / `window` / `layered` |
-| `HARNESS_CONTEXT_WINDOW_TOKENS` | `128000` | 模型上下文窗口(按实际模型调) |
-| `HARNESS_CONTEXT_RESPONSE_RESERVE_TOKENS` | `4096` | 给回复预留的 token(思考链也算输出) |
-| `HARNESS_CONTEXT_MAX_PROMPT_TOKENS` | `0` | 输入总量策略上限;0=不设 |
-| `HARNESS_CONTEXT_WORKING_RATIO` | `0.5` | L1 最近原文占可用预算的比例 |
+| `HARNESS_CONTEXT_STRATEGY` | `layered` | `full` / `window` / `layered` |
+| `HARNESS_CONTEXT_WINDOW_TOKENS` | `1000000` | 模型上下文窗口(按实际模型调) |
+| `HARNESS_CONTEXT_RESPONSE_RESERVE_TOKENS` | `56000` | 给回复预留的 token(思考链也算输出) |
+| `HARNESS_CONTEXT_MAX_PROMPT_TOKENS` | `240000` | 输入总量策略上限;0=不设 |
+| `HARNESS_CONTEXT_WORKING_RATIO` | `0.9` | L1 最近原文占可用预算的比例 |
 | `HARNESS_CONTEXT_SUMMARY_MAX_TOKENS` | `2000` | L2 摘要块 token 上限 |
 | `HARNESS_CONTEXT_RETRIEVAL_TOP_K` | `5` | L3 召回条数 |
 | `HARNESS_CONTEXT_ENABLE_SUMMARY` | `true` | layered 下是否启用 L2 摘要 |

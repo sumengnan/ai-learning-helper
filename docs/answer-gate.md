@@ -86,7 +86,7 @@ flowchart TD
 | --- | --- | --- |
 | `HARNESS_ENABLE_ANSWER_GATE` | `false` | 校验门总开关 |
 | `HARNESS_ANSWER_GATE_MAX_RETRIES` | `1` | 不过时的自动重答次数 N(总尝试 N+1) |
-| `HARNESS_ANSWER_PASS_SCORE` | `70` | 质量评分阈值(低于则不过) |
+| `HARNESS_ANSWER_PASS_SCORE` | `60` | 质量评分阈值(低于则不过) |
 | `HARNESS_GATE_CHECK_FORMAT` | `true` | 分项开关:格式/完整性 |
 | `HARNESS_GATE_CHECK_GROUNDING` | `true` | 分项开关:知识库依据 |
 | `HARNESS_GATE_CHECK_CODE` | `true` | 分项开关:代码可运行 |

@@ -79,7 +79,7 @@ class AppConfig(HarnessConfig):
     # 回答交付前校验门（默认关，保持现状直通流式）
     enable_answer_gate: bool = False
     answer_gate_max_retries: int = 1        # 校验不过时的自动重答次数（N）；总尝试 = N+1
-    answer_pass_score: int = 70             # LLM 自评打分阈值（低于则不过）
+    answer_pass_score: int = 60             # LLM 自评打分阈值（低于则不过）
     gate_check_format: bool = True          # 分项开关：格式/完整性
     gate_check_grounding: bool = True       # 分项开关：知识库 grounding
     gate_check_code: bool = True            # 分项开关：代码可运行
@@ -118,15 +118,15 @@ class AppConfig(HarnessConfig):
     consolidation_max_source: int = 200
     # 分层上下文管理：full=全量拼接（默认，与历史行为字节级一致，安全回退）；
     # window=仅 L1 token 预算滑动窗口；layered=L1+L2 滚动摘要+L3 语义检索。
-    context_strategy: str = "full"                 # full | window | layered
-    context_window_tokens: int = 128000            # 模型上下文窗口（按实际模型调整）
-    context_response_reserve_tokens: int = 4096    # 给回复预留的 token（按模型最大输出留；
+    context_strategy: str = "layered"              # full | window | layered
+    context_window_tokens: int = 1000000           # 模型上下文窗口（按实际模型调整）
+    context_response_reserve_tokens: int = 56000   # 给回复预留的 token（按模型最大输出留；
                                                    # 思考模型的思维链也算输出）
     # 输入总量的策略上限（0=不设）。与 window 的区别：window 是「塞不下会报错」的物理约束，
     # 这个是「塞得下但不划算」——典型用法是填分档计价的档位阈值（超档单价可能翻数倍）。
     # 不设它就只能靠谎报 window 来控成本，那会让 window 字段的含义失真。
-    context_max_prompt_tokens: int = 0
-    context_working_ratio: float = 0.5             # 最近原文（L1）占可用预算的比例。注意剩余
+    context_max_prompt_tokens: int = 240000
+    context_working_ratio: float = 0.9             # 最近原文（L1）占可用预算的比例。注意剩余
                                                    # 部分不会被强制留给 L2/L3，见 ContextBudget
     context_summary_max_tokens: int = 2000         # L2 摘要块 token 上限
     context_retrieval_top_k: int = 5               # L3 召回条数

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,11 +12,19 @@ class HarnessConfig(BaseSettings):
         protected_namespaces=(),
     )
 
+    # 可选数值项：允许在 .env 里写成空串表示「不设」（= None），避免空值被当成非法整数/浮点。
+    @field_validator("max_tokens_budget", "max_wall_seconds", mode="before")
+    @classmethod
+    def _blank_to_none(cls, v):
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
+
     api_key: str = ""
     base_url: str = "https://api.openai.com/v1"
     model: str = "gpt-4o-mini"
     system_prompt: str = "You are a helpful assistant."
-    max_steps: int = 10
+    max_steps: int = 100
     temperature: float = 0.7
     request_timeout: float = 60.0
     # 透传给 chat.completions.create 的额外请求体（默认空=不改变行为）。用于开关厂商私有参数，
@@ -27,7 +36,7 @@ class HarnessConfig(BaseSettings):
     retry_base_delay: float = 0.5
     max_tokens_budget: int | None = None
     max_wall_seconds: float | None = None
-    tool_result_max_chars: int = 8000
+    tool_result_max_chars: int = 100000
     include_usage: bool = True
     otel_enabled: bool = False
     otel_exporter: str = "console"      # console | otlp
@@ -82,10 +91,10 @@ class HarnessConfig(BaseSettings):
     sandbox_docker_tls_client_cert: str = ""    # 客户端证书路径
     sandbox_docker_tls_client_key: str = ""     # 客户端私钥路径
     sandbox_docker_tls_verify: bool = True      # 是否校验服务端证书
-    sandbox_image: str = "python:3.12-slim"     # 路由未启用时的单镜像；也是 base/shell 容器镜像
+    sandbox_image: str = "quay.io/centos/centos:stream9"   # 路由未启用时的单镜像；也是 base/shell 容器镜像
     # 语言->镜像；空=禁用路由（向后兼容单容器）。
     # 例: {"python":"python:3.12-slim","node":"node:20-slim","java":"eclipse-temurin:21-jdk"}
-    sandbox_images: dict = {"python":"python:3.12","node":"node:20","java":"eclipse-temurin:21-jdk","go":"golang:1.22","rust":"rust:1.77","ruby":"ruby:3.3","php":"php:8.3","perl":"perl:5.38","dotnet":"mcr.microsoft.com/dotnet/sdk:8.0","cpp":"gcc:13","c":"gcc:13","clang":"silkeh/clang:17","swift":"swift:5.10","kotlin":"eclipse-temurin:21-jdk","scala":"sbtscala/scala-sbt:eclipse-temurin-21.0.2_13_1.9.9_3.4.2","clojure":"clojure:temurin-21-tools-deps","groovy":"groovy:4.0-jdk21","dart":"dart:3.4","elixir":"elixir:1.16","erlang":"erlang:26","haskell":"haskell:9.8","julia":"julia:1.10","r":"r-base:4.4.0","lua":"nickblah/lua:5.4","nim":"nimlang/nim:2.0.4","crystal":"crystallang/crystal:1.12.1","typescript":"node:20","deno":"denoland/deno:1.43.6","bun":"oven/bun:1.1","ocaml":"ocaml/opam:debian-12-ocaml-5.1","fsharp":"mcr.microsoft.com/dotnet/sdk:8.0","vlang":"thevlang/vlang:latest","zig":"ziglang/static-base:0.12.0","fortran":"gcc:13","cobol":"esolang/cobol:latest","bash":"bash:5.2","powershell":"mcr.microsoft.com/powershell:7.4-ubuntu-22.04"}
+    sandbox_images: dict = {}
     sandbox_default_language: str = "python"     # 协议方法（shell/fs）委托到的容器语言
     # 语言[+版本]->镜像；配置后 run_python/run_node/run_java 会按语言[+可选 version]
     # 另起一次性子沙箱执行（跑完即销毁、产物回传会话基础容器）。key 优先 f"{language}{version}"
@@ -101,8 +110,8 @@ class HarnessConfig(BaseSettings):
     sandbox_approval_timeout: float = 120.0      # 危险命令人工确认超时（秒）；超时自动拒绝
     sandbox_workspace: str = "/workspace"
     sandbox_user: str = "1000:1000"
-    sandbox_network: str = "none"
-    sandbox_mem_limit: str = "512m"
+    sandbox_network: str = "bridge"
+    sandbox_mem_limit: str = "100m"
     sandbox_cpus: float = 1.0
     sandbox_pids_limit: int = 128
     sandbox_read_only: bool = False         # 容器根文件系统是否只读（默认可写）
@@ -115,7 +124,7 @@ class HarnessConfig(BaseSettings):
     http_allowed_domains: list = []         # 空=放行公网；非空=仅白名单
     http_block_private: bool = True         # SSRF：拦截内网/元数据
     http_timeout: float = 30.0
-    http_max_response_bytes: int = 5_000_000
+    http_max_response_bytes: int = 10_000_000
     http_max_redirects: int = 5
     # 空 UA 是最典型的爬虫特征之一，不少站点据此直接 403——此前本工具一个 UA 都不发。
     # 默认按「行为良好的爬虫」惯例如实标明身份（Googlebot 也是这个格式），能解决「仅因为
@@ -133,7 +142,7 @@ class HarnessConfig(BaseSettings):
     # 配了则每次抓取在该镜像的一次性子沙箱内跑 Chromium，基础镜像可保持轻量（如 python:3.12
     # 无需装 playwright）；留空则复用基础容器（需基础镜像自带 playwright，否则 browse 会报
     # ModuleNotFoundError: No module named 'playwright'）。
-    browser_sandbox_image: str = ""
+    browser_sandbox_image: str = "ai-learning-helper/playwright-py:v1.47.0"
     # 浏览器子沙箱的内存上限：Chromium 远比一般沙箱吃内存，若沿用基础沙箱的小额度
     # （如 100m）会被 OOM 杀掉，容器中途消失、browse 失败。故单列一档，默认 1g。
     browser_sandbox_mem_limit: str = "1g"
@@ -148,7 +157,7 @@ class HarnessConfig(BaseSettings):
     # 多 Agent 编排
     agents_dir: str = "agents"        # 子 agent 花名册目录：<agents_dir>/<name>.yaml
     max_dispatch_depth: int = 2       # agent 树最大层数（防无限递归）
-    sub_agent_max_steps: int = 10     # 子 agent 单次 run 步数上限
+    sub_agent_max_steps: int = 100    # 子 agent 单次 run 步数上限
     # 情景记忆
     episode_collection: str = "episodes"
     episode_recall_k: int = 3
