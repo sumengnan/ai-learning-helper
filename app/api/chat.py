@@ -751,6 +751,13 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                      # 联网检索与知识库同为「检索到的依据」；标 retrieval=True 供
                                      # grounding 校验一并纳入——否则联网来的事实会被判「不在知识库」。
                                      "retrieval": st["tool"] == "search_memory"})
+                            elif st["tool"] in ("read_attachment", "read_file"):
+                                # 读入的用户文档/附件正文：整理成笔记/总结时的作答依据，纳入
+                                # grounding 核查资料（不标 retrieval，故不单独触发 grounding，
+                                # 仅当本轮另有 search_memory 命中时作为核查上下文）。
+                                collect["grounding"].append(
+                                    {"tool": st["tool"], "content": ev.result.content,
+                                     "is_error": ev.result.is_error})
                             elif _is_retrieval_tool(st["tool"]):
                                 # 联网检索/抓取网页：也是模型据以作答的外部依据，纳入 grounding
                                 collect["grounding"].append(

@@ -89,6 +89,27 @@ async def test_grounding_includes_web_retrieval_context():
     assert "叶绿体" in seen["context"] and "Spring AI" in seen["context"]  # 两类来源都进了核查上下文
 
 
+async def test_grounding_includes_read_document_context():
+    """整理笔记场景：read_attachment/read_file 读入的文档正文也须作为核查资料，
+    否则「把知识库整理成笔记」会因内容不在本轮 top-k 检索片段里而被误判缺依据。"""
+    seen = {}
+
+    async def complete(system, user):
+        if "事实核查" in system:
+            seen["context"] = user
+            return json.dumps({"grounded": True, "feedback": ""})
+        return json.dumps({"score": 95, "feedback": ""})
+
+    v = AnswerVerifier(complete, _cfg(gate_check_code=False))
+    grounding = [
+        {"tool": "search_memory", "content": "知识库片段：光合作用", "is_error": False, "retrieval": True},
+        {"tool": "read_attachment", "content": "文档正文：叶绿体是光合作用的场所", "is_error": False},
+    ]
+    verdict = await v.verify("问", "整理的笔记内容。", grounding, None)
+    assert verdict.ok is True
+    assert "叶绿体是光合作用的场所" in seen["context"]   # 读入的文档进了核查上下文
+
+
 async def test_grounding_not_expanded_to_web_only():
     """纯联网轮（无知识库命中）不触发 grounding —— 刻意不扩大触发面，避免给大量联网
     问答新增 grounding 噪音。本次只修「知识库+联网混用时联网内容被误判」，不改触发条件。"""
@@ -229,7 +250,7 @@ def test_grounding_prompt_excludes_greetings_and_advice():
     # 回归护栏：grounding 提示词须显式把「问候语/建议/鼓励/推理」排除在事实核查之外，
     # 否则核查模型会把它们误判为「缺依据的论断」导致交付被拦。
     from app.verify import GROUNDING_SYSTEM
-    for kw in ("问候", "建议", "鼓励", "推理", "客观事实"):
+    for kw in ("问候", "建议", "鼓励", "推理", "客观事实", "改写", "笔记"):
         assert kw in GROUNDING_SYSTEM, f"grounding 提示词缺少排除项：{kw}"
     # 仍保留「事实核查」字样（既是职责说明，也是测试 mock 的匹配键）
     assert "事实核查" in GROUNDING_SYSTEM
