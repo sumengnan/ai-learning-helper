@@ -37,12 +37,14 @@ class Plan:
 
 @dataclass
 class Verdict:
+    """单步校验结论（Reflect 的单步层）：ok 表示该步产出是否达成预期。"""
     ok: bool
     reason: str
 
 
 @dataclass
 class Review:
+    """终局把关结论（Reflect 的整体层）：accept 表示整体是否可交付；不通过时 feedback 供重规划。"""
     accept: bool
     feedback: str
 

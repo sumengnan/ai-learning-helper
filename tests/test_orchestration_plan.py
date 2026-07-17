@@ -60,3 +60,24 @@ def test_has_pending():
 def test_artifact_defaults():
     a = Artifact(summary="x")
     assert a.data == {} and a.files == []
+
+
+def test_validate_plan_self_loop():
+    # 自环 s1→s1 也是环，必须报"环"
+    assert "环" in validate_plan([_step("s1", deps=["s1"])])
+
+
+def test_validate_plan_single_step():
+    # 单步无依赖是合法计划
+    assert validate_plan([_step("s1")]) is None
+
+
+def test_has_pending_running_is_true():
+    plan = Plan(goal="g", steps=[_step("s1", status="running")])
+    assert has_pending(plan)
+
+
+def test_has_pending_failed_and_skipped_are_false():
+    # failed/skipped 是终态（非成功），不算 pending
+    plan = Plan(goal="g", steps=[_step("s1", status="failed"), _step("s2", status="skipped")])
+    assert not has_pending(plan)
