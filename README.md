@@ -18,6 +18,8 @@ React 前端，提供 AI 聊天、知识库、题库、错题集、学习概览�
   不过则自动带反馈重答。
 - **上下文管理**：长对话按 `full` / `window` / `layered` 三档策略裁剪——L1 滑动窗口 + L2 滚动摘要
   + L3 语义检索，既不超窗又尽量不丢关键信息（详见 [`docs/context-management.md`](docs/context-management.md)）。
+- **记忆管理**：三类长期记忆（语义/情景/程序），从对话自动提炼、去重消矛盾，语义检索找回，
+  并会自我整合与过期清理（详见 [`docs/memory-management.md`](docs/memory-management.md)）。
 - **部署自检**：左侧菜单底部版本徽标显示前后端版本，一致=绿 ✓、不一致=橙 ⚠。
 
 ## 技术栈
@@ -109,6 +111,8 @@ cd docker && docker compose up -d --build
 
 - [`docs/context-management.md`](docs/context-management.md) —— 上下文管理：三档策略、L1/L2/L3
   分层、token 预算、降级与可观测、配置项。
+- [`docs/memory-management.md`](docs/memory-management.md) —— 记忆管理（新手友好）：三类记忆、
+  智能写入、语义检索、自我整合与过期清理、记忆工具与配置。
 - [`docs/DEPLOY.md`](docs/DEPLOY.md) —— 部署：服务器准备、GitHub Secrets、版本自检等。
 
 ## 技能框架
