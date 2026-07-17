@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 
 # 本轮请求级的 extra_body 覆盖（叠加在全局 config.llm_extra_body 之上）。
 # 用 contextvar 传递，避免把参数穿过整条 AgentLoop；如聊天页「思考模式」开关按请求控制
-# {"enable_thinking": bool}。默认空=不覆盖。
+# 思考意图 {"enable_thinking": bool}（厂商中立，发送前由 _adapt_thinking 按端点翻译成
+# 各家参数）。默认空=不覆盖。
 _extra_body_override: ContextVar[dict] = ContextVar("llm_extra_body_override", default={})
 
 
@@ -50,6 +51,26 @@ def json_output():
         reset_extra_body_override(token)
 
 
+def _adapt_thinking(extra_body: dict, base_url: str) -> dict:
+    """把厂商中立的思考意图 enable_thinking(bool) 翻译成当前端点认识的参数。
+
+    各厂商开关「思考模式」的参数不同：Qwen/百炼(dashscope) 用 enable_thinking，
+    DeepSeek 用 thinking={"type": "enabled"/"disabled"}。上游（聊天页开关、judge/
+    grounding/fast 各 completer）统一只表达 enable_thinking 意图，落成哪种参数由这里按
+    base_url 适配——新增厂商在此扩展、调用方无需改动。未知端点保持 enable_thinking 原样
+    （Qwen 原生即认；其它端点维持既有行为，不擅自改）。
+    """
+    if "enable_thinking" not in extra_body:
+        return extra_body
+    eb = dict(extra_body)
+    want = bool(eb["enable_thinking"])
+    host = (base_url or "").lower()
+    if "deepseek" in host:               # DeepSeek 不认 enable_thinking，改用 thinking
+        eb.pop("enable_thinking", None)
+        eb["thinking"] = {"type": "enabled" if want else "disabled"}
+    return eb
+
+
 class OpenAICompatibleClient:
     """基于 openai async SDK 的实现，base_url 可指向任意兼容端点。
 
@@ -78,8 +99,11 @@ class OpenAICompatibleClient:
             kwargs["stream_options"] = {"include_usage": True}
         if tools:
             kwargs["tools"] = tools
-        # 全局 extra_body（config）叠加本轮 override（contextvar，如聊天页的思考模式开关）
-        extra_body = {**self._config.llm_extra_body, **get_extra_body_override()}
+        # 全局 extra_body（config）叠加本轮 override（contextvar，如聊天页的思考模式开关），
+        # 再按端点厂商把思考意图翻译成对应参数（enable_thinking / thinking），见 _adapt_thinking
+        extra_body = _adapt_thinking(
+            {**self._config.llm_extra_body, **get_extra_body_override()},
+            self._config.base_url)
         if extra_body:
             kwargs["extra_body"] = extra_body
 
