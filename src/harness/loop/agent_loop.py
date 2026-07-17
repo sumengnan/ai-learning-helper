@@ -132,6 +132,7 @@ class AgentLoop:
             yield RunStarted(run_id=state.run_id)
 
         recent_sigs: list = []          # 最近各步的工具调用签名，供循环检测
+        loop_nudges = 0                 # 已注入纠偏次数；纠偏后仍循环即中止
         with self._tracer.start_as_current_span("run") as run_span:
             run_span.set_attribute("harness.run_id", state.run_id)
 
@@ -201,9 +202,10 @@ class AgentLoop:
                             self._checkpoint_store.delete(state.run_id)
                         return
 
-                    # 循环/停滞检测：连续 N 步发起完全相同的工具调用（同名+同参）判为原地
-                    # 打转，提前中止（避免白跑到 max_steps）。window<2 关闭；参数不同（如翻页）
-                    # 签名不同，不会误伤。
+                    # 循环/停滞检测：连续 N 步发起完全相同的工具调用（同名+同参）判为原地打转。
+                    # 先注入一次纠偏提示让模型换思路（不真执行本步重复调用，给 tool_calls 回填
+                    # 「已跳过」结果以保持消息合法）；纠偏后仍继续重复才中止。window<2 关闭；
+                    # 参数不同（如翻页）签名不同，不会误伤。
                     if self._loop_window >= 2:
                         sig = tuple(sorted(
                             (tc.name, _canonical_args(tc.arguments)) for tc in tool_calls))
@@ -212,9 +214,25 @@ class AgentLoop:
                                 and len(set(recent_sigs[-self._loop_window:])) == 1):
                             names = "、".join(sorted({tc.name for tc in tool_calls}))
                             run_span.set_attribute("harness.loop_detected", True)
+                            if loop_nudges < 1:      # 首次：注入纠偏，给模型换思路的机会
+                                loop_nudges += 1
+                                recent_sigs.clear()  # 重置窗口，让纠偏后的行为重新计数
+                                for tc in tool_calls:  # 回填跳过结果，保持 tool_calls 消息合法
+                                    state.append(Message(
+                                        role=Role.TOOL, tool_call_id=tc.id,
+                                        content="检测到重复调用，已跳过本次执行。"))
+                                state.append(Message(role=Role.USER, content=(
+                                    f"系统提示：你已连续多次以相同参数调用「{names}」，疑似原地打转。"
+                                    "请换个思路——改用不同的参数或工具，或如果掌握的信息已足够，"
+                                    "就直接给出最终答复；不要再重复同样的调用。")))
+                                yield StepFinished(step=step)
+                                if self._checkpoint_store:
+                                    self._checkpoint_store.save(state)
+                                continue
+                            # 纠偏后仍重复 → 中止
                             yield RunError(
-                                error=f"检测到疑似循环：连续 {self._loop_window} 步重复"
-                                      f"相同的工具调用（{names}），已提前中止")
+                                error=f"检测到疑似循环：纠偏后仍连续重复相同的工具调用"
+                                      f"（{names}），已中止")
                             return
 
                     yield ToolCallRequested(tool_calls=tool_calls)

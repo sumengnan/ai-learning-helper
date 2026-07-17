@@ -25,8 +25,8 @@ class HarnessConfig(BaseSettings):
     model: str = "gpt-4o-mini"
     system_prompt: str = "You are a helpful assistant."
     max_steps: int = 100
-    # 循环/停滞检测：连续多少步发起完全相同的工具调用（同名+同参）判为原地打转、提前中止；
-    # <2 关闭。防模型卡在重复动作上白跑到 max_steps。
+    # 循环/停滞检测：连续多少步发起完全相同的工具调用（同名+同参）判为原地打转——先注入一次
+    # 纠偏提示让模型换思路，纠偏后仍重复才中止；<2 关闭。防模型卡在重复动作上白跑到 max_steps。
     loop_detect_window: int = 3
     temperature: float = 0.7
     request_timeout: float = 60.0

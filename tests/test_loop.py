@@ -46,16 +46,28 @@ def _loop_with_detect(client, window, max_steps=10):
                      loop_detect_window=window)
 
 
-async def test_loop_detected_aborts_on_repeated_identical_tool_calls(make_mock, tool_turn):
-    # 连续 3 步发起完全相同的工具调用（同名+同参）→ 判原地打转、提前中止
-    turns = [tool_turn("calculator", '{"expression": "1+1"}', call_id="c1") for _ in range(5)]
-    loop = _loop_with_detect(make_mock(turns), window=3)
+async def test_loop_nudge_gives_model_another_chance(make_mock, tool_turn, text_turn):
+    # 连续 window 步相同 → 注入纠偏（不中止）；模型下一步改口给正文 → 正常收尾
+    client = make_mock([
+        tool_turn("calculator", '{"expression": "1+1"}', call_id="c1"),
+        tool_turn("calculator", '{"expression": "1+1"}', call_id="c1"),
+        text_turn("好了"),
+    ])
+    loop = _loop_with_detect(client, window=2)
+    events = await _collect(loop, "算")
+    assert isinstance(events[-1], RunFinished)          # 纠偏给了机会，未过早中止
+    assert events[-1].message.content == "好了"
+    # step1 在窗口填满前先执行了工具（1 次）；step2 命中纠偏、不真执行；step3 收尾
+    assert sum(isinstance(e, ToolFinished) for e in events) == 1
+
+
+async def test_loop_aborts_after_nudge_still_repeating(make_mock, tool_turn):
+    # 纠偏后模型仍一味重复相同调用 → 最终中止
+    turns = [tool_turn("calculator", '{"expression": "1+1"}', call_id="c1") for _ in range(6)]
+    loop = _loop_with_detect(make_mock(turns), window=2)
     events = await _collect(loop, "算")
     assert isinstance(events[-1], RunError)
-    assert "循环" in events[-1].error
-    # 第 3 步中止在执行前 → 只跑了前 2 步的工具；共发起 3 个 StepStarted
-    assert sum(isinstance(e, ToolFinished) for e in events) == 2
-    assert sum(isinstance(e, StepStarted) for e in events) == 3
+    assert "纠偏后仍" in events[-1].error
 
 
 async def test_loop_detection_disabled_when_window_lt_2(make_mock, tool_turn, text_turn):
