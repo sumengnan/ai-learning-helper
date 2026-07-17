@@ -9,7 +9,7 @@ from app.verify import call_json
 from .plan import Plan, PlanStep, validate_plan
 
 
-class PlannerError(RuntimeError):
+class PlannerError(Exception):
     """规划最终失败（重试耗尽或输出无法解析）。调用方据此降级为单 AgentLoop 直答。"""
 
 
@@ -71,7 +71,7 @@ class Planner:
 
     async def _generate(self, system: str, user: str) -> list[PlanStep]:
         last_err = ""
-        for attempt in range(self._max_retries + 1):
+        for _ in range(self._max_retries + 1):
             u = user if not last_err else f"{user}\n\n上次输出无效：{last_err}。请修正后重新输出。"
             try:
                 raw = await call_json(self._complete, system, u)
