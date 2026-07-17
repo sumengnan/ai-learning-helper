@@ -6,6 +6,8 @@ import json
 import logging
 from dataclasses import dataclass
 
+from ..llm.openai_compat import json_output
+
 log = logging.getLogger(__name__)
 
 
@@ -67,8 +69,9 @@ class QueryPlanner:
         if not self.enabled:
             return EMPTY_PLAN
         try:
-            raw = await asyncio.wait_for(
-                self._complete(self._build_prompt(), query_text), self._timeout_s)
+            with json_output():
+                raw = await asyncio.wait_for(
+                    self._complete(self._build_prompt(), query_text), self._timeout_s)
         except Exception as e:   # 含 asyncio.TimeoutError：超时/异常一律降级
             log.warning("query plan failed/timeout: %s", e)
             return EMPTY_PLAN

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 from contextvars import ContextVar
 from typing import AsyncIterator
@@ -30,6 +31,23 @@ def reset_extra_body_override(token) -> None:
 
 def get_extra_body_override() -> dict:
     return _extra_body_override.get()
+
+
+@contextlib.contextmanager
+def json_output():
+    """强制本轮 LLM 调用输出合法 JSON（response_format=json_object），叠加在当前 extra_body
+    覆盖上、调用后还原。比「prompt 要求 + 手工去围栏解析」更稳，少踩「模型混入解释文字/
+    markdown 围栏导致解析失败」的坑。
+
+    注意 json_object 模式要求返回顶层是 JSON **对象**：需要数组的调用点必须让 prompt 把数组
+    包进对象信封（如 {"items":[...]}）再取键，不能直接套。端点不支持 response_format 时，
+    由各调用点自身的 try/except 兜底（解析失败即降级，不因基建差异中断）。"""
+    token = set_extra_body_override(
+        {**get_extra_body_override(), "response_format": {"type": "json_object"}})
+    try:
+        yield
+    finally:
+        reset_extra_body_override(token)
 
 
 class OpenAICompatibleClient:

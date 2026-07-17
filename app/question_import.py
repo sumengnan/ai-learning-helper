@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import re
 
+from harness.llm.openai_compat import json_output
+
 from .quiz_service import QuizError, _parse_questions, _valid
 
 ALL_TYPES = ["single", "multiple", "truefalse", "short"]
@@ -41,7 +43,8 @@ def _split_text(text: str, chunk_chars: int) -> list[str]:
 
 EXTRACT_SYSTEM = (
     "你是题库整理助手。从用户提供的文本中抽取所有题目，识别题干、选项、正确答案、"
-    "解析，并判定题型。严格只输出一个 JSON 数组，每个元素形如："
+    "解析，并判定题型。严格只输出一个 JSON 对象：{\"items\":[ ... ]}，items 为题目数组，"
+    "每个元素形如："
     "{\"type\":\"single|multiple|truefalse|short\",\"stem\":\"题干\","
     "\"options\":[\"选项\"]或null,\"answer\":单选为选项索引整数/多选为索引数组/"
     "判断为true或false/简答为参考答案字符串,\"explanation\":\"解析\"}。"
@@ -49,7 +52,7 @@ EXTRACT_SYSTEM = (
 
 
 def _extract_user(text: str) -> str:
-    return f"从下面文本中抽取题目，严格输出 JSON 数组：\n\n{text}"
+    return f"从下面文本中抽取题目，严格输出 JSON 对象 {{\"items\":[...]}}：\n\n{text}"
 
 
 class QuestionImporter:
@@ -72,7 +75,9 @@ class QuestionImporter:
 
     async def _extract(self, text: str) -> list:
         try:
-            return _parse_questions(await self._complete(EXTRACT_SYSTEM, _extract_user(text)))
+            with json_output():
+                raw = await self._complete(EXTRACT_SYSTEM, _extract_user(text))
+            return _parse_questions(raw)
         except QuizError:
             return []
 

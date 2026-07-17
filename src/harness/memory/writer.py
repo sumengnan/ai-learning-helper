@@ -6,6 +6,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 
+from ..llm.openai_compat import json_output
 from .record import MemType, MemoryFilter, MemoryRecord
 
 log = logging.getLogger(__name__)
@@ -13,15 +14,15 @@ log = logging.getLogger(__name__)
 _EXTRACT_SYS = (
     "你是记忆提炼器。从下面的文本中提炼**值得长期记住**的事实——"
     "用户偏好、目标、稳定属性、学到的方法或结论；忽略寒暄、一次性内容、临时上下文。"
-    "输出 JSON 数组，每个元素：{\"text\": 简洁事实, \"mem_type\": "
-    "\"semantic\"|\"episodic\"|\"procedural\", \"entity_key\": 点分实体键如 "
+    "输出一个 JSON 对象 {\"items\":[...]}，items 为数组，每个元素：{\"text\": 简洁事实, "
+    "\"mem_type\": \"semantic\"|\"episodic\"|\"procedural\", \"entity_key\": 点分实体键如 "
     "\"user.pref.language\"（无明确实体则空串）, \"importance\": 0~1 的浮点}。"
     "importance 按此量表评分："
     "0.9~1.0=用户身份/长期偏好/核心目标；"
     "0.6~0.8=稳定的方法、结论或重要约束；"
     "0.4~0.5=一般事实；"
     "0.1~0.3=次要细节或时效性强、易过期的内容。"
-    "没有值得记的内容就输出 []。只输出 JSON，不要解释。"
+    "没有值得记的内容就令 items 为 []。只输出 JSON，不要解释。"
 )
 
 
@@ -58,6 +59,8 @@ def _parse_facts(raw: str) -> list[ExtractedFact]:
         log.warning("记忆提炼：模型输出不是合法 JSON（%d 字），本轮不写入任何记忆",
                     len(raw or ""))
         return []
+    if isinstance(data, dict):        # json_object 信封 {"items":[...]}；模型漏包时下面兜底裸数组
+        data = data.get("items")
     if not isinstance(data, list):
         log.warning("记忆提炼：模型输出是 %s、不是数组，本轮不写入任何记忆",
                     type(data).__name__)
@@ -82,7 +85,7 @@ def _parse_facts(raw: str) -> list[ExtractedFact]:
 
 _RECONCILE_SYS = (
     "你在维护一个记忆库。给你【新事实】列表和与之相关的【已有记忆】。"
-    "对每个新事实，决定操作并输出 JSON 数组，元素："
+    "对每个新事实，决定操作并输出一个 JSON 对象 {\"items\":[...]}，items 为数组，元素："
     "{\"op\": \"ADD\"|\"NOOP\"|\"REPLACE\", \"fact_index\": 新事实下标, "
     "\"supersede_ids\": 该事实要作废的已有记忆 id 列表（仅 REPLACE）}。"
     "规则：与某条已有记忆语义等同 → NOOP；是同一实体的更新、或与某条已有记忆矛盾 → "
@@ -95,6 +98,8 @@ def _parse_ops(raw: str, facts: list[ExtractedFact]) -> list[MemoryOp]:
     # 矛盾的条目，而全程无声。必须出声。日志只记数量：raw 是用户事实，不入日志。
     try:
         data = json.loads(_strip_fence(raw))
+        if isinstance(data, dict):    # json_object 信封 {"items":[...]}；模型漏包时兜底裸数组
+            data = data.get("items")
         if not isinstance(data, list):
             raise ValueError("not a list")
     except (json.JSONDecodeError, TypeError, ValueError):
@@ -154,7 +159,8 @@ class MemoryWriter:
 
     async def _extract(self, text: str) -> list[ExtractedFact]:
         try:
-            raw = await self._extract_complete(_EXTRACT_SYS, text)
+            with json_output():
+                raw = await self._extract_complete(_EXTRACT_SYS, text)
         except Exception as e:
             log.warning("memory extract LLM failed: %s", e)
             return []
@@ -183,7 +189,8 @@ class MemoryWriter:
                                   for c in candidates],
         }, ensure_ascii=False)
         try:
-            raw = await self._complete(_RECONCILE_SYS, payload)
+            with json_output():
+                raw = await self._complete(_RECONCILE_SYS, payload)
         except Exception as e:
             log.warning("memory reconcile LLM failed: %s", e)
             return [MemoryOp("ADD", f) for f in facts]

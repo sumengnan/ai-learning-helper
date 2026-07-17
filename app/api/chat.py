@@ -17,7 +17,8 @@ from harness.approval import reset_context, resolve, set_context
 from harness.events import (
     ModelUsage, Progress, ReasoningDelta, RunError, RunFinished, TextDelta,
     ToolFinished, ToolStarted)
-from harness.llm.openai_compat import reset_extra_body_override, set_extra_body_override
+from harness.llm.openai_compat import (
+    json_output, reset_extra_body_override, set_extra_body_override)
 from harness.loop.agent_loop import AgentLoop
 from harness.persistence.serialize import event_to_dict
 from harness.progress import reset_emitter, set_emitter
@@ -396,9 +397,13 @@ async def _finalize_stale_plan(complete, progress: list[dict], steps: list[dict]
         return None
     trace["unfinished"] = len(left)
     try:
-        raw = await complete(FINALIZE_SYSTEM,
-                             finalize_user_prompt(plan_text, _tool_exec_summary(steps)))
-        merged = merge_finalized(plan_text, json.loads(_strip_fence(raw)))
+        with json_output():
+            raw = await complete(FINALIZE_SYSTEM,
+                                 finalize_user_prompt(plan_text, _tool_exec_summary(steps)))
+        finalized = json.loads(_strip_fence(raw))
+        if isinstance(finalized, dict):   # json_object 信封 {"items":[...]}；漏包时兜底裸数组
+            finalized = finalized.get("items")
+        merged = merge_finalized(plan_text, finalized)
     except Exception as e:   # noqa: BLE001
         log.warning("清单收尾调用失败，保留原样（前端会如实标『状态未知』）：%s", e)
         trace["finalize_error"] = f"{type(e).__name__}: {e}"[:200]

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 
+from harness.llm.openai_compat import json_output
+
 
 class QuizError(Exception):
     """生成/解析/校验失败。"""
@@ -33,7 +35,7 @@ def _strip_fence(raw: str) -> str:
 
 GEN_SYSTEM = (
     "你是出题老师。只依据提供的资料出题，覆盖要点，难度适中。"
-    "严格只输出一个 JSON 数组，每个元素形如："
+    "严格只输出一个 JSON 对象：{\"items\":[ ... ]}，items 为题目数组，每个元素形如："
     "{\"type\":\"single|multiple|truefalse|short\",\"stem\":\"题干\","
     "\"options\":[\"选项\"]或null,\"answer\":单选为选项索引整数/多选为索引数组/"
     "判断为true或false/简答为参考答案字符串,\"explanation\":\"解析\"}。"
@@ -42,7 +44,7 @@ GEN_SYSTEM = (
 
 def _gen_user(topic: str, count: int, types: list[str], context: str) -> str:
     return (f"资料：\n{context}\n\n请就主题「{topic}」出 {count} 道题，"
-            f"题型限定在 {types} 中。严格输出 JSON 数组。")
+            f"题型限定在 {types} 中。严格输出 JSON 对象 {{\"items\":[...]}}。")
 
 
 def _valid(q: dict, types: list[str]) -> bool:
@@ -72,6 +74,8 @@ def _parse_questions(raw: str) -> list:
         data = json.loads(_strip_fence(raw))
     except (ValueError, TypeError):
         raise QuizError("生成结果不是合法 JSON")
+    if isinstance(data, dict):        # json_object 信封 {"items":[...]}；模型漏包时下面兜底裸数组
+        data = data.get("items")
     if not isinstance(data, list):
         raise QuizError("生成结果不是 JSON 数组")
     return data
@@ -100,7 +104,8 @@ class QuizService:
             correct = sorted(user_answer or []) == sorted(question["answer"])
             return {"correct": correct, "feedback": None}
         if t == "short":
-            raw = await self._complete(GRADE_SYSTEM, _grade_user(question, user_answer))
+            with json_output():
+                raw = await self._complete(GRADE_SYSTEM, _grade_user(question, user_answer))
             try:
                 verdict = json.loads(_strip_fence(raw))
                 score = int(verdict.get("score", 0))
@@ -117,7 +122,8 @@ class QuizService:
         if not hits:
             raise NoKnowledge(topic)
         context = "\n\n".join(h.text for h in hits)
-        raw = await self._complete(GEN_SYSTEM, _gen_user(topic, count, types, context))
+        with json_output():
+            raw = await self._complete(GEN_SYSTEM, _gen_user(topic, count, types, context))
         valid = [q for q in _parse_questions(raw) if _valid(q, types)]
         if not valid:
             raise QuizError("生成结果无有效题目")

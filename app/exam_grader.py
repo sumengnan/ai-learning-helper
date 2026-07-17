@@ -11,6 +11,8 @@ import json
 import logging
 import re
 
+from harness.llm.openai_compat import json_output
+
 from .quiz_service import _strip_fence
 
 _log = logging.getLogger("app.exam")
@@ -127,7 +129,8 @@ async def grade_short(judge_complete, q: dict, user_text: str) -> tuple[bool, st
     user = (f"题目：{q['stem']}\n参考答案：{q.get('answer')}\n"
             f"学生作答：{user_text}\n请判定对错。")
     try:
-        raw = await judge_complete(SHORT_JUDGE_SYSTEM, user)
+        with json_output():
+            raw = await judge_complete(SHORT_JUDGE_SYSTEM, user)
         v = json.loads(_strip_fence(raw))
         return bool(v.get("correct", False)), (v.get("feedback") or "")
     except Exception as e:                    # 基建抖动/解析失败 → 不算错，不误存

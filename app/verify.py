@@ -18,34 +18,18 @@ harness 内核零改动。
 """
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import re
 from dataclasses import dataclass, field
 
-from harness.llm.openai_compat import (
-    get_extra_body_override, reset_extra_body_override, set_extra_body_override)
+from harness.llm.openai_compat import json_output
 from harness.tools.base import ToolError
 
 from .quiz_service import _strip_fence
 from .url_blocklist import UrlBlockedError
 
 _log = logging.getLogger("app.verify")
-
-
-@contextlib.contextmanager
-def _json_output():
-    """让本次 LLM 调用强制输出合法 JSON（response_format），叠加在当前 extra_body 覆盖上、调用后还原。
-
-    比「prompt 要求 + 手工 _strip_fence 解析」更可靠，少踩「模型不吐 JSON 导致校验被跳过」的坑；
-    兼容端点不支持时由各调用点的 try/except 兜底（解析失败即跳过该项，不拦交付）。"""
-    token = set_extra_body_override(
-        {**get_extra_body_override(), "response_format": {"type": "json_object"}})
-    try:
-        yield
-    finally:
-        reset_extra_body_override(token)
 
 
 async def call_json(complete, system: str, user: str) -> dict:
@@ -56,7 +40,7 @@ async def call_json(complete, system: str, user: str) -> dict:
     否则一次端点抖动会被读成一次满分。
     两种语义共用同一份 prompt 与解析，判分口径才可比。
     """
-    with _json_output():
+    with json_output():
         raw = await complete(system, user)
     return json.loads(_strip_fence(raw))
 
