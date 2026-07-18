@@ -162,6 +162,59 @@ async def test_validate_fail_retries_bounded_then_failed():
     assert order.count("s1") == 2                # 初次 + 1 次重试（max_step_retry=2）
 
 
+class _CountingCritic:
+    def __init__(self): self.reviews = 0
+    async def validate(self, step, artifact):
+        return Verdict(ok=True, reason="")
+    async def review(self, goal, plan, artifacts):
+        self.reviews += 1
+        return Review(accept=True, feedback="")
+
+
+async def test_verify_false_skips_terminal_review():
+    """结果校验关：跑完一轮直接汇总交付，不做终局 review/重规划。"""
+    critic = _CountingCritic()
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), critic, [])
+    events = [ev async for ev in orch.run("做点复杂的事", verify=False)]
+    assert critic.reviews == 0, "verify=False 应跳过终局 review"
+    assert isinstance(events[-1], RunFinished)
+
+
+async def test_verify_true_runs_terminal_review():
+    """结果校验开：终局 Critic review 照常运行。"""
+    critic = _CountingCritic()
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), critic, [])
+    events = [ev async for ev in orch.run("做点复杂的事", verify=True)]
+    assert critic.reviews == 1, "verify=True 应运行终局 review"
+    assert isinstance(events[-1], RunFinished)
+
+
+async def test_run_aggregates_model_usage():
+    """各子调用的 token 用量汇总成一条 ModelUsage，前端才显示得出总 tokens。"""
+    from harness.events import ModelUsage
+    from harness.usage import Usage
+    from app.orchestration.executor import StepArtifact
+    from app.orchestration.plan import Artifact
+
+    class UsageExecutor:
+        async def execute(self, step, deps, hint=""):
+            yield ModelUsage(usage=Usage(0, 0, 100), cost_usd=0.01, attempts=1, latency_ms=1.0)
+            yield StepArtifact(Artifact(summary=f"done-{step.id}"))
+
+    async def synth_usage(goal, artifacts):
+        yield ModelUsage(usage=Usage(0, 0, 50), cost_usd=0.005, attempts=1, latency_ms=1.0)
+        yield TextDelta(text="答复")
+
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2"))]), FakeCritic(reviews=(True,)), [])
+    orch._executor = UsageExecutor()
+    orch._synthesize = synth_usage
+    events = [ev async for ev in orch.run("做点复杂的事")]
+    usages = [e for e in events if isinstance(e, ModelUsage)]
+    assert len(usages) == 1, "应只发一条聚合后的 ModelUsage"
+    assert usages[0].usage.total_tokens == 250          # 100(s1)+100(s2)+50(synth)
+    assert abs((usages[0].cost_usd or 0) - 0.025) < 1e-9
+
+
 async def test_synthesize_forwards_reasoning(make_mock):
     """开思考模式时，最终答复(synthesize)的思考过程应转发到前端，而不是被吞掉。"""
     from harness.llm.base import StreamChunk

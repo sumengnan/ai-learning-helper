@@ -29,7 +29,7 @@ def _sqlite_allow_cross_thread(monkeypatch):
 
 class FakeOrchestrator:
     """签名与 AgentLoop.run(message) 相同，只 yield 既有 Event 类型。"""
-    async def run(self, message):
+    async def run(self, message, verify=True):
         from harness.events import RunStarted, TextDelta, RunFinished
         from harness.types import Message, Role
         yield RunStarted(run_id="r1")
@@ -73,7 +73,7 @@ def _last_assistant(store, cid):
 
 class DetailOrchestrator:
     """发一条带 detail 的子代理工具进度 + 正常收尾。"""
-    async def run(self, message):
+    async def run(self, message, verify=True):
         from harness.events import RunStarted, Progress, TextDelta, RunFinished
         from harness.types import Message, Role
         yield RunStarted(run_id="r1")
