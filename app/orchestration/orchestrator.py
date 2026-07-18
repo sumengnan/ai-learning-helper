@@ -125,7 +125,9 @@ class Orchestrator:
             yield TextDelta(text=final)
 
     # ---- 主入口 ----
-    async def run(self, user_message: str):
+    async def run(self, user_message: str, verify: bool = True):
+        """verify：对应前端结果校验开关。开 → 终局 Critic 把关 + 可重规划；关 → 跑完一轮
+        直接汇总交付，不做终局 review/重规划（更快，但不把关）。"""
         run_id = uuid.uuid4().hex
         yield RunStarted(run_id=run_id)
         # 每次 run 新建独立预算（工厂优先），以局部变量贯穿本轮——单例并发安全、不跨轮累加
@@ -164,6 +166,9 @@ class Orchestrator:
                     budget.check()
                 except BudgetExceeded:
                     break
+
+            if not verify:   # 结果校验关：跑完一轮直接汇总交付，不做终局 review/重规划
+                break
 
             review = await self._critic.review(user_message, plan, all_artifacts)
             yield Progress(scope="reflect", text=("通过" if review.accept else f"需改进：{review.feedback}"))

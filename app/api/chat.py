@@ -7,6 +7,7 @@ import logging
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -865,10 +866,10 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
 
             try:
                 if config.enable_orchestrator and getattr(harness, "orchestrator", None) is not None:
-                    # 编排器路径：单次流式，直接把 harness.orchestrator 当作 loop_obj 交给 _drain
-                    # （其 run(message) 签名与 AgentLoop 相同、只 yield 既有 Event 类型），复用同一套
-                    # 事件处理与 SSE 下发。天然跳过交付门——编排器自带质量把关与计划终态（见设计 §4）。
-                    # 事件源换成编排器，_drain 之后的兜底逻辑照抄下方直通路径。
+                    # 编排器路径：单次流式，把 harness.orchestrator 当作 loop_obj 交给 _drain（其
+                    # run(message) 只 yield 既有 Event 类型），复用同一套事件处理与 SSE 下发。
+                    # 前端"结果校验"开关(req.verify)映射到编排器的终局 Critic：开→把关+可重规划，
+                    # 关→跑完一轮直接汇总交付。用 SimpleNamespace 把 verify 绑进 .run(message)。
                     used_orchestrator = True
                     collect = {"final": None, "error": None, "steps": steps,
                                "grounding": [], "progress": progress, "usage": None,
@@ -876,7 +877,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     run_id_a = uuid4().hex
                     store.add_run(req.conversation_id, run_id_a)
                     source_sink.reset()
-                    async for s in _drain(harness.orchestrator, run_id_a, model_message, True, collect):
+                    _orch_src = SimpleNamespace(
+                        run=lambda m: harness.orchestrator.run(m, verify=req.verify))
+                    async for s in _drain(_orch_src, run_id_a, model_message, True, collect):
                         yield _acc(s)
                     errored = collect["final"] is None
                     if not errored:

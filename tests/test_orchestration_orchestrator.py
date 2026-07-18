@@ -162,6 +162,33 @@ async def test_validate_fail_retries_bounded_then_failed():
     assert order.count("s1") == 2                # 初次 + 1 次重试（max_step_retry=2）
 
 
+class _CountingCritic:
+    def __init__(self): self.reviews = 0
+    async def validate(self, step, artifact):
+        return Verdict(ok=True, reason="")
+    async def review(self, goal, plan, artifacts):
+        self.reviews += 1
+        return Review(accept=True, feedback="")
+
+
+async def test_verify_false_skips_terminal_review():
+    """结果校验关：跑完一轮直接汇总交付，不做终局 review/重规划。"""
+    critic = _CountingCritic()
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), critic, [])
+    events = [ev async for ev in orch.run("做点复杂的事", verify=False)]
+    assert critic.reviews == 0, "verify=False 应跳过终局 review"
+    assert isinstance(events[-1], RunFinished)
+
+
+async def test_verify_true_runs_terminal_review():
+    """结果校验开：终局 Critic review 照常运行。"""
+    critic = _CountingCritic()
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), critic, [])
+    events = [ev async for ev in orch.run("做点复杂的事", verify=True)]
+    assert critic.reviews == 1, "verify=True 应运行终局 review"
+    assert isinstance(events[-1], RunFinished)
+
+
 async def test_synthesize_forwards_reasoning(make_mock):
     """开思考模式时，最终答复(synthesize)的思考过程应转发到前端，而不是被吞掉。"""
     from harness.llm.base import StreamChunk
