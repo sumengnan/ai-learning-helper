@@ -37,3 +37,17 @@ async def test_real_endpoint_calculator_flow():
     tool_finished = [ev for ev in events if isinstance(ev, ToolFinished)]
     assert tool_finished, "期望至少触发一次工具调用"
     assert any(ev.result.is_error is False for ev in tool_finished)
+
+
+async def test_real_endpoint_orchestrator_flow():
+    from app.assembly import build_harness
+    from app.config import AppConfig
+
+    cfg = AppConfig(enable_orchestrator=True)
+    h = build_harness(cfg)
+    final = ""
+    async for ev in h.orchestrator.run("用一段话解释什么是二分查找，并给出它的时间复杂度"):
+        if isinstance(ev, RunFinished):
+            final = ev.message.content or ""
+    assert final                       # 有产出
+    assert "二分" in final or "O(log" in final   # 命中主题
