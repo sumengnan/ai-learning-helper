@@ -53,7 +53,7 @@ def _plan_progress(plan: Plan) -> Progress:
 class Orchestrator:
     def __init__(self, *, client, registry: ToolRegistry, model: str,
                  planner: Planner, critic: Critic, executor: Executor,
-                 fast_complete, budget=None,
+                 fast_complete, budget=None, budget_factory=None,
                  max_step_retry: int = 2, max_replan: int = 2) -> None:
         self._client = client
         self._registry = registry
@@ -62,7 +62,10 @@ class Orchestrator:
         self._critic = critic
         self._executor = executor
         self._fast_complete = fast_complete
-        self._budget = budget
+        self._budget = budget                # 直接注入的预算实例（主要供测试）
+        # 每次 run() 新建预算的工厂：编排器是单例，用工厂产出每轮独立的 BudgetTracker，
+        # 避免跨轮累加、且并发安全（预算以局部变量贯穿一次 run，绝不写回 self）。
+        self._budget_factory = budget_factory
         self._max_step_retry = max_step_retry
         self._max_replan = max_replan
 
@@ -74,11 +77,11 @@ class Orchestrator:
         except Exception:
             return False   # 判不了就走完整编排（宁可多做不可少做）
 
-    async def _simple_answer(self, message: str):
+    async def _simple_answer(self, message: str, budget=None):
         """简单问答短路：单个全能力 AgentLoop 直答，透传其事件（跳过其 RunStarted，避免重复）。"""
         loop = AgentLoop(client=self._client, registry=self._registry,
                          context=ContextManager(SYNTH_SYSTEM),
-                         max_steps=10, budget=self._budget, model_name=self._model)
+                         max_steps=10, budget=budget, model_name=self._model)
         async for ev in loop.run(message):
             if isinstance(ev, RunStarted):
                 continue
@@ -106,18 +109,20 @@ class Orchestrator:
     async def run(self, user_message: str):
         run_id = uuid.uuid4().hex
         yield RunStarted(run_id=run_id)
-        if self._budget:
-            self._budget.start()
+        # 每次 run 新建独立预算（工厂优先），以局部变量贯穿本轮——单例并发安全、不跨轮累加
+        budget = self._budget_factory() if self._budget_factory else self._budget
+        if budget:
+            budget.start()
 
         if await self._is_simple(user_message):
-            async for ev in self._simple_answer(user_message):
+            async for ev in self._simple_answer(user_message, budget):
                 yield ev
             return
 
         try:
             plan = await self._planner.plan(user_message)
         except PlannerError:
-            async for ev in self._simple_answer(user_message):   # 降级
+            async for ev in self._simple_answer(user_message, budget):   # 降级
                 yield ev
             return
         yield _plan_progress(plan)
@@ -128,16 +133,16 @@ class Orchestrator:
         # 否则终局 synthesize/review 只剩最后一轮的产物 —— 违反 spec §4「保留成果」并使闭环残废。
         all_artifacts: dict[str, Artifact] = {}
         while True:
-            async for ev in self._schedule_rounds(plan, retry_hints):
+            async for ev in self._schedule_rounds(plan, retry_hints, budget):
                 yield ev
             for s in plan.steps:      # 收走本轮 done 产物（replan 换 plan 也不丢）
                 if s.status == "done" and s.result:
                     all_artifacts[s.id] = s.result
 
             # 预算超限：不再规划，带现有成果尽力定稿（spec §5「残缺胜过空手」）
-            if self._budget:
+            if budget:
                 try:
-                    self._budget.check()
+                    budget.check()
                 except BudgetExceeded:
                     break
 
@@ -168,11 +173,11 @@ class Orchestrator:
         yield RunFinished(message=Message(role=Role.ASSISTANT, content=final))
 
     # ---- 调度：一轮轮跑就绪集，直到无 pending、预算超限或无法推进（后两者带现有成果收尾）----
-    async def _schedule_rounds(self, plan: Plan, retry_hints: dict[str, str]):
+    async def _schedule_rounds(self, plan: Plan, retry_hints: dict[str, str], budget=None):
         while has_pending(plan):
-            if self._budget:
+            if budget:
                 try:
-                    self._budget.check()
+                    budget.check()
                 except BudgetExceeded:
                     # 预算超限：停跑本轮，剩余未完成步标 skipped，带现有成果交终局（spec §5）。
                     # 不硬判 RunError —— run() 会据现有产物尽力 synthesize。
