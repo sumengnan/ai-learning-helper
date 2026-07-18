@@ -256,11 +256,17 @@ def build_harness(config) -> Harness:
         _plan_complete = build_completer(client, config.model)     # 规划 + 终局 review 用主模型（判断质量要求高）
         _fast_complete = build_fast_completer(client, config)      # triage + 单步 validate 用快速档（频繁，提速）
         _exec_client, _exec_model = build_fast_client(client, config)   # 执行子步走快速档模型（占大头往返，提速）
+        # 执行子步的工具表剔除 update_plan：编排器自管总计划，子步若调 update_plan 会发 scope=plan
+        # 覆盖掉顶部总计划（表现为"总步骤变成最后一步的明细"）。主 reg 保留它，simple 直答仍可用。
+        _exec_reg = ToolRegistry()
+        for _t in reg.tools():
+            if _t.name != "update_plan":
+                _exec_reg.register(_t)
         orchestrator = Orchestrator(
             client=client, registry=reg, model=config.model,
             planner=Planner(_plan_complete, max_retries=config.orchestrator_planner_max_retries),
             critic=Critic(_plan_complete, validate_complete=_fast_complete),
-            executor=Executor(_exec_client, reg, config.app_system_prompt, _exec_model,
+            executor=Executor(_exec_client, _exec_reg, config.app_system_prompt, _exec_model,
                               max_steps=config.orchestrator_step_max_steps,
                               loop_detect_window=config.loop_detect_window,
                               disable_thinking=config.orchestrator_step_disable_thinking),

@@ -20,6 +20,15 @@ def test_orchestrator_built_when_enabled(monkeypatch):
     assert isinstance(h.orchestrator, Orchestrator)
 
 
+def test_executor_registry_excludes_update_plan(monkeypatch):
+    """执行子步不该拿到 update_plan：否则子步一调它就发 scope=plan 覆盖编排器的总计划（bug）。"""
+    monkeypatch.setenv("HARNESS_API_KEY", "sk-test")
+    monkeypatch.setenv("HARNESS_ENABLE_ORCHESTRATOR", "true")
+    o = build_harness(AppConfig()).orchestrator
+    assert o._executor._registry.get("update_plan") is None      # 执行步无 update_plan
+    assert o._registry.get("update_plan") is not None            # 主 registry 仍有（simple 直答走 ReAct 可用）
+
+
 def test_orchestrator_speed_wiring(monkeypatch):
     """A 组提速接线生效：执行子步默认关思考、Critic.validate 与 review 用不同 completer、
     预算工厂已挂（每 run 独立封顶）。"""
