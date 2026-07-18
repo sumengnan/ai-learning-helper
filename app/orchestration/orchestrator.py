@@ -24,7 +24,6 @@ from harness.context.manager import ContextManager
 from harness.events import (
     ModelUsage, Progress, ReasoningDelta, RunFinished, RunStarted, TextDelta,
 )
-from harness.usage import Usage
 from harness.loop.agent_loop import AgentLoop
 from harness.reliability.budget import BudgetExceeded
 from harness.tools.base import ToolRegistry
@@ -34,6 +33,7 @@ from .critic import Critic
 from .executor import Executor, StepArtifact
 from .planner import Planner, PlannerError
 from .plan import Artifact, Plan, has_pending, ready_steps
+from .usage_ctx import UsageAcc, record_usage, reset_acc, set_acc
 
 TRIAGE_SYSTEM = (
     "判断用户消息是否为简单问答（打招呼、寒暄、单句事实、闲聊）。"
@@ -117,8 +117,10 @@ class Orchestrator:
             if isinstance(ev, TextDelta):
                 streamed = True
                 yield ev
-            elif isinstance(ev, (ReasoningDelta, ModelUsage)):   # 思考过程/用量透传（run() 会汇总用量）
+            elif isinstance(ev, ReasoningDelta):   # 思考过程透传（前端 ThinkingBlock 展示）
                 yield ev
+            elif isinstance(ev, ModelUsage):       # 用量记进累加器，run() 末尾汇总
+                record_usage(ev.usage, ev.cost_usd)
             elif isinstance(ev, RunFinished):
                 final = ev.message.content or ""
         # 端点未流式（只在 RunFinished 给全量）时，补一个 TextDelta，保证 run() 能累加到文本
@@ -135,84 +137,75 @@ class Orchestrator:
         budget = self._budget_factory() if self._budget_factory else self._budget
         if budget:
             budget.start()
-
-        if await self._is_simple(user_message):
-            async for ev in self._simple_answer(user_message, budget):
-                yield ev
-            return
-
+        # 每轮独立用量累加器：planner/critic 的 completer、executor、synthesize 各子调用的
+        # ModelUsage 都 record 到这里（含并行 worker，靠 contextvar 拷贝共享同一对象），
+        # 末尾发一条总的，前端才显示得出总 tokens。
+        acc = UsageAcc()
+        acc_token = set_acc(acc)
         try:
-            plan = await self._planner.plan(user_message)
-        except PlannerError:
-            async for ev in self._simple_answer(user_message, budget):   # 降级
-                yield ev
-            return
-        yield _plan_progress(plan)
+            if await self._is_simple(user_message):
+                async for ev in self._simple_answer(user_message, budget):
+                    yield ev
+                return
 
-        replan_count = 0
-        retry_hints: dict[str, str] = {}
-        # 各子调用（执行步、synthesize）的 token 用量汇总成一条 ModelUsage 末尾发出——
-        # 否则子调用的用量被吞、前端显示不出总 tokens。（planner/critic 走 call_json，暂未计入。）
-        usage_total = Usage()
-        cost_total = 0.0
-        seen_usage = False
-        # 跨轮累积 done 产物：replan 返回全新 Plan（旧 done 步不在其中），必须在换 plan 前收走，
-        # 否则终局 synthesize/review 只剩最后一轮的产物 —— 违反 spec §4「保留成果」并使闭环残废。
-        all_artifacts: dict[str, Artifact] = {}
-        while True:
-            async for ev in self._schedule_rounds(plan, retry_hints, budget):
-                if isinstance(ev, ModelUsage):     # 汇总不外发，末尾发一条聚合
-                    usage_total = usage_total + ev.usage
-                    cost_total += ev.cost_usd or 0.0
-                    seen_usage = True
-                    continue
-                yield ev
-            for s in plan.steps:      # 收走本轮 done 产物（replan 换 plan 也不丢）
-                if s.status == "done" and s.result:
-                    all_artifacts[s.id] = s.result
-
-            # 预算超限：不再规划，带现有成果尽力定稿（spec §5「残缺胜过空手」）
-            if budget:
-                try:
-                    budget.check()
-                except BudgetExceeded:
-                    break
-
-            if not verify:   # 结果校验关：跑完一轮直接汇总交付，不做终局 review/重规划
-                break
-
-            review = await self._critic.review(user_message, plan, all_artifacts)
-            yield Progress(scope="reflect", text=("通过" if review.accept else f"需改进：{review.feedback}"))
-            if review.accept or replan_count >= self._max_replan:
-                break
-            replan_count += 1
-            for s in plan.steps:
-                if s.status in ("pending", "running"):
-                    s.status = "skipped"
             try:
-                plan = await self._planner.replan(user_message, plan, review.feedback)
+                plan = await self._planner.plan(user_message)
             except PlannerError:
-                break
-            retry_hints = {}
+                async for ev in self._simple_answer(user_message, budget):   # 降级
+                    yield ev
+                return
             yield _plan_progress(plan)
 
-        # 无论产物多寡都尽力 synthesize：spec §5「其余一律尽量给用户一个（可能残缺但有说明的）
-        # 答复」——零产物时 synthesize 也会据空产物说明未能完成，胜过硬判 RunError。
-        # 累加 synthesize 吐出的 TextDelta 即最终文本——不用侧信道，真/假 _synthesize 都适用
-        final_parts: list[str] = []
-        async for ev in self._synthesize(user_message, all_artifacts):
-            if isinstance(ev, ModelUsage):
-                usage_total = usage_total + ev.usage
-                cost_total += ev.cost_usd or 0.0
-                seen_usage = True
-                continue
-            if isinstance(ev, TextDelta):
-                final_parts.append(ev.text)
-            yield ev
-        final = "".join(final_parts) or "（未能生成答复）"
-        if seen_usage:   # 汇总后的总用量，供前端显示总 tokens/成本
-            yield ModelUsage(usage=usage_total, cost_usd=cost_total, attempts=1, latency_ms=0.0)
-        yield RunFinished(message=Message(role=Role.ASSISTANT, content=final))
+            replan_count = 0
+            retry_hints: dict[str, str] = {}
+            # 跨轮累积 done 产物：replan 返回全新 Plan（旧 done 步不在其中），必须在换 plan 前收走，
+            # 否则终局 synthesize/review 只剩最后一轮的产物 —— 违反 spec §4「保留成果」并使闭环残废。
+            all_artifacts: dict[str, Artifact] = {}
+            while True:
+                async for ev in self._schedule_rounds(plan, retry_hints, budget):
+                    yield ev
+                for s in plan.steps:      # 收走本轮 done 产物（replan 换 plan 也不丢）
+                    if s.status == "done" and s.result:
+                        all_artifacts[s.id] = s.result
+
+                # 预算超限：不再规划，带现有成果尽力定稿（spec §5「残缺胜过空手」）
+                if budget:
+                    try:
+                        budget.check()
+                    except BudgetExceeded:
+                        break
+
+                if not verify:   # 结果校验关：跑完一轮直接汇总交付，不做终局 review/重规划
+                    break
+
+                review = await self._critic.review(user_message, plan, all_artifacts)
+                yield Progress(scope="reflect", text=("通过" if review.accept else f"需改进：{review.feedback}"))
+                if review.accept or replan_count >= self._max_replan:
+                    break
+                replan_count += 1
+                for s in plan.steps:
+                    if s.status in ("pending", "running"):
+                        s.status = "skipped"
+                try:
+                    plan = await self._planner.replan(user_message, plan, review.feedback)
+                except PlannerError:
+                    break
+                retry_hints = {}
+                yield _plan_progress(plan)
+
+            # 无论产物多寡都尽力 synthesize：spec §5「其余一律尽量给用户一个（可能残缺但有说明的）
+            # 答复」——零产物时 synthesize 也会据空产物说明未能完成，胜过硬判 RunError。
+            final_parts: list[str] = []
+            async for ev in self._synthesize(user_message, all_artifacts):
+                if isinstance(ev, TextDelta):
+                    final_parts.append(ev.text)
+                yield ev
+            final = "".join(final_parts) or "（未能生成答复）"
+            if acc.usage.total_tokens or acc.cost:   # 汇总总用量，供前端显示总 tokens/成本
+                yield ModelUsage(usage=acc.usage, cost_usd=acc.cost, attempts=1, latency_ms=0.0)
+            yield RunFinished(message=Message(role=Role.ASSISTANT, content=final))
+        finally:
+            reset_acc(acc_token)
 
     # ---- 调度：一轮轮跑就绪集，直到无 pending、预算超限或无法推进（后两者带现有成果收尾）----
     async def _schedule_rounds(self, plan: Plan, retry_hints: dict[str, str], budget=None):

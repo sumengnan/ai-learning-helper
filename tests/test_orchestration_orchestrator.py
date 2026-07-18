@@ -189,30 +189,44 @@ async def test_verify_true_runs_terminal_review():
     assert isinstance(events[-1], RunFinished)
 
 
-async def test_run_aggregates_model_usage():
-    """各子调用的 token 用量汇总成一条 ModelUsage，前端才显示得出总 tokens。"""
+async def test_run_aggregates_all_usage_incl_planner_critic():
+    """所有子调用的 token 用量（planner + executor + critic validate/review + synthesize）
+    汇总成一条 ModelUsage，前端才显示得出总量。"""
     from harness.events import ModelUsage
     from harness.usage import Usage
+    from app.orchestration.usage_ctx import record_usage
     from app.orchestration.executor import StepArtifact
     from app.orchestration.plan import Artifact
 
-    class UsageExecutor:
+    class UExec:
         async def execute(self, step, deps, hint=""):
-            yield ModelUsage(usage=Usage(0, 0, 100), cost_usd=0.01, attempts=1, latency_ms=1.0)
+            record_usage(Usage(0, 0, 100), 0.01)
             yield StepArtifact(Artifact(summary=f"done-{step.id}"))
 
-    async def synth_usage(goal, artifacts):
-        yield ModelUsage(usage=Usage(0, 0, 50), cost_usd=0.005, attempts=1, latency_ms=1.0)
-        yield TextDelta(text="答复")
+    class UCritic:
+        async def validate(self, step, art):
+            record_usage(Usage(0, 0, 10), 0.001); return Verdict(ok=True, reason="")
+        async def review(self, goal, plan, arts):
+            record_usage(Usage(0, 0, 20), 0.002); return Review(accept=True, feedback="")
 
-    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2"))]), FakeCritic(reviews=(True,)), [])
-    orch._executor = UsageExecutor()
-    orch._synthesize = synth_usage
-    events = [ev async for ev in orch.run("做点复杂的事")]
+    class UPlanner:
+        async def plan(self, goal):
+            record_usage(Usage(0, 0, 30), 0.003); return _plan(_s("s1"), _s("s2"))
+        async def replan(self, g, p, f):
+            return _plan(_s("s1"))
+
+    async def usynth(goal, arts):
+        record_usage(Usage(0, 0, 50), 0.005); yield TextDelta(text="答复")
+
+    orch = _mk(UPlanner(), UCritic(), [])
+    orch._executor = UExec()
+    orch._synthesize = usynth
+    events = [ev async for ev in orch.run("复杂")]
     usages = [e for e in events if isinstance(e, ModelUsage)]
-    assert len(usages) == 1, "应只发一条聚合后的 ModelUsage"
-    assert usages[0].usage.total_tokens == 250          # 100(s1)+100(s2)+50(synth)
-    assert abs((usages[0].cost_usd or 0) - 0.025) < 1e-9
+    assert len(usages) == 1, "应只发一条聚合"
+    # plan 30 + s1/s2 各 100 + validate 各 10 + review 20 + synth 50 = 320
+    assert usages[0].usage.total_tokens == 30 + 100 * 2 + 10 * 2 + 20 + 50
+    assert abs((usages[0].cost_usd or 0) - (0.003 + 0.01 * 2 + 0.001 * 2 + 0.002 + 0.005)) < 1e-9
 
 
 async def test_synthesize_forwards_reasoning(make_mock):

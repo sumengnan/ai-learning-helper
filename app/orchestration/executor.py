@@ -16,6 +16,7 @@ from harness.progress import reset_current_agent, set_current_agent
 from harness.tools.base import ToolRegistry
 
 from .plan import Artifact, PlanStep
+from .usage_ctx import record_usage
 
 
 @dataclass
@@ -108,8 +109,8 @@ class Executor:
                                    status="error" if r.is_error else "ok", key=r.tool_call_id,
                                    detail={"tool": name, "args": tool_args.get(r.tool_call_id),
                                            "result": r.content, "is_error": r.is_error})
-                elif isinstance(ev, ModelUsage):   # 用量上抛，供 Orchestrator 汇总成总 tokens
-                    yield ev
+                elif isinstance(ev, ModelUsage):   # 用量记进累加器，供 Orchestrator 末尾汇总
+                    record_usage(ev.usage, ev.cost_usd)
                 elif isinstance(ev, RunFinished):
                     final_text = ev.message.content or ""
                 elif isinstance(ev, RunError):
