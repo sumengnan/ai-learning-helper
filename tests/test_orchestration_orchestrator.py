@@ -182,6 +182,16 @@ async def test_planner_error_falls_back_to_simple_answer():
     assert order == []   # 从未进入编排/执行
 
 
+def test_plan_progress_includes_step_id():
+    """计划进度带上步骤 id，供前端把 executor:s1 的执行明细挂到对应计划步下。"""
+    import json
+    from app.orchestration.orchestrator import _plan_progress
+    p = _plan_progress(_plan(_s("s1"), _s("s2")))
+    steps = json.loads(p.text)
+    assert [s["id"] for s in steps] == ["s1", "s2"]
+    assert all("title" in s and "status" in s for s in steps)
+
+
 async def test_budget_factory_fresh_per_run():
     """编排器是单例：每次 run 应经工厂新建独立预算，不跨轮累加、不写回 self。"""
     made = []
