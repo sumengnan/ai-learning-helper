@@ -189,6 +189,28 @@ async def test_verify_true_runs_terminal_review():
     assert isinstance(events[-1], RunFinished)
 
 
+async def test_planner_reasoning_emitted_before_plan():
+    """开思考模式时，planner 的思考在计划之前发出（先思考→再出计划）。"""
+    from harness.events import ReasoningDelta
+    from app.orchestration.usage_ctx import record_reasoning
+
+    class RPlanner:
+        async def plan(self, goal):
+            record_reasoning("先分析怎么拆")
+            return _plan(_s("s1"))
+        async def replan(self, g, p, f):
+            return _plan(_s("s1"))
+
+    orch = _mk(RPlanner(), FakeCritic(reviews=(True,)), [])
+    events = [ev async for ev in orch.run("复杂")]
+    ri = next((i for i, e in enumerate(events)
+               if isinstance(e, ReasoningDelta) and "先分析" in e.text), None)
+    pi = next((i for i, e in enumerate(events)
+               if isinstance(e, Progress) and e.scope == "plan"), None)
+    assert ri is not None and pi is not None
+    assert ri < pi, "规划思考应出现在第一个计划快照之前"
+
+
 async def test_run_aggregates_all_usage_incl_planner_critic():
     """所有子调用的 token 用量（planner + executor + critic validate/review + synthesize）
     汇总成一条 ModelUsage，前端才显示得出总量。"""

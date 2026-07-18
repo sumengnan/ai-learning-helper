@@ -43,3 +43,24 @@ def set_acc(acc: UsageAcc):
 
 def reset_acc(token) -> None:
     _acc.reset(token)
+
+
+# ---- 思考(ReasoningDelta)sink：让走 completer 的子调用（如 planner）的思考能被捕获转发 ----
+# completer 返回字符串、吞掉 ReasoningDelta；planner 走 call_json→build_completer，其"先思考再出
+# 严格 JSON"里的思考本来看不到。用一个 sink：build_completer 命中 ReasoningDelta 时 record_reasoning，
+# orchestrator 只在 planner 调用期间挂上 sink，把思考在计划之前发出来。无 sink 时 no-op。
+_reason_sink: contextvars.ContextVar = contextvars.ContextVar("reason_sink", default=None)
+
+
+def record_reasoning(text: str) -> None:
+    sink = _reason_sink.get()
+    if sink is not None:
+        sink(text)
+
+
+def set_reason_sink(fn):
+    return _reason_sink.set(fn)
+
+
+def reset_reason_sink(token) -> None:
+    _reason_sink.reset(token)
