@@ -12,7 +12,7 @@ import uuid
 
 from harness.context.manager import ContextManager
 from harness.events import (
-    Progress, RunError, RunFinished, RunStarted, TextDelta,
+    Progress, RunFinished, RunStarted, TextDelta,
 )
 from harness.loop.agent_loop import AgentLoop
 from harness.reliability.budget import BudgetExceeded
@@ -124,18 +124,24 @@ class Orchestrator:
 
         replan_count = 0
         retry_hints: dict[str, str] = {}
+        # 跨轮累积 done 产物：replan 返回全新 Plan（旧 done 步不在其中），必须在换 plan 前收走，
+        # 否则终局 synthesize/review 只剩最后一轮的产物 —— 违反 spec §4「保留成果」并使闭环残废。
+        all_artifacts: dict[str, Artifact] = {}
         while True:
-            aborted = False
             async for ev in self._schedule_rounds(plan, retry_hints):
                 yield ev
-                if isinstance(ev, RunError):
-                    aborted = True
-            if aborted:
-                return
+            for s in plan.steps:      # 收走本轮 done 产物（replan 换 plan 也不丢）
+                if s.status == "done" and s.result:
+                    all_artifacts[s.id] = s.result
 
-            artifacts = {s.id: s.result for s in plan.steps
-                         if s.status == "done" and s.result}
-            review = await self._critic.review(user_message, plan, artifacts)
+            # 预算超限：不再规划，带现有成果尽力定稿（spec §5「残缺胜过空手」）
+            if self._budget:
+                try:
+                    self._budget.check()
+                except BudgetExceeded:
+                    break
+
+            review = await self._critic.review(user_message, plan, all_artifacts)
             yield Progress(scope="reflect", text=("通过" if review.accept else f"需改进：{review.feedback}"))
             if review.accept or replan_count >= self._max_replan:
                 break
@@ -150,28 +156,35 @@ class Orchestrator:
             retry_hints = {}
             yield _plan_progress(plan)
 
-        artifacts = {s.id: s.result for s in plan.steps if s.status == "done" and s.result}
+        # 无论产物多寡都尽力 synthesize：spec §5「其余一律尽量给用户一个（可能残缺但有说明的）
+        # 答复」——零产物时 synthesize 也会据空产物说明未能完成，胜过硬判 RunError。
         # 累加 synthesize 吐出的 TextDelta 即最终文本——不用侧信道，真/假 _synthesize 都适用
         final_parts: list[str] = []
-        async for ev in self._synthesize(user_message, artifacts):
+        async for ev in self._synthesize(user_message, all_artifacts):
             if isinstance(ev, TextDelta):
                 final_parts.append(ev.text)
             yield ev
         final = "".join(final_parts) or "（未能生成答复）"
         yield RunFinished(message=Message(role=Role.ASSISTANT, content=final))
 
-    # ---- 调度：一轮轮跑就绪集，直到无 pending 或死锁 ----
+    # ---- 调度：一轮轮跑就绪集，直到无 pending、预算超限或无法推进（后两者带现有成果收尾）----
     async def _schedule_rounds(self, plan: Plan, retry_hints: dict[str, str]):
         while has_pending(plan):
             if self._budget:
                 try:
                     self._budget.check()
-                except BudgetExceeded as e:
-                    yield RunError(error=e.reason)
+                except BudgetExceeded:
+                    # 预算超限：停跑本轮，剩余未完成步标 skipped，带现有成果交终局（spec §5）。
+                    # 不硬判 RunError —— run() 会据现有产物尽力 synthesize。
+                    self._skip_unfinished(plan)
+                    yield Progress(scope="reflect", text="预算超限，带现有成果收尾")
                     return
             ready = ready_steps(plan)
             if not ready:
-                yield RunError(error="计划无法推进：存在无法满足的依赖或前置步骤全部失败")
+                # 有 pending 但无就绪步：validate_plan 已保证 DAG 合法可调度，故运行期唯一现实成因
+                # 是某步重试耗尽被判 failed、其后继依赖永远无法满足。按 spec §4「交终局 Critic 判」，
+                # 把这些不可达步标 skipped、正常收尾（带残缺成果），不再硬判 RunError 丢弃已完成工作。
+                self._skip_unfinished(plan)
                 return
             for s in ready:
                 s.status = "running"
@@ -221,6 +234,13 @@ class Orchestrator:
                     t.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
             yield _plan_progress(plan)
+
+    @staticmethod
+    def _skip_unfinished(plan: Plan) -> None:
+        """把仍 pending/running 的步标 skipped —— 无法再推进时收尾，done/failed 保持不动。"""
+        for s in plan.steps:
+            if s.status in ("pending", "running"):
+                s.status = "skipped"
 
     def _on_step_fail(self, step, retry_hints: dict[str, str], reason: str) -> None:
         step.attempts += 1
