@@ -26,6 +26,13 @@ function agentOf(p: ProgressItem, kind: string): string {
   return p.agent || "";
 }
 
+// 沙箱进度的 agent 标记多为 "executor:s1"（编排器执行子步）——直接显示太机器味，
+// 转成用户能读懂的「步骤 s1」，让沙箱日志一眼看出「哪个智能体、在哪步执行」（issue 5）。
+function friendlyAgent(agent: string): string {
+  const m = /^executor:(.+)$/.exec(agent);
+  return m ? `步骤 ${m[1]}` : agent;
+}
+
 // 每步状态图标：优先用后端下发的显式 status（子 agent 每步）；否则回退到文本启发式（沙箱）
 // stopped：用户已停止——最后一条仍在进行中的步骤标灰色「停止」，不再转圈也不冒充成功
 function stepIcon(p: ProgressItem, isLast: boolean, running: boolean, stopped = false) {
@@ -91,7 +98,7 @@ export function ProgressBlock({ title, kind, items, status }: {
   // 标题右侧显示最后一步进度（含归属子 agent）
   const last = rows[rows.length - 1];
   const lastAgent = agentOf(last, kind);
-  const summaryText = lastAgent ? `${lastAgent}: ${last.text}` : last.text;
+  const summaryText = lastAgent ? `${friendlyAgent(lastAgent)}: ${last.text}` : last.text;
   const lastCancelled = stopped
     && (last.status === "running" || (!last.status && last.text.endsWith("…")));
   const summary = (
@@ -105,12 +112,17 @@ export function ProgressBlock({ title, kind, items, status }: {
     <CollapsibleBlock icon={icon} title={title} status={status} summary={summary}>
       {rows.map((p, i) => {
         const agent = agentOf(p, kind);
+        // 归属的 agent/步骤发生切换时，本行上方加一条分隔线，把不同智能体、不同步骤的沙箱日志
+        // 间隔开，避免连成一片分不清哪条属于哪步（issue 5）。首行不加。
+        const prevAgent = i > 0 ? agentOf(rows[i - 1], kind) : agent;
+        const agentChanged = i > 0 && agent !== prevAgent;
         return (
-          <Box key={p.key ?? i} sx={{ display: "flex", alignItems: "center", gap: 0.75, py: 0.15 }}>
+          <Box key={p.key ?? i} sx={{ display: "flex", alignItems: "center", gap: 0.75, py: 0.15,
+            ...(agentChanged && { mt: 0.5, pt: 0.5, borderTop: 1, borderColor: "divider" }) }}>
             {stepIcon(p, i === rows.length - 1, status === "running", stopped)}
-            {/* 子 agent 归属用彩色小标签区分（尤其沙箱执行中混入的子代理步骤） */}
+            {/* 子 agent/步骤归属用彩色小标签区分（尤其沙箱执行中混入的子代理步骤） */}
             {agent ? (
-              <Chip label={agent} size="small" color="secondary" variant="outlined"
+              <Chip label={friendlyAgent(agent)} size="small" color="secondary" variant="outlined"
                 sx={{ height: 16, flexShrink: 0, "& .MuiChip-label": { px: 0.5, fontSize: 10, fontWeight: 700 } }} />
             ) : null}
             <Typography variant="caption" color="text.secondary">

@@ -256,6 +256,71 @@ async def test_run_aggregates_all_usage_incl_planner_critic():
     assert abs((usages[0].cost_usd or 0) - (0.003 + 0.01 * 2 + 0.001 * 2 + 0.002 + 0.005)) < 1e-9
 
 
+async def test_review_emits_verify_progress():
+    """开结果校验：终局 Critic 的把关过程走 scope=verify（校验中…→通过），供前端 VerifyBadge 显示。"""
+    order = []
+    orch = _mk(FakePlanner([_plan(_s("s1"))]),
+               FakeCritic(validate_ok=True, reviews=(True,)), order)
+    events = await _run(orch)
+    verify = [e for e in events if isinstance(e, Progress) and e.scope == "verify"]
+    assert any(e.status == "running" for e in verify), "应先发一条校验中(running)"
+    assert any(e.status == "ok" and "通过" in e.text for e in verify), "通过时应发 ok 终态"
+
+
+async def test_review_fail_emits_verify_error_then_retries():
+    """校验不通过：先发 scope=verify(error) 带缺口说明，再重规划、最终通过再发一条 ok，形成校验历史。"""
+    order = []
+    orch = _mk(FakePlanner([_plan(_s("s1")), _plan(_s("s1"))]),
+               FakeCritic(validate_ok=True, reviews=(False, True)), order)
+    events = await _run(orch)
+    verify = [e for e in events if isinstance(e, Progress) and e.scope == "verify"]
+    assert any(e.status == "error" and "补一下X" in e.text for e in verify), "不通过应发 error + 缺口"
+    assert any(e.status == "ok" for e in verify), "重规划后通过应发 ok"
+
+
+async def test_verify_off_emits_no_verify_progress():
+    """关结果校验：跳过终局 Critic，不应发任何 scope=verify 事件。"""
+    order = []
+    orch = _mk(FakePlanner([_plan(_s("s1"))]),
+               FakeCritic(validate_ok=True, reviews=(True,)), order)
+    events = [ev async for ev in orch.run("做点复杂的事", verify=False)]
+    assert not any(isinstance(e, Progress) and e.scope == "verify" for e in events)
+
+
+async def test_record_usage_emits_live_snapshot_when_emitter_set():
+    """设了进度 emitter（编排器 SSE 路径）时，record_usage 每次累加都发一条累计 ModelUsage 快照，
+    让前端 tokens/￥ 实时增长；未设 emitter（单测/非编排器）时不发，对既有行为透明。"""
+    from harness.events import ModelUsage
+    from harness.usage import Usage
+    from harness.progress import set_emitter, reset_emitter
+    from app.orchestration.usage_ctx import UsageAcc, set_acc, reset_acc, record_usage
+
+    seen: list = []
+    etoken = set_emitter(seen.append)
+    atoken = set_acc(UsageAcc())
+    try:
+        record_usage(Usage(0, 0, 10), 0.01)
+        record_usage(Usage(0, 0, 5), 0.005)
+    finally:
+        reset_acc(atoken)
+        reset_emitter(etoken)
+    snaps = [e for e in seen if isinstance(e, ModelUsage)]
+    assert len(snaps) == 2, "每次 record 发一条快照"
+    assert snaps[-1].usage.total_tokens == 15, "快照是累计值"
+    assert abs((snaps[-1].cost_usd or 0) - 0.015) < 1e-9
+
+
+async def test_record_usage_no_emit_without_emitter():
+    """无 emitter 时 record_usage 不发事件（保持对非编排器路径透明）。"""
+    from harness.usage import Usage
+    from app.orchestration.usage_ctx import UsageAcc, set_acc, reset_acc, record_usage
+    atoken = set_acc(UsageAcc())
+    try:
+        record_usage(Usage(0, 0, 10), 0.01)   # 不应抛错，也无处可发
+    finally:
+        reset_acc(atoken)
+
+
 async def test_synthesize_forwards_reasoning(make_mock):
     """开思考模式时，最终答复(synthesize)的思考过程应转发到前端，而不是被吞掉。"""
     from harness.llm.base import StreamChunk

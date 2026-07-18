@@ -480,7 +480,11 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
             <Paper
               elevation={0}
               sx={{
-                maxWidth: "80%", px: 1.5, py: 1, borderRadius: 2,
+                // 助手气泡固定占满列宽（80%），一有内容就展到最右，不随正文长短忽宽忽窄；
+                // 用户气泡仍按内容自适应（右对齐的短消息更自然）。
+                maxWidth: "80%",
+                ...(m.role === "assistant" && { width: "80%" }),
+                px: 1.5, py: 1, borderRadius: 2,
                 bgcolor: m.role === "user" ? "primary.main" : "action.hover",
                 color: m.role === "user" ? "primary.contrastText" : "text.primary",
               }}

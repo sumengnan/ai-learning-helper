@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import contextvars
 
+from harness.events import ModelUsage
+from harness.progress import emit
 from harness.usage import Usage
 
 
@@ -31,10 +33,15 @@ _acc: contextvars.ContextVar = contextvars.ContextVar("orchestrator_usage_acc", 
 
 
 def record_usage(usage: Usage, cost: float | None) -> None:
-    """把一次模型调用的用量记进当前累加器；无累加器（非编排器路径）时 no-op。"""
+    """把一次模型调用的用量记进当前累加器；无累加器（非编排器路径）时 no-op。
+
+    累加后经 emit() 旁路发一条**累计**用量快照（ModelUsage），让前端底部 tokens/￥ 一边跑
+    一边涨，而不是等整轮结束才蹦出来。emit 未设 emitter（如单测、非编排器路径）时是 no-op，
+    故对既有行为透明；run() 末尾仍会发一条权威的总量，与最后一条快照同值。"""
     acc = _acc.get()
     if acc is not None:
         acc.add(usage, cost)
+        emit(ModelUsage(usage=acc.usage, cost_usd=acc.cost, attempts=1, latency_ms=0.0))
 
 
 def set_acc(acc: UsageAcc):
