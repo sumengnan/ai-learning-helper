@@ -39,6 +39,26 @@ async def test_dispatch_emits_subagent_progress(make_mock, tool_turn, text_turn)
     assert any("任务完成" in t for t in texts)
 
 
+async def test_dispatch_tool_progress_carries_detail(make_mock, tool_turn, text_turn):
+    """dispatch 子代理工具行带 detail：开始行 tool+args，完成行 result+is_error 且保留 args。"""
+    from harness import progress
+    from harness.events import Progress
+    tool = _dispatch(make_mock([tool_turn("calculator", '{"expression":"1+1"}'),
+                                text_turn("子结果")]))
+    got = []
+    token = progress.set_emitter(got.append)
+    try:
+        await tool.run(tool.Params(agent="researcher", task="做点研究"))
+    finally:
+        progress.reset_emitter(token)
+    tool_rows = [e for e in got if isinstance(e, Progress) and e.detail is not None]
+    assert any(r.detail["tool"] == "calculator" and r.detail["args"] == {"expression": "1+1"}
+               for r in tool_rows)
+    finished = [r for r in tool_rows if "result" in r.detail]
+    assert finished and finished[-1].detail["args"] == {"expression": "1+1"}
+    assert "is_error" in finished[-1].detail
+
+
 async def test_unknown_agent_is_error(make_mock, text_turn):
     tool = _dispatch(make_mock([text_turn("x")]))
     reg = ToolRegistry(); reg.register(tool)

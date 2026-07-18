@@ -2,7 +2,7 @@ from harness.persistence.serialize import (
     message_to_dict, message_from_dict, runstate_to_dict, runstate_from_dict, event_to_dict)
 from harness.types import Message, Role, ToolCall, ToolResult
 from harness.state import RunState
-from harness.events import RunFinished, TextDelta, ToolFinished, ModelUsage
+from harness.events import RunFinished, TextDelta, ToolFinished, ModelUsage, Progress
 from harness.usage import Usage
 
 
@@ -56,3 +56,17 @@ def test_event_to_dict_variants():
     assert rf["data"]["message"]["content"] == "done"
     mu = event_to_dict(ModelUsage(usage=Usage(1, 2, 3), cost_usd=0.5, attempts=1, latency_ms=10.0))
     assert mu["data"]["usage"]["total"] == 3 and mu["data"]["cost_usd"] == 0.5
+
+
+def test_progress_detail_serialized():
+    ev = Progress(scope="subagent:executor:s1", text="调用工具 x",
+                  status="ok", key="c1",
+                  detail={"tool": "x", "args": {"q": "a"}, "result": "r", "is_error": False})
+    d = event_to_dict(ev)
+    assert d["type"] == "Progress"
+    assert d["data"]["detail"] == {"tool": "x", "args": {"q": "a"}, "result": "r", "is_error": False}
+
+
+def test_progress_detail_defaults_none():
+    d = event_to_dict(Progress(scope="sandbox", text="启动…"))
+    assert d["data"]["detail"] is None

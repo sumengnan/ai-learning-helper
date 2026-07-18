@@ -19,6 +19,7 @@ import { MessageMeta } from "./MessageMeta";
 import { linkifyCitations, citeId } from "./citations";
 import { EmptyHint } from "./EmptyHint";
 import { ProgressBlock } from "./ProgressBlock";
+import { SubagentProgress } from "./SubagentProgress";
 import { VerifyBadge, isGateOpen } from "./VerifyBadge";
 import { PlanBlock } from "./PlanBlock";
 import { Markdown } from "./Markdown";
@@ -272,7 +273,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
     // 让新版从头打字机输出。只清正文，不动 steps/progress/校验历史（那是过程轨迹，另有 purged
     // 事件处理失效产物）。特判、不入 progress 列。
     else if (e.type === "Progress" && e.data.scope === "reset") upd((a) => { a.content = ""; });
-    else if (e.type === "Progress") upd((a) => { (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text, status: e.data.status, key: e.data.key, agent: e.data.agent }); });
+    else if (e.type === "Progress") upd((a) => { (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text, status: e.data.status, key: e.data.key, agent: e.data.agent, detail: e.data.detail }); });
     else if (e.type === "RunStarted") runIdRef.current = e.data.run_id;
     else if (e.type === "ApprovalRequired") setApproval({ approvalId: e.data.approval_id, command: e.data.command, reason: e.data.reason });
     else if (e.type === "ApprovalResolved") setApproval(null);
@@ -516,7 +517,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                   <>
                     <ProgressBlock title="技能" kind="skill" items={skill} status="ok" />
                     <ProgressBlock title="沙箱执行" kind="sandbox" items={sandbox} status={sbStatus} />
-                    <ProgressBlock title="子代理执行" kind="subagent" items={sub} status={subStatus} />
+                    <SubagentProgress items={sub} live={live} stopped={stopped} status={subStatus} />
                   </>
                 );
               })()}

@@ -64,18 +64,25 @@ class Executor:
         final_text = ""
         error = None
         tool_names: dict[str, str] = {}
+        tool_args: dict[str, object] = {}   # 暂存入参，供完成行带全（前端按 key 合并只留最后一条）
         token = set_current_agent(f"executor:{step.id}")
         try:
+            # 步骤头行：让前端分组标题显示步骤描述而非裸 id（s1）
+            yield Progress(scope, step.description, status="running", key=f"__hdr__:{step.id}")
             async for ev in loop.run(prompt):
                 if isinstance(ev, ToolStarted):
-                    tool_names[ev.tool_call.id] = ev.tool_call.name
-                    yield Progress(scope, f"调用工具 {ev.tool_call.name}",
-                                   status="running", key=ev.tool_call.id)
+                    tc = ev.tool_call
+                    tool_names[tc.id] = tc.name
+                    tool_args[tc.id] = tc.arguments
+                    yield Progress(scope, f"调用工具 {tc.name}", status="running", key=tc.id,
+                                   detail={"tool": tc.name, "args": tc.arguments})
                 elif isinstance(ev, ToolFinished):
                     r = ev.result
                     name = tool_names.get(r.tool_call_id, "工具")
                     yield Progress(scope, f"调用工具 {name}",
-                                   status="error" if r.is_error else "ok", key=r.tool_call_id)
+                                   status="error" if r.is_error else "ok", key=r.tool_call_id,
+                                   detail={"tool": name, "args": tool_args.get(r.tool_call_id),
+                                           "result": r.content, "is_error": r.is_error})
                 elif isinstance(ev, RunFinished):
                     final_text = ev.message.content or ""
                 elif isinstance(ev, RunError):

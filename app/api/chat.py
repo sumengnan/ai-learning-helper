@@ -779,7 +779,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     elif isinstance(ev, Progress):
                         collect["progress"].append({"scope": ev.scope, "text": ev.text,
                                                     "status": ev.status, "key": ev.key,
-                                                    "agent": ev.agent})
+                                                    "agent": ev.agent, "detail": ev.detail})
                     # 交付门下缓冲终态事件（不转发）；直通模式转发全部
                     # 门内也转发 TextDelta（用户先看到打字机正文），只压 RunFinished/RunError
                     if passthrough or not isinstance(ev, (RunFinished, RunError)):

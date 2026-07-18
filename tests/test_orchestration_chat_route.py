@@ -71,6 +71,32 @@ def _last_assistant(store, cid):
     return [m for m in store.ui_messages(cid) if m["role"] == "assistant"][-1]
 
 
+class DetailOrchestrator:
+    """发一条带 detail 的子代理工具进度 + 正常收尾。"""
+    async def run(self, message):
+        from harness.events import RunStarted, Progress, TextDelta, RunFinished
+        from harness.types import Message, Role
+        yield RunStarted(run_id="r1")
+        yield Progress("subagent:executor:s1", "调用工具 calc", status="ok", key="c1",
+                       detail={"tool": "calc", "args": {"x": 1}, "result": "2", "is_error": False})
+        yield TextDelta(text="答复")
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content="答复"))
+
+
+def test_orchestrator_progress_detail_streamed_and_persisted(make_mock, monkeypatch):
+    """子代理工具进度的 detail 既随 SSE 下发，也随 progress 列落库（刷新后仍可展开）。"""
+    c, store = _client(make_mock, monkeypatch,
+                       enable_orchestrator=True, orchestrator=DetailOrchestrator())
+    cid, events = _chat(c, _auth(c))
+    prog = [e for e in events if e["type"] == "Progress"
+            and e["data"].get("scope") == "subagent:executor:s1"]
+    assert prog and prog[-1]["data"]["detail"]["tool"] == "calc", "detail 应随 SSE 下发"
+    rows = [m for m in store.ui_messages(cid) if m["role"] == "assistant"]
+    saved = [p for m in rows for p in (m.get("progress") or [])
+             if p.get("scope") == "subagent:executor:s1"]
+    assert saved and saved[-1]["detail"]["result"] == "2", "detail 应随 progress 列落库"
+
+
 def test_orchestrator_stream_becomes_main_flow(make_mock, monkeypatch):
     """开关开 + orchestrator 存在 → SSE 里流过编排器的 TextDelta，且该轮正常收尾。"""
     c, store = _client(make_mock, monkeypatch,

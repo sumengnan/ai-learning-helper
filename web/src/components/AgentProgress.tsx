@@ -3,7 +3,6 @@ import type { ChatMessage } from "../types";
 import {
   Accordion, AccordionSummary, AccordionDetails, Typography, Box, CircularProgress, Chip,
 } from "@mui/material";
-import { alpha } from "@mui/material/styles";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
@@ -11,10 +10,7 @@ import StopCircleIcon from "@mui/icons-material/StopCircle";
 import BuildIcon from "@mui/icons-material/Build";
 import { CollapsibleBlock } from "./CollapsibleBlock";
 import { EllipsisText } from "./EllipsisText";
-
-// 工具结果里的机读标记（〔下载ID:x〕〔知识ID:x〕〔题目ID:x〕）供后端追踪产物，展示时剥离不露给用户
-const ID_MARKER_RE = /〔(?:下载|知识|题目)ID:[^〕]*〕/g;
-const stripIdMarkers = (t?: string) => (t || "").replace(ID_MARKER_RE, "").trimEnd();
+import { ToolCallDetail } from "./ToolCallDetail";
 
 // MCP 工具名为 mcp__<server>__<tool>；拆出来友好展示为「server · tool」并挂 MCP 标签。
 function mcpParts(name: string): { server: string; tool: string } | null {
@@ -131,44 +127,7 @@ export function AgentProgress({ steps, live = false, stopped = false }: {
               </Typography>
             </AccordionSummary>
             <AccordionDetails sx={{ px: 0, pt: 0 }}>
-              {/* 参数：蓝色左边框；结果：绿成功/红失败——两块明显区分 */}
-              <Box sx={{
-                mb: 0.5, px: 1, py: 0.5, borderRadius: 0.5,
-                borderLeft: 3, borderColor: "info.main",
-                bgcolor: (t) => alpha(t.palette.info.main, 0.08),
-              }}>
-                <Typography variant="caption" sx={{ fontWeight: 700, color: "info.main" }}>
-                  参数
-                </Typography>
-                <Typography
-                  variant="caption" component="pre"
-                  sx={{ m: 0, fontFamily: "monospace", whiteSpace: "pre-wrap", wordBreak: "break-all" }}
-                >
-                  {JSON.stringify(s.args, null, 2)}
-                </Typography>
-              </Box>
-              {s.result !== undefined && (
-                <Box sx={{
-                  px: 1, py: 0.5, borderRadius: 0.5,
-                  borderLeft: 3, borderColor: s.isError ? "error.main" : "success.main",
-                  bgcolor: (t) => alpha(
-                    (s.isError ? t.palette.error : t.palette.success).main, 0.1),
-                }}>
-                  <Typography
-                    variant="caption"
-                    sx={{ fontWeight: 700, color: s.isError ? "error.main" : "success.main" }}
-                  >
-                    {s.isError ? "结果 · 失败" : "结果 · 成功"}
-                  </Typography>
-                  <Typography
-                    variant="caption" component="pre"
-                    sx={{ m: 0, fontFamily: "monospace", whiteSpace: "pre-wrap", wordBreak: "break-all",
-                          color: "text.primary" }}
-                  >
-                    {stripIdMarkers(s.result)}
-                  </Typography>
-                </Box>
-              )}
+              <ToolCallDetail args={s.args} result={s.result} isError={s.isError} />
             </AccordionDetails>
           </Accordion>
         );
