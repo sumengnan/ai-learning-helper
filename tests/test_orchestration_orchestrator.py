@@ -182,6 +182,19 @@ async def test_planner_error_falls_back_to_simple_answer():
     assert order == []   # 从未进入编排/执行
 
 
+async def test_running_step_emits_plan_snapshot():
+    """就绪步一旦开跑就发一次计划快照（含 running），否则顶部任务步骤在执行中不显示进行态、不转圈。"""
+    import json
+    order = []
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2"))]), FakeCritic(reviews=(True,)), order)
+    events = await _run(orch)
+    plan_snaps = [json.loads(e.text) for e in events
+                  if isinstance(e, Progress) and e.scope == "plan"]
+    # 至少有一份快照里存在 status=running 的步
+    assert any(any(st["status"] == "running" for st in snap) for snap in plan_snaps), \
+        "执行中应发出带 running 的计划快照"
+
+
 def test_plan_progress_includes_id_and_depends_on():
     """计划进度带上步骤 id 与 depends_on：前端据此把执行明细挂到对应步、并算并行/依赖关系。"""
     import json
@@ -283,8 +296,11 @@ async def test_early_abort_cancels_pending_workers():
     orch = _mk(FakePlanner([_plan(_s("s_fast"), _s("s_slow"))]), FakeCritic(), [])
     orch._executor = MixedExecutor()
     agen = orch._schedule_rounds(_plan(_s("s_fast"), _s("s_slow")), {})
-    first = await agen.__anext__()          # 拿到 s_fast 的首个 Progress，此时两 worker 都在途
-    assert isinstance(first, Progress)
+    # 先跳过「就绪快照」（scope=plan），拉到首个 worker 事件 —— 此时两 worker 都已在途
+    ev = await agen.__anext__()
+    while isinstance(ev, Progress) and ev.scope == "plan":
+        ev = await agen.__anext__()
+    assert isinstance(ev, Progress)
     await agen.aclose()                      # 模拟提前放弃 → 应取消未完成 worker
     await asyncio.sleep(0)                    # 放行取消回调
     assert "s_slow" in cancelled             # 悬挂 worker 被取消（未取消时此断言失败）

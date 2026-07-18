@@ -197,6 +197,8 @@ class Orchestrator:
                 return
             for s in ready:
                 s.status = "running"
+            # 就绪步开跑即发一次快照：否则顶部任务步骤从 pending 直接跳 done，中途不显示进行态、不转圈
+            yield _plan_progress(plan)
             queue: asyncio.Queue = asyncio.Queue()
 
             async def _worker(step):
