@@ -151,6 +151,25 @@ describe("ChatView", () => {
     expect(screen.queryByText("你你好好")).toBeNull();
   });
 
+  it("AI 回复中封住输入/开关/附件，只留停止按钮", async () => {
+    // streamChat 挂住（回一个 TextDelta 后不结束）→ busy 保持 true
+    vi.mocked(streamChat).mockImplementationOnce(
+      (_c: string, _m: string, onEvent: (e: any) => void) =>
+        new Promise<void>(() => { onEvent({ type: "TextDelta", data: { text: "答" } }); }));
+    render(<ChatView conversationId="c1" initial={[]} />);
+    fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "hi" } });
+    fireEvent.click(screen.getByText("发送"));
+    await waitFor(() => expect(screen.getByText("停止")).toBeTruthy());
+    // 输入框禁用（占位变为提示文案）
+    expect((screen.getByPlaceholderText(/AI 正在回复/) as HTMLTextAreaElement).disabled).toBe(true);
+    // 开关禁用
+    expect((screen.getByLabelText("思考模式") as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByLabelText("结果校验") as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByLabelText("展示工具调用和 Token") as HTMLInputElement).disabled).toBe(true);
+    // 附件按钮禁用
+    expect((screen.getByLabelText("上传文件") as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("开关默认值：展示工具/Token 开", () => {
     render(<ChatView conversationId="c1" initial={[]} />);
     expect((screen.getByLabelText("展示工具调用和 Token") as HTMLInputElement).checked).toBe(true);

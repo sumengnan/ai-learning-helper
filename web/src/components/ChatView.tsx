@@ -129,6 +129,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
       : ps.map((p) => (p.id === tmpId ? { ...p, ...patch } : p)));
 
   async function addFiles(files: FileList | File[]) {
+    if (busyRef.current) { setErr("AI 回复中，暂不能添加附件"); return; }  // 拖拽/粘贴/选择统一挡在这
     const list = Array.from(files);
     if (list.length === 0) return;
     for (const file of list) {
@@ -643,29 +644,30 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
       </Box>
       <Box sx={{ px: 1.5, pt: 1, borderTop: 1, borderColor: "divider",
         display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+        {/* AI 回复中封住所有开关（只留停止按钮可用）——避免中途改设置/干扰本轮 */}
         <FormControlLabel
-          control={<Switch size="small" checked={think}
+          control={<Switch size="small" checked={think} disabled={busy}
             onChange={(e) => toggleThink(e.target.checked)} />}
           label={<Typography variant="caption">思考模式</Typography>}
         />
         <FormControlLabel
-          control={<Switch size="small" checked={verify}
+          control={<Switch size="small" checked={verify} disabled={busy}
             onChange={(e) => toggleVerify(e.target.checked)} />}
           label={<Typography variant="caption">结果校验</Typography>}
         />
         <FormControlLabel
-          control={<Switch size="small" checked={showTools}
+          control={<Switch size="small" checked={showTools} disabled={busy}
             onChange={(e) => toggleShowTools(e.target.checked)} />}
           label={<Typography variant="caption">展示工具调用和 Token</Typography>}
         />
         <FormControlLabel
-          control={<Switch size="small" checked={showSources}
+          control={<Switch size="small" checked={showSources} disabled={busy}
             onChange={(e) => toggleShowSources(e.target.checked)} />}
           label={<Typography variant="caption">展示数据来源和引用</Typography>}
         />
       </Box>
       <Box
-        onDragOver={(e) => { e.preventDefault(); if (!dragOver) setDragOver(true); }}
+        onDragOver={(e) => { e.preventDefault(); if (!busy && !dragOver) setDragOver(true); }}
         onDragLeave={(e) => { e.preventDefault(); setDragOver(false); }}
         onDrop={onDrop}
         sx={{
@@ -685,7 +687,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
           <Tooltip title="上传文件（也可拖拽/粘贴）">
             <span>
               <IconButton aria-label="上传文件" onClick={() => fileRef.current?.click()}
-                disabled={pending.length >= MAX_ATTACHMENTS} sx={{ mb: 0.25 }}>
+                disabled={busy || pending.length >= MAX_ATTACHMENTS} sx={{ mb: 0.25 }}>
                 <AttachFileIcon />
               </IconButton>
             </span>
@@ -693,12 +695,13 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
           <TextField
             fullWidth size="small" value={input}
             multiline minRows={1} maxRows={6}
+            disabled={busy}   // AI 回复中封住输入框
             onChange={(e) => setInput(e.target.value)}
             onPaste={onPaste}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
             }}
-            placeholder="问点什么…"
+            placeholder={busy ? "AI 正在回复…（可点停止）" : "问点什么…"}
           />
           {busy ? (
             <Button variant="outlined" color="error" onClick={stop}
