@@ -162,6 +162,21 @@ async def test_validate_fail_retries_bounded_then_failed():
     assert order.count("s1") == 2                # 初次 + 1 次重试（max_step_retry=2）
 
 
+async def test_synthesize_forwards_reasoning(make_mock):
+    """开思考模式时，最终答复(synthesize)的思考过程应转发到前端，而不是被吞掉。"""
+    from harness.llm.base import StreamChunk
+    from harness.events import ReasoningDelta
+    orch = Orchestrator.__new__(Orchestrator)
+    orch._client = make_mock([[StreamChunk(type="reasoning", text="先想一下"),
+                               StreamChunk(type="text", text="答复"),
+                               StreamChunk(type="done")]])
+    orch._model = "m"
+    from app.orchestration.plan import Artifact
+    evs = [ev async for ev in orch._synthesize("目标", {"s1": Artifact(summary="x")})]
+    assert any(isinstance(e, ReasoningDelta) and "先想一下" in e.text for e in evs)
+    assert any(isinstance(e, TextDelta) and "答复" in e.text for e in evs)
+
+
 async def test_synthesize_falls_back_when_no_stream(make_mock):
     from harness.llm.base import StreamChunk
     orch = Orchestrator.__new__(Orchestrator)
@@ -193,6 +208,21 @@ async def test_running_step_emits_plan_snapshot():
     # 至少有一份快照里存在 status=running 的步
     assert any(any(st["status"] == "running" for st in snap) for snap in plan_snaps), \
         "执行中应发出带 running 的计划快照"
+
+
+async def test_plan_snapshots_carry_timing():
+    """编排器给计划步计时：running 快照带 started_at_ms，done 步带 elapsed_ms（前端显示耗时）。"""
+    import json
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2"))]), FakeCritic(reviews=(True,)), [])
+    events = await _run(orch)
+    snaps = [json.loads(e.text) for e in events
+             if isinstance(e, Progress) and e.scope == "plan"]
+    # 某快照里有 running 步带 started_at_ms
+    assert any(any(st["status"] == "running" and st.get("started_at_ms") for st in snap)
+               for snap in snaps), "running 步应带 started_at_ms"
+    # 某快照里有 done 步带 elapsed_ms（非 None）
+    assert any(any(st["status"] == "done" and st.get("elapsed_ms") is not None for st in snap)
+               for snap in snaps), "done 步应带 elapsed_ms"
 
 
 def test_plan_progress_includes_id_and_depends_on():

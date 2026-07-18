@@ -8,11 +8,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _elapsed(step) -> int:
+    """本步耗时（毫秒）；无起点则算 0。"""
+    return _now_ms() - step.started_at_ms if step.started_at_ms else 0
 
 from harness.context.manager import ContextManager
 from harness.events import (
-    Progress, RunFinished, RunStarted, TextDelta,
+    Progress, ReasoningDelta, RunFinished, RunStarted, TextDelta,
 )
 from harness.loop.agent_loop import AgentLoop
 from harness.reliability.budget import BudgetExceeded
@@ -50,7 +60,9 @@ def _plan_progress(plan: Plan) -> Progress:
     带上 id：前端据此把 executor:<id> 的执行明细（工具调用）挂到对应计划步下，合并成一棵树。
     """
     steps = [{"id": s.id, "title": s.description, "status": s.status,
-              "depends_on": list(s.depends_on)} for s in plan.steps]
+              "depends_on": list(s.depends_on),
+              "started_at_ms": s.started_at_ms, "elapsed_ms": s.elapsed_ms}
+             for s in plan.steps]
     return Progress(scope="plan", text=json.dumps(steps, ensure_ascii=False), key="plan")
 
 
@@ -93,7 +105,8 @@ class Orchestrator:
 
     # ---- synthesize ----
     async def _synthesize(self, goal: str, artifacts: dict[str, Artifact]):
-        """流式汇总最终答复。只 yield TextDelta；run() 累加这些 delta 得最终文本。"""
+        """流式汇总最终答复。yield TextDelta（run() 累加得最终文本）+ ReasoningDelta（开思考模式时
+        把最终答复的思考过程透传给前端——编排器路径唯一该展示思考的地方）。"""
         loop = AgentLoop(
             client=self._client, registry=ToolRegistry(),
             context=ContextManager(SYNTH_SYSTEM), max_steps=1, model_name=self._model)
@@ -102,6 +115,8 @@ class Orchestrator:
         async for ev in loop.run(_synth_user(goal, artifacts)):
             if isinstance(ev, TextDelta):
                 streamed = True
+                yield ev
+            elif isinstance(ev, ReasoningDelta):   # 思考过程透传（前端 ThinkingBlock 展示）
                 yield ev
             elif isinstance(ev, RunFinished):
                 final = ev.message.content or ""
@@ -197,6 +212,7 @@ class Orchestrator:
                 return
             for s in ready:
                 s.status = "running"
+                s.started_at_ms = _now_ms()   # 计时起点：供前端进行中读秒、结束后算耗时
             # 就绪步开跑即发一次快照：否则顶部任务步骤从 pending 直接跳 done，中途不显示进行态、不转圈
             yield _plan_progress(plan)
             queue: asyncio.Queue = asyncio.Queue()
@@ -234,6 +250,7 @@ class Orchestrator:
                     if verdict.ok:
                         step.status = "done"
                         step.result = art
+                        step.elapsed_ms = _elapsed(step)   # 定格耗时
                         retry_hints.pop(step.id, None)
                     else:
                         self._on_step_fail(step, retry_hints, verdict.reason)
@@ -257,7 +274,9 @@ class Orchestrator:
         step.attempts += 1
         if step.attempts < self._max_step_retry:
             step.status = "pending"        # 重试：回到就绪集
+            step.started_at_ms = None      # 清计时，重跑时重新起点
             retry_hints[step.id] = reason
         else:
             step.status = "failed"         # 放弃：依赖链自然断掉，交终局 Critic 判
+            step.elapsed_ms = _elapsed(step)   # 定格耗时
             retry_hints.pop(step.id, None)
