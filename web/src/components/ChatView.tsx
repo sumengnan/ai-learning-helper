@@ -234,6 +234,10 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
       if (s) { s.result = e.data.result.content; s.isError = e.data.result.is_error; }
     });
     else if (e.type === "ModelUsage") upd((a) => { a.usage = { tokens: e.data.usage.total, cost: e.data.cost_usd }; });
+    // 任务计划思考（scope=plan_reasoning）：累积成单独的"任务计划思考"块，不入 progress 列
+    else if (e.type === "Progress" && e.data.scope === "plan_reasoning") upd((a) => {
+      a.planReasoning = (a.planReasoning || "") + e.data.text;
+    });
     // 来源借 Progress 通道传（scope=sources，text 为 JSON）：特判解析成 sources，不入 progress 列
     else if (e.type === "Progress" && e.data.scope === "sources") upd((a) => {
       try { a.sources = JSON.parse(e.data.text); } catch { /* 忽略坏 JSON */ }
@@ -476,14 +480,24 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                   <AttachmentChips items={m.attachments} />
                 </Box>
               )}
-              {/* 思考过程：置于最顶（工具调用等过程块之上），先于正文展示推理内容 */}
-              {m.role === "assistant" && m.reasoning && (() => {
+              {(() => {
+                const hasPlan = m.role === "assistant"
+                  && !!m.progress?.some((p) => p.scope === "plan");
                 const streamingLast = busy && i === messages.length - 1 && m.status === "streaming";
-                // 思考进行中 = 本轮仍在流式 且 正文尚未开始（首字一到即视为思考结束）
                 const thinking = streamingLast && !m.content;
                 return (
-                  <ThinkingBlock reasoning={m.reasoning} thinking={thinking}
-                    startedAt={m.reasoningStartedAt ?? m.startedAt} elapsedMs={m.reasoningMs} />
+                  <>
+                    {/* 顶部：编排器"任务计划思考"（规划前思考） */}
+                    {m.role === "assistant" && m.planReasoning && (
+                      <ThinkingBlock reasoning={m.planReasoning} thinking={false}
+                        title="任务计划思考" />
+                    )}
+                    {/* 顶部：非编排器（ReAct/简单问答，无计划）的思考——保持原样 */}
+                    {m.role === "assistant" && m.reasoning && !hasPlan && (
+                      <ThinkingBlock reasoning={m.reasoning} thinking={thinking}
+                        startedAt={m.reasoningStartedAt ?? m.startedAt} elapsedMs={m.reasoningMs} />
+                    )}
+                  </>
                 );
               })()}
               {m.role === "assistant" && m.progress && (() => {
@@ -492,9 +506,20 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                 const live = busy && i === messages.length - 1 && m.status === "streaming";
                 // 编排器 executor 的执行明细挂到对应计划步下（计划步 → agent+工具 → 入参/返回）
                 const execSubs = m.progress.filter((p) => p.scope.startsWith("subagent:executor:"));
-                return plan ? (
-                  <PlanBlock text={plan.text} live={live} status={m.status} subItems={execSubs} />
-                ) : null;
+                if (!plan) return null;
+                const streamingLast = busy && i === messages.length - 1 && m.status === "streaming";
+                const thinking = streamingLast && !m.content;
+                return (
+                  <>
+                    <PlanBlock text={plan.text} live={live} status={m.status} subItems={execSubs} />
+                    {/* 任务步骤块下面：编排器"结果思考"（最终答复的思考） */}
+                    {m.reasoning && (
+                      <ThinkingBlock reasoning={m.reasoning} thinking={thinking}
+                        title="结果思考"
+                        startedAt={m.reasoningStartedAt ?? m.startedAt} elapsedMs={m.reasoningMs} />
+                    )}
+                  </>
+                );
               })()}
               {showTools && m.role === "assistant" && m.progress && m.progress.length > 0 && (() => {
                 const sandbox = m.progress.filter((p) => p.scope === "sandbox");

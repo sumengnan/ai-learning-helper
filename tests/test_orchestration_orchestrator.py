@@ -203,8 +203,9 @@ async def test_planner_reasoning_emitted_before_plan():
 
     orch = _mk(RPlanner(), FakeCritic(reviews=(True,)), [])
     events = [ev async for ev in orch.run("复杂")]
+    # 规划思考走 Progress(scope=plan_reasoning) 独立通道，出现在第一个计划快照之前
     ri = next((i for i, e in enumerate(events)
-               if isinstance(e, ReasoningDelta) and "先分析" in e.text), None)
+               if isinstance(e, Progress) and e.scope == "plan_reasoning" and "先分析" in e.text), None)
     pi = next((i for i, e in enumerate(events)
                if isinstance(e, Progress) and e.scope == "plan"), None)
     assert ri is not None and pi is not None

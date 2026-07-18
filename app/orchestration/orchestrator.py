@@ -169,8 +169,8 @@ class Orchestrator:
                 async for ev in self._simple_answer(user_message, budget):   # 降级
                     yield ev
                 return
-            for _t in reason:   # 先把规划思考发出去，再出计划
-                yield ReasoningDelta(text=_t)
+            for _t in reason:   # 规划思考走独立通道（前端顶部"任务计划思考"块），先于计划展示
+                yield Progress(scope="plan_reasoning", text=_t)
             yield _plan_progress(plan)
 
             replan_count = 0
@@ -209,8 +209,8 @@ class Orchestrator:
                 except PlannerError:
                     break
                 retry_hints = {}
-                for _t in reason:   # 重规划的思考也在新计划之前发
-                    yield ReasoningDelta(text=_t)
+                for _t in reason:   # 重规划的思考也走 plan_reasoning 通道，在新计划之前发
+                    yield Progress(scope="plan_reasoning", text=_t)
                 yield _plan_progress(plan)
 
             # 无论产物多寡都尽力 synthesize：spec §5「其余一律尽量给用户一个（可能残缺但有说明的）
