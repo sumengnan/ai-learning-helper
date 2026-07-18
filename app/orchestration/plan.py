@@ -26,6 +26,8 @@ class PlanStep:
     status: StepStatus = "pending"
     result: Artifact | None = None
     attempts: int = 0
+    started_at_ms: int | None = None   # 本步开跑时刻（epoch 毫秒），供前端进行中读秒
+    elapsed_ms: int | None = None       # 本步耗时（毫秒，定格值），供前端已结束步显示
 
 
 @dataclass

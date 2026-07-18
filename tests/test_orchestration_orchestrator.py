@@ -210,6 +210,21 @@ async def test_running_step_emits_plan_snapshot():
         "执行中应发出带 running 的计划快照"
 
 
+async def test_plan_snapshots_carry_timing():
+    """编排器给计划步计时：running 快照带 started_at_ms，done 步带 elapsed_ms（前端显示耗时）。"""
+    import json
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2"))]), FakeCritic(reviews=(True,)), [])
+    events = await _run(orch)
+    snaps = [json.loads(e.text) for e in events
+             if isinstance(e, Progress) and e.scope == "plan"]
+    # 某快照里有 running 步带 started_at_ms
+    assert any(any(st["status"] == "running" and st.get("started_at_ms") for st in snap)
+               for snap in snaps), "running 步应带 started_at_ms"
+    # 某快照里有 done 步带 elapsed_ms（非 None）
+    assert any(any(st["status"] == "done" and st.get("elapsed_ms") is not None for st in snap)
+               for snap in snaps), "done 步应带 elapsed_ms"
+
+
 def test_plan_progress_includes_id_and_depends_on():
     """计划进度带上步骤 id 与 depends_on：前端据此把执行明细挂到对应步、并算并行/依赖关系。"""
     import json
