@@ -58,3 +58,25 @@ async def test_review_fail_open_on_error():
     plan = Plan(goal="g", steps=[_step()])
     r = await critic.review("g", plan, {"s1": Artifact(summary="ok")})
     assert r.accept is True and "放行" in r.feedback
+
+
+async def test_validate_coerces_string_false():
+    # 模型把 ok 输出成字符串 "false" → 必须判不通过（不被 bool("false")==True 骗过）
+    critic = Critic(_complete_json({"ok": "false", "reason": "不达标"}))
+    v = await critic.validate(_step(), Artifact(summary="x"))
+    assert v.ok is False
+
+
+async def test_validate_missing_ok_field_fail_open():
+    # 缺 ok 字段视作异常 → fail-open 放行
+    critic = Critic(_complete_json({"reason": "无 ok 字段"}))
+    v = await critic.validate(_step(), Artifact(summary="x"))
+    assert v.ok is True
+
+
+async def test_review_with_unfinished_step():
+    # plan 里有步骤但 artifacts 缺其产出 → _review_user 走"未完成"分支，仍正常返回
+    critic = Critic(_complete_json({"accept": False, "feedback": "s2 没做"}))
+    plan = Plan(goal="g", steps=[_step(), PlanStep(id="s2", description="第二步", expected="产出2", status="failed")])
+    r = await critic.review("g", plan, {"s1": Artifact(summary="ok")})  # 故意缺 s2
+    assert r.accept is False
