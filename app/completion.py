@@ -59,6 +59,23 @@ def _build_alt_completer(client, config, model: str, base_url: str, api_key: str
     return build_completer(alt, model)
 
 
+def build_fast_client(client, config):
+    """返回 (client, model_name)：配了 fast_model 就起指向快速模型的独立 client，否则回退主 client/主模型。
+
+    供需要「带工具的快速档 AgentLoop」的场景用（如编排器执行步）——那里要的是完整工具循环，
+    不是 build_fast_completer 的单轮无工具 completer，故单独提供 client 版。
+    """
+    cfg = _alt_config(config, config.fast_model, config.fast_base_url, config.fast_api_key)
+    if cfg is None:
+        return client, config.model
+    from harness.llm.openai_compat import OpenAICompatibleClient
+    from harness.reliability.retry import RetryingModelClient
+    alt = RetryingModelClient(
+        OpenAICompatibleClient(cfg),
+        max_retries=config.max_retries, base_delay=config.retry_base_delay)
+    return alt, config.fast_model
+
+
 def _with_thinking(base, enabled: bool):
     """包一层：本次调用显式指定思考意图 enable_thinking，叠加在当前 extra_body 覆盖之上、
     调用后还原。enable_thinking 是厂商中立意图，发送前由 openai_compat._adapt_thinking 按端点

@@ -247,21 +247,26 @@ def build_harness(config) -> Harness:
     # 编排器（Plan-Execute-Reflect，按开关组装；默认关闭 → 零行为变更，走原 ReAct AgentLoop）
     orchestrator = None
     if config.enable_orchestrator:
-        from app.completion import build_completer, build_fast_completer
+        from app.completion import build_completer, build_fast_completer, build_fast_client
         from app.orchestration.orchestrator import Orchestrator
         from app.orchestration.planner import Planner
         from app.orchestration.critic import Critic
         from app.orchestration.executor import Executor
-        _plan_complete = build_completer(client, config.model)     # 规划/裁判用主模型
-        _fast_complete = build_fast_completer(client, config)      # triage 用快速档
+        from harness.reliability.budget import BudgetTracker
+        _plan_complete = build_completer(client, config.model)     # 规划 + 终局 review 用主模型（判断质量要求高）
+        _fast_complete = build_fast_completer(client, config)      # triage + 单步 validate 用快速档（频繁，提速）
+        _exec_client, _exec_model = build_fast_client(client, config)   # 执行子步走快速档模型（占大头往返，提速）
         orchestrator = Orchestrator(
             client=client, registry=reg, model=config.model,
             planner=Planner(_plan_complete, max_retries=config.orchestrator_planner_max_retries),
-            critic=Critic(_plan_complete),
-            executor=Executor(client, reg, config.app_system_prompt, config.model,
+            critic=Critic(_plan_complete, validate_complete=_fast_complete),
+            executor=Executor(_exec_client, reg, config.app_system_prompt, _exec_model,
                               max_steps=config.orchestrator_step_max_steps,
-                              loop_detect_window=config.loop_detect_window),
+                              loop_detect_window=config.loop_detect_window,
+                              disable_thinking=config.orchestrator_step_disable_thinking),
             fast_complete=_fast_complete,
+            # 每次 run 新建独立预算封顶时长/token（超限带现有成果收尾）；单例并发安全
+            budget_factory=lambda: BudgetTracker(config.max_tokens_budget, config.max_wall_seconds),
             max_step_retry=config.orchestrator_max_step_retry,
             max_replan=config.orchestrator_max_replan)
 
