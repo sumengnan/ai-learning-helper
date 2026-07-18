@@ -11,7 +11,7 @@ describe("MessageMeta", () => {
     expect(screen.getByText("已完成")).toBeTruthy();
     expect(screen.getByText("1 分 5 秒")).toBeTruthy();   // 耗时时长
     expect(screen.getByText("tokens")).toBeTruthy();
-    expect(screen.getByText(/\$0\.0200/)).toBeTruthy();    // 成本
+    expect(screen.getByText(/¥0\.0200/)).toBeTruthy();    // 成本（人民币）
   });
 
   it("生成中：显示「生成中」状态药丸", () => {
