@@ -200,33 +200,30 @@ export function PlanBlock({ text, live = false, stopped = false, status, subItem
             >
               {s.title}{SUFFIX[fates[i]] ?? ""}
             </Typography>
-            {/* 并行徽章：该步与同层其它步同时进行，完成顺序不代表先后 */}
-            {s.id != null && (levelCount.get(levelOf.get(s.id) ?? 0) ?? 0) >= 2 && (
-              <Chip label="并行" size="small" color="info" variant="outlined"
-                sx={{ height: 16, flexShrink: 0, "& .MuiChip-label": { px: 0.5, fontSize: 10, fontWeight: 700 } }} />
-            )}
-            {/* 依赖标注：等这些序号的步完成后才开跑 */}
-            {(() => {
-              const nums = (s.depends_on || []).map((d) => idToNum.get(d)).filter((n): n is number => n != null);
-              return nums.length > 0 ? (
-                <Typography variant="caption" color="text.disabled" sx={{ flexShrink: 0 }}>
-                  依赖 {nums.join("·")}
-                </Typography>
-              ) : null;
-            })()}
-            {/* 进行中且确实还在跑 → 读秒；已结束 → 定格耗时。
-                读秒严格以 fate==="live" 为闸：已停止/已中断/已结束的 run 其快照里仍留着
-                running 步骤，照读会一直涨下去（此时该步已按 已取消/状态未知 呈现，
-                再给个跳动的秒数只会误导）。
-                没有 elapsed_ms 的步骤不显示时间：模型跳过 running 直接置 done 时后端拿不到
-                起点，宁可留空也不编（见 plan_tool._apply_timing）。 */}
-            {fates[i] === "live" && s.status === "running" && s.started_at_ms != null ? (
-              <StepDuration>
-                <LiveDuration startedAt={s.started_at_ms} format={fmtStep} />
-              </StepDuration>
-            ) : s.elapsed_ms != null ? (
-              <StepDuration>{fmtStep(s.elapsed_ms)}</StepDuration>
-            ) : null}
+            {/* 右侧簇：并行徽章 / 依赖标注 / 耗时，整体右对齐到本行最右侧。
+                读秒严格以 fate==="live" 为闸：已停止/已中断/已结束的 run 快照里仍留着 running 步，
+                照读会一直涨（此时该步已按 已取消/状态未知 呈现）；无 elapsed_ms 的不显示时间。 */}
+            <Box sx={{ ml: "auto", display: "flex", alignItems: "center", gap: 0.75, flexShrink: 0, pl: 1 }}>
+              {s.id != null && (levelCount.get(levelOf.get(s.id) ?? 0) ?? 0) >= 2 && (
+                <Chip label="并行" size="small" color="info" variant="outlined"
+                  sx={{ height: 16, "& .MuiChip-label": { px: 0.5, fontSize: 10, fontWeight: 700 } }} />
+              )}
+              {(() => {
+                const nums = (s.depends_on || []).map((d) => idToNum.get(d)).filter((n): n is number => n != null);
+                return nums.length > 0 ? (
+                  <Typography variant="caption" color="text.disabled" sx={{ whiteSpace: "nowrap" }}>
+                    依赖 {nums.join("·")}
+                  </Typography>
+                ) : null;
+              })()}
+              {fates[i] === "live" && s.status === "running" && s.started_at_ms != null ? (
+                <StepDuration>
+                  <LiveDuration startedAt={s.started_at_ms} format={fmtStep} />
+                </StepDuration>
+              ) : s.elapsed_ms != null ? (
+                <StepDuration>{fmtStep(s.elapsed_ms)}</StepDuration>
+              ) : null}
+            </Box>
           </>
         );
         // 该步对应的 executor 执行明细（工具调用）；无 id 或无匹配（如 ReAct 清单）→ 纯行

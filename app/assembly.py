@@ -15,6 +15,33 @@ from .tools.plan_tool import UpdatePlanTool, PLAN_SYSTEM_GUIDANCE
 from .tools.validating import ValidatingTool, relevance_check
 
 
+class _HidingRegistry(ToolRegistry):
+    """对底层 registry 的**活视图**，隐藏若干工具名。底层后续新增的工具（如 startup 时才
+    注册进 reg 的 MCP 远程工具）自动可见——故执行子步既拿得到 MCP 搜索工具、又看不到被隐藏的
+    update_plan（子步调它会发 scope=plan 覆盖编排器总计划）。不能用静态拷贝：那会错过 startup
+    才注册的工具。"""
+
+    def __init__(self, base: ToolRegistry, hidden: set[str]) -> None:
+        super().__init__()
+        self._base = base
+        self._hidden = set(hidden)
+
+    def get(self, name: str):
+        return None if name in self._hidden else self._base.get(name)
+
+    def tools(self) -> list:
+        return [t for t in self._base.tools() if t.name not in self._hidden]
+
+    def schemas(self) -> list[dict]:
+        return [t.schema() for t in self.tools()]
+
+    def register(self, tool) -> None:
+        self._base.register(tool)
+
+    def unregister(self, name: str) -> None:
+        self._base.unregister(name)
+
+
 @dataclass
 class Harness:
     client: object
@@ -256,12 +283,10 @@ def build_harness(config) -> Harness:
         _plan_complete = build_completer(client, config.model)     # 规划 + 终局 review 用主模型（判断质量要求高）
         _fast_complete = build_fast_completer(client, config)      # triage + 单步 validate 用快速档（频繁，提速）
         _exec_client, _exec_model = build_fast_client(client, config)   # 执行子步走快速档模型（占大头往返，提速）
-        # 执行子步的工具表剔除 update_plan：编排器自管总计划，子步若调 update_plan 会发 scope=plan
-        # 覆盖掉顶部总计划（表现为"总步骤变成最后一步的明细"）。主 reg 保留它，simple 直答仍可用。
-        _exec_reg = ToolRegistry()
-        for _t in reg.tools():
-            if _t.name != "update_plan":
-                _exec_reg.register(_t)
+        # 执行子步的工具表：对 reg 的活视图，只隐藏 update_plan（子步调它会发 scope=plan 覆盖顶部
+        # 总计划）。必须是活视图而非静态拷贝——MCP 工具是 startup 才注册进 reg 的，拷贝会漏掉它们，
+        # 导致子步"用不了联网搜索"。主 reg 保留 update_plan，simple 直答走 ReAct 仍可用。
+        _exec_reg = _HidingRegistry(reg, {"update_plan"})
         orchestrator = Orchestrator(
             client=client, registry=reg, model=config.model,
             planner=Planner(_plan_complete, max_retries=config.orchestrator_planner_max_retries),
