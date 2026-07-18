@@ -63,6 +63,12 @@ class AppConfig(HarnessConfig):
     enable_url_blocklist: bool = True
     enable_sandbox: bool = False
     enable_dispatch: bool = False
+    # === Plan-Execute-Reflect 编排器 ===
+    enable_orchestrator: bool = False          # 开则主流程走编排器，否则维持 ReAct AgentLoop
+    orchestrator_max_step_retry: int = 2       # 单步反复失败上限（含首次）
+    orchestrator_max_replan: int = 2           # 终局重规划轮数上限
+    orchestrator_planner_max_retries: int = 2  # Planner 出无效 DAG 的重试上限
+    orchestrator_step_max_steps: int = 10      # 每个 Executor 步内部 AgentLoop 的步数上限
     enable_skills: bool = False
     enable_mcp: bool = False          # MCP 客户端总开关；开则按 mcp_config_path 连接 server
     cors_origins: list = ["http://localhost:5173"]
