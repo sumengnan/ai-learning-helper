@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from harness.context.manager import ContextManager
-from harness.events import RunError, RunFinished
+from harness.events import ModelUsage, RunError, RunFinished
 from harness.loop.agent_loop import AgentLoop
 from harness.tools.base import ToolRegistry
+
+from .orchestration.usage_ctx import record_usage
 
 
 def build_completer(client, model_name: str):
@@ -20,6 +22,8 @@ def build_completer(client, model_name: str):
         async for ev in loop.run(user_prompt):
             if isinstance(ev, RunFinished):
                 final = ev.message.content or ""
+            elif isinstance(ev, ModelUsage):   # 记进编排器用量累加器（非编排器路径 no-op）
+                record_usage(ev.usage, ev.cost_usd)
             elif isinstance(ev, RunError):
                 raise RuntimeError(ev.error)
         return final
