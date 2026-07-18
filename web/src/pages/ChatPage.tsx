@@ -48,8 +48,12 @@ export function ChatPage() {
       // 刷新后仍还原用量与耗时
       usage: m.tokens != null ? { tokens: m.tokens, cost: m.cost ?? null } : undefined,
       elapsedMs: m.elapsed_ms ?? undefined,
-      reasoning: m.reasoning ?? undefined,   // 刷新后还原思考过程
+      reasoning: m.reasoning ?? undefined,   // 刷新后还原思考过程（含编排器"结果思考"）
       reasoningMs: m.reasoning_ms ?? undefined,   // 刷新后还原思考耗时
+      // 刷新后还原"任务计划思考"：从落库的 plan_reasoning 进度行拼回
+      planReasoning: (m.progress || [])
+        .filter((p) => p.scope === "plan_reasoning")
+        .map((p) => p.text).join("") || undefined,
     })));
     setActiveId(id);
   }

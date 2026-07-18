@@ -33,7 +33,9 @@ from .critic import Critic
 from .executor import Executor, StepArtifact
 from .planner import Planner, PlannerError
 from .plan import Artifact, Plan, has_pending, ready_steps
-from .usage_ctx import UsageAcc, record_usage, reset_acc, set_acc
+from .usage_ctx import (
+    UsageAcc, record_usage, reset_acc, reset_reason_sink, set_acc, set_reason_sink,
+)
 
 TRIAGE_SYSTEM = (
     "判断用户消息是否为简单问答（打招呼、寒暄、单句事实、闲聊）。"
@@ -85,6 +87,18 @@ class Orchestrator:
         self._budget_factory = budget_factory
         self._max_step_retry = max_step_retry
         self._max_replan = max_replan
+
+    @staticmethod
+    async def _plan_capturing_reasoning(coro):
+        """跑一次 planner 调用，期间捕获其思考（ReasoningDelta），返回 (plan, 思考片段列表)。
+        让"先思考再出严格 JSON"里的思考能在计划之前发给前端。"""
+        parts: list[str] = []
+        token = set_reason_sink(parts.append)
+        try:
+            plan = await coro
+        finally:
+            reset_reason_sink(token)
+        return plan, parts
 
     # ---- triage ----
     async def _is_simple(self, message: str) -> bool:
@@ -149,11 +163,14 @@ class Orchestrator:
                 return
 
             try:
-                plan = await self._planner.plan(user_message)
+                plan, reason = await self._plan_capturing_reasoning(
+                    self._planner.plan(user_message))
             except PlannerError:
                 async for ev in self._simple_answer(user_message, budget):   # 降级
                     yield ev
                 return
+            for _t in reason:   # 规划思考走独立通道（前端顶部"任务计划思考"块），先于计划展示
+                yield Progress(scope="plan_reasoning", text=_t)
             yield _plan_progress(plan)
 
             replan_count = 0
@@ -187,10 +204,13 @@ class Orchestrator:
                     if s.status in ("pending", "running"):
                         s.status = "skipped"
                 try:
-                    plan = await self._planner.replan(user_message, plan, review.feedback)
+                    plan, reason = await self._plan_capturing_reasoning(
+                        self._planner.replan(user_message, plan, review.feedback))
                 except PlannerError:
                     break
                 retry_hints = {}
+                for _t in reason:   # 重规划的思考也走 plan_reasoning 通道，在新计划之前发
+                    yield Progress(scope="plan_reasoning", text=_t)
                 yield _plan_progress(plan)
 
             # 无论产物多寡都尽力 synthesize：spec §5「其余一律尽量给用户一个（可能残缺但有说明的）

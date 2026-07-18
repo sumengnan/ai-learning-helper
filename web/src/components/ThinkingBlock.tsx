@@ -12,11 +12,16 @@ const fmtThink = (ms: number) => (ms < 1000 ? "<1 秒" : fmtDuration(ms));
 // - thinking（仍在思考、正文未开始）+ startedAt → 实时读秒「思考中 · N秒」
 // - 思考已结束 + elapsedMs → 定格「思考 N秒」（刷新后由后端 reasoning_ms 还原）
 // 读秒严格以 thinking 为闸：正文一开始就停，不会在回答阶段还涨着一个误导的秒数。
-export function ThinkingBlock({ reasoning, thinking, startedAt, elapsedMs }: {
+export function ThinkingBlock({ reasoning, thinking, startedAt, elapsedMs, title }: {
   reasoning: string; thinking: boolean;
   startedAt?: number; elapsedMs?: number;
+  title?: string;   // 自定义标题（如"任务计划思考"/"结果思考"）；不给则用默认"思考过程"
 }) {
   const [open, setOpen] = useState(false);   // 默认折叠，点击展开
+  // 有 title（编排器的计划/结果思考）用它；无 title 保持原 ReAct 文案不变
+  const label = title
+    ? (thinking ? `🧠 ${title}…` : `🧠 ${title}`)
+    : (thinking ? "🧠 思考中…（已开启思考模式，回复较慢）" : "🧠 思考过程");
 
   // 「· 」并进同一文本节点（不拆成兄弟节点），便于整体读取与测试精确匹配
   const durSx = { ml: 0.75, flexShrink: 0, color: "text.secondary", opacity: 0.8,
@@ -37,7 +42,7 @@ export function ThinkingBlock({ reasoning, thinking, startedAt, elapsedMs }: {
       <Box sx={{ display: "flex", alignItems: "center", cursor: "pointer" }}
         onClick={() => setOpen((o) => !o)}>
         <Typography variant="caption" sx={{ fontWeight: 600, color: "text.secondary", flexShrink: 0 }}>
-          {thinking ? "🧠 思考中…（已开启思考模式，回复较慢）" : "🧠 思考过程"}
+          {label}
         </Typography>
         {duration}
         <Box sx={{ flex: 1 }} />

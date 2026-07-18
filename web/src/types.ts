@@ -19,6 +19,7 @@ export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   reasoning?: string;   // 思考模式的推理内容（reasoning_content）；先于正文流式到达
+  planReasoning?: string;  // 编排器"任务计划思考"（规划前的思考），走 Progress(scope=plan_reasoning)
   reasoningMs?: number; // 思考耗时（毫秒）：首个 reasoning token→首个正文 token，完成时冻结；刷新后由后端还原
   reasoningStartedAt?: number;  // 客户端首次收到 reasoning 的时间戳，用于实时读秒（不落库）
   steps?: { tool: string; args: any; result?: string; isError?: boolean }[];
