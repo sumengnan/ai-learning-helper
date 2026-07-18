@@ -248,9 +248,10 @@ export function PlanBlock({ text, live = false, stopped = false, status, subItem
             </AccordionSummary>
             <AccordionDetails sx={{ px: 0, pt: 0, pl: 2 }}>
               <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 0.25 }}>
-                <Chip label={`executor:${s.id}`} size="small" color="secondary" variant="outlined"
+                <Typography variant="caption" color="text.disabled">执行智能体</Typography>
+                <Chip label="executor" size="small" color="secondary" variant="outlined"
                   sx={{ height: 16, "& .MuiChip-label": { px: 0.5, fontSize: 10, fontWeight: 700 } }} />
-                <Typography variant="caption" color="text.disabled">执行明细</Typography>
+                <Typography variant="caption" sx={{ fontWeight: 600 }}>{s.id}</Typography>
               </Box>
               <ToolCallRows rows={toolRows} live={live} />
             </AccordionDetails>

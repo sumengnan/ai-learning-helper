@@ -235,8 +235,9 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
       if (s) { s.result = e.data.result.content; s.isError = e.data.result.is_error; }
     });
     else if (e.type === "ModelUsage") upd((a) => { a.usage = { tokens: e.data.usage.total, cost: e.data.cost_usd }; });
-    // 任务计划思考（scope=plan_reasoning）：累积成单独的"任务计划思考"块，不入 progress 列
+    // 任务计划思考（scope=plan_reasoning）：流式累积成单独的"任务计划思考"块，不入 progress 列
     else if (e.type === "Progress" && e.data.scope === "plan_reasoning") upd((a) => {
+      if (a.planReasoningStartedAt == null) a.planReasoningStartedAt = Date.now();
       a.planReasoning = (a.planReasoning || "") + e.data.text;
     });
     // 来源借 Progress 通道传（scope=sources，text 为 JSON）：特判解析成 sources，不入 progress 列
@@ -278,7 +279,13 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
     // 让新版从头打字机输出。只清正文，不动 steps/progress/校验历史（那是过程轨迹，另有 purged
     // 事件处理失效产物）。特判、不入 progress 列。
     else if (e.type === "Progress" && e.data.scope === "reset") upd((a) => { a.content = ""; });
-    else if (e.type === "Progress") upd((a) => { (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text, status: e.data.status, key: e.data.key, agent: e.data.agent, detail: e.data.detail }); });
+    else if (e.type === "Progress") upd((a) => {
+      // 计划快照出现 = 规划思考结束，冻结"任务计划思考"耗时
+      if (e.data.scope === "plan" && a.planReasoningStartedAt != null && a.planReasoningMs == null) {
+        a.planReasoningMs = Date.now() - a.planReasoningStartedAt;
+      }
+      (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text, status: e.data.status, key: e.data.key, agent: e.data.agent, detail: e.data.detail });
+    });
     else if (e.type === "RunStarted") runIdRef.current = e.data.run_id;
     else if (e.type === "ApprovalRequired") setApproval({ approvalId: e.data.approval_id, command: e.data.command, reason: e.data.reason });
     else if (e.type === "ApprovalResolved") setApproval(null);
@@ -488,10 +495,11 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                 const thinking = streamingLast && !m.content;
                 return (
                   <>
-                    {/* 顶部：编排器"任务计划思考"（规划前思考） */}
+                    {/* 顶部：编排器"任务计划思考"（规划前思考）；计划未出现前视为思考中，可读秒 */}
                     {m.role === "assistant" && m.planReasoning && (
-                      <ThinkingBlock reasoning={m.planReasoning} thinking={false}
-                        title="任务计划思考" />
+                      <ThinkingBlock reasoning={m.planReasoning} thinking={thinking && !hasPlan}
+                        title="任务计划思考"
+                        startedAt={m.planReasoningStartedAt} elapsedMs={m.planReasoningMs} />
                     )}
                     {/* 顶部：非编排器（ReAct/简单问答，无计划）的思考——保持原样 */}
                     {m.role === "assistant" && m.reasoning && !hasPlan && (

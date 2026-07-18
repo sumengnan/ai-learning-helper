@@ -182,12 +182,14 @@ describe("PlanBlock · 编排器计划步嵌套执行明细", () => {
       detail: { tool: "web", args: { q: "快排" }, result: "结果X", is_error: false } },
   ];
 
-  it("带 id 且有匹配 executor 明细的步 → 可展开，露出 agent + 工具调用 + 入参/返回", () => {
+  it("带 id 且有匹配 executor 明细的步 → 可展开，露出执行智能体+步骤id+工具调用+入参/返回", () => {
     render(<PlanBlock text={plan} live={false} status="done" subItems={subItems} />);
     // 顶部仍是计划步（总任务步骤）
     expect(screen.getAllByText("调研快排").length).toBeGreaterThanOrEqual(1);
-    // 展开后：执行 agent、工具名、参数/结果都在 DOM（MUI Accordion 折叠时子节点仍挂载）
-    expect(screen.getByText("executor:s1")).toBeTruthy();
+    // 展开后：执行智能体（executor）、步骤 id（s1）、工具名、参数/结果都在 DOM
+    expect(screen.getByText("执行智能体")).toBeTruthy();
+    expect(screen.getByText("executor")).toBeTruthy();
+    expect(screen.getByText("s1")).toBeTruthy();
     expect(screen.getByText("web")).toBeTruthy();
     expect(screen.getByText("参数")).toBeTruthy();
     expect(screen.getByText("结果X")).toBeTruthy();
@@ -195,15 +197,13 @@ describe("PlanBlock · 编排器计划步嵌套执行明细", () => {
 
   it("无匹配明细的步（如 s2）不产生工具明细，仍是纯步骤行", () => {
     render(<PlanBlock text={plan} live={false} status="done" subItems={subItems} />);
-    // s2 没有 executor:s2 的明细 → 不出现「执行明细」小标
-    // s1 出现一次执行明细，s2 不出现（故总计恰好 1 处）
-    expect(screen.getAllByText("执行明细").length).toBe(1);
+    // s1 出现一次执行智能体小标，s2 无明细 → 不出现（故总计恰好 1 处）
+    expect(screen.getAllByText("执行智能体").length).toBe(1);
   });
 
   it("无 subItems（ReAct 清单）→ 完全按纯行渲染，无展开", () => {
     render(<PlanBlock text={plan} live={false} status="done" />);
-    expect(screen.queryByText("执行明细")).toBeNull();
-    expect(screen.queryByText("executor:s1")).toBeNull();
+    expect(screen.queryByText("执行智能体")).toBeNull();
   });
 });
 
