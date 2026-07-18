@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from harness.context.manager import ContextManager
-from harness.events import Progress, RunError, RunFinished, ToolFinished, ToolStarted
+from harness.events import ModelUsage, Progress, RunError, RunFinished, ToolFinished, ToolStarted
 from harness.loop.agent_loop import AgentLoop
 from harness.progress import reset_current_agent, set_current_agent
 from harness.tools.base import ToolRegistry
@@ -108,6 +108,8 @@ class Executor:
                                    status="error" if r.is_error else "ok", key=r.tool_call_id,
                                    detail={"tool": name, "args": tool_args.get(r.tool_call_id),
                                            "result": r.content, "is_error": r.is_error})
+                elif isinstance(ev, ModelUsage):   # 用量上抛，供 Orchestrator 汇总成总 tokens
+                    yield ev
                 elif isinstance(ev, RunFinished):
                     final_text = ev.message.content or ""
                 elif isinstance(ev, RunError):

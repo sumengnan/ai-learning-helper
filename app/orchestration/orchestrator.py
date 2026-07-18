@@ -22,8 +22,9 @@ def _elapsed(step) -> int:
 
 from harness.context.manager import ContextManager
 from harness.events import (
-    Progress, ReasoningDelta, RunFinished, RunStarted, TextDelta,
+    ModelUsage, Progress, ReasoningDelta, RunFinished, RunStarted, TextDelta,
 )
+from harness.usage import Usage
 from harness.loop.agent_loop import AgentLoop
 from harness.reliability.budget import BudgetExceeded
 from harness.tools.base import ToolRegistry
@@ -116,7 +117,7 @@ class Orchestrator:
             if isinstance(ev, TextDelta):
                 streamed = True
                 yield ev
-            elif isinstance(ev, ReasoningDelta):   # 思考过程透传（前端 ThinkingBlock 展示）
+            elif isinstance(ev, (ReasoningDelta, ModelUsage)):   # 思考过程/用量透传（run() 会汇总用量）
                 yield ev
             elif isinstance(ev, RunFinished):
                 final = ev.message.content or ""
@@ -150,11 +151,21 @@ class Orchestrator:
 
         replan_count = 0
         retry_hints: dict[str, str] = {}
+        # 各子调用（执行步、synthesize）的 token 用量汇总成一条 ModelUsage 末尾发出——
+        # 否则子调用的用量被吞、前端显示不出总 tokens。（planner/critic 走 call_json，暂未计入。）
+        usage_total = Usage()
+        cost_total = 0.0
+        seen_usage = False
         # 跨轮累积 done 产物：replan 返回全新 Plan（旧 done 步不在其中），必须在换 plan 前收走，
         # 否则终局 synthesize/review 只剩最后一轮的产物 —— 违反 spec §4「保留成果」并使闭环残废。
         all_artifacts: dict[str, Artifact] = {}
         while True:
             async for ev in self._schedule_rounds(plan, retry_hints, budget):
+                if isinstance(ev, ModelUsage):     # 汇总不外发，末尾发一条聚合
+                    usage_total = usage_total + ev.usage
+                    cost_total += ev.cost_usd or 0.0
+                    seen_usage = True
+                    continue
                 yield ev
             for s in plan.steps:      # 收走本轮 done 产物（replan 换 plan 也不丢）
                 if s.status == "done" and s.result:
@@ -190,10 +201,17 @@ class Orchestrator:
         # 累加 synthesize 吐出的 TextDelta 即最终文本——不用侧信道，真/假 _synthesize 都适用
         final_parts: list[str] = []
         async for ev in self._synthesize(user_message, all_artifacts):
+            if isinstance(ev, ModelUsage):
+                usage_total = usage_total + ev.usage
+                cost_total += ev.cost_usd or 0.0
+                seen_usage = True
+                continue
             if isinstance(ev, TextDelta):
                 final_parts.append(ev.text)
             yield ev
         final = "".join(final_parts) or "（未能生成答复）"
+        if seen_usage:   # 汇总后的总用量，供前端显示总 tokens/成本
+            yield ModelUsage(usage=usage_total, cost_usd=cost_total, attempts=1, latency_ms=0.0)
         yield RunFinished(message=Message(role=Role.ASSISTANT, content=final))
 
     # ---- 调度：一轮轮跑就绪集，直到无 pending、预算超限或无法推进（后两者带现有成果收尾）----
