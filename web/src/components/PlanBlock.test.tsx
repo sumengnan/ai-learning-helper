@@ -36,6 +36,20 @@ describe("PlanBlock", () => {
     expect(container.querySelector('[role="progressbar"]')).toBeTruthy();
   });
 
+  it("每步前带序号 1. 2. 3.，正在执行的步仍显示转圈", () => {
+    const snap = JSON.stringify([
+      { title: "查资料", status: "done" },
+      { title: "计算中", status: "running" },
+      { title: "汇总", status: "pending" },
+    ]);
+    const { container } = render(<PlanBlock text={snap} live />);
+    expect(screen.getByText("1.")).toBeTruthy();
+    expect(screen.getByText("2.")).toBeTruthy();
+    expect(screen.getByText("3.")).toBeTruthy();
+    // 正在执行的步仍有转圈标识
+    expect(container.querySelector('[role="progressbar"]')).toBeTruthy();
+  });
+
   it("生成中：只有正在执行的步转圈，待办步不转圈", () => {
     const snap = JSON.stringify([
       { title: "已完成", status: "done" },

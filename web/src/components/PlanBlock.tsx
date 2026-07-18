@@ -145,9 +145,15 @@ export function PlanBlock({ text, live = false, stopped = false, status, subItem
         // 步骤间加分隔线（最后一步不加）
         const sep = i < steps.length - 1
           ? { borderBottom: 1, borderColor: "divider" } : {};
-        // 行内容（图标+标题+耗时），纯行与可展开步的摘要共用
+        // 行内容（序号+图标+标题+耗时），纯行与可展开步的摘要共用
         const rowContent = (
           <>
+            <Typography variant="body2"
+              sx={{ fontWeight: 700, color: "text.secondary", flexShrink: 0,
+                    minWidth: "1.4em", textAlign: "right",
+                    fontVariantNumeric: "tabular-nums" }}>
+              {i + 1}.
+            </Typography>
             {stepIcon(s, fates[i])}
             <Typography
               variant="body2"
