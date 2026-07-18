@@ -22,8 +22,41 @@ type PlanStatus = "pending" | "running" | "done" | "failed" | "skipped";
 // ReAct 的 update_plan 清单无 id，则各步照常渲染成不可展开的纯行。
 type PlanStepData = {
   id?: string; title: string; status: PlanStatus;
+  depends_on?: string[];   // 编排器计划步的依赖（步骤 id）；用于标并行/依赖关系
   elapsed_ms?: number | null; started_at_ms?: number | null;
 };
+
+// 依赖层级：无依赖=0，否则 max(依赖层级)+1。同层且该层≥2 步 → 可并行。环由 validate_plan 挡掉，
+// 这里仍加 computing 守卫防脏数据死循环。返回 {levelOf, levelCount, idToNum} 供渲染并行徽章/依赖标注。
+function analyzeDag(steps: PlanStepData[]) {
+  const idToNum = new Map<string, number>();
+  steps.forEach((s, i) => { if (s.id) idToNum.set(s.id, i + 1); });
+  const byId = new Map<string, PlanStepData>();
+  steps.forEach((s) => { if (s.id) byId.set(s.id, s); });
+  const levelOf = new Map<string, number>();
+  const computing = new Set<string>();
+  const level = (s: PlanStepData): number => {
+    if (!s.id) return 0;
+    if (levelOf.has(s.id)) return levelOf.get(s.id)!;
+    if (computing.has(s.id)) return 0;   // 环保护（正常 DAG 不触发）
+    computing.add(s.id);
+    let lv = 0;
+    for (const d of s.depends_on || []) {
+      const dep = byId.get(d);
+      if (dep) lv = Math.max(lv, level(dep) + 1);
+    }
+    levelOf.set(s.id, lv);
+    return lv;
+  };
+  steps.forEach(level);
+  const levelCount = new Map<number, number>();
+  steps.forEach((s) => {
+    if (!s.id) return;
+    const lv = levelOf.get(s.id)!;
+    levelCount.set(lv, (levelCount.get(lv) || 0) + 1);
+  });
+  return { levelOf, levelCount, idToNum };
+}
 
 // 归属该计划步的 executor 执行明细（工具调用），来自 scope=subagent:executor:<id> 的进度行
 type SubItem = ToolRow & { scope: string };
@@ -109,6 +142,7 @@ export function PlanBlock({ text, live = false, stopped = false, status, subItem
   const anyFailed = steps.some((s) => s.status === "failed");
   const anyRunning = steps.some((s) => s.status === "running");
   const fates = steps.map((s) => fateOf(s, live, st));
+  const { levelOf, levelCount, idToNum } = analyzeDag(steps);
   // 运行成功却还留着没收尾的步骤 → 模型半途不报了。这不是「任务没做完」，
   // 而是「我们不知道做没做」，标题上要说清，否则「2/4 完成」会被读成任务只干了一半。
   const staleList = fates.some((f) => f === "unknown");
@@ -166,6 +200,20 @@ export function PlanBlock({ text, live = false, stopped = false, status, subItem
             >
               {s.title}{SUFFIX[fates[i]] ?? ""}
             </Typography>
+            {/* 并行徽章：该步与同层其它步同时进行，完成顺序不代表先后 */}
+            {s.id != null && (levelCount.get(levelOf.get(s.id) ?? 0) ?? 0) >= 2 && (
+              <Chip label="并行" size="small" color="info" variant="outlined"
+                sx={{ height: 16, flexShrink: 0, "& .MuiChip-label": { px: 0.5, fontSize: 10, fontWeight: 700 } }} />
+            )}
+            {/* 依赖标注：等这些序号的步完成后才开跑 */}
+            {(() => {
+              const nums = (s.depends_on || []).map((d) => idToNum.get(d)).filter((n): n is number => n != null);
+              return nums.length > 0 ? (
+                <Typography variant="caption" color="text.disabled" sx={{ flexShrink: 0 }}>
+                  依赖 {nums.join("·")}
+                </Typography>
+              ) : null;
+            })()}
             {/* 进行中且确实还在跑 → 读秒；已结束 → 定格耗时。
                 读秒严格以 fate==="live" 为闸：已停止/已中断/已结束的 run 其快照里仍留着
                 running 步骤，照读会一直涨下去（此时该步已按 已取消/状态未知 呈现，
