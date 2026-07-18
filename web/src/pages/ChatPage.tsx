@@ -50,10 +50,13 @@ export function ChatPage() {
       elapsedMs: m.elapsed_ms ?? undefined,
       reasoning: m.reasoning ?? undefined,   // 刷新后还原思考过程（含编排器"结果思考"）
       reasoningMs: m.reasoning_ms ?? undefined,   // 刷新后还原思考耗时
-      // 刷新后还原"任务计划思考"：从落库的 plan_reasoning 进度行拼回
+      // 刷新后还原"任务计划思考"（文本 + 耗时）：从落库的 plan_reasoning 进度行拼回
       planReasoning: (m.progress || [])
         .filter((p) => p.scope === "plan_reasoning")
         .map((p) => p.text).join("") || undefined,
+      planReasoningMs: (m.progress || [])
+        .find((p) => p.scope === "plan_reasoning" && p.detail?.elapsed_ms != null)
+        ?.detail?.elapsed_ms ?? undefined,
     })));
     setActiveId(id);
   }

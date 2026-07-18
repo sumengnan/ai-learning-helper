@@ -210,6 +210,10 @@ async def test_planner_reasoning_emitted_before_plan():
                if isinstance(e, Progress) and e.scope == "plan"), None)
     assert ri is not None and pi is not None
     assert ri < pi, "规划思考应出现在第一个计划快照之前"
+    # 末尾发一条带 elapsed_ms 的标记，供前端显示/刷新还原规划思考耗时
+    assert any(isinstance(e, Progress) and e.scope == "plan_reasoning"
+               and (e.detail or {}).get("elapsed_ms") is not None for e in events), \
+        "应发出带 elapsed_ms 的规划思考耗时标记"
 
 
 async def test_run_aggregates_all_usage_incl_planner_critic():

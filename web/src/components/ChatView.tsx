@@ -235,8 +235,10 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
       if (s) { s.result = e.data.result.content; s.isError = e.data.result.is_error; }
     });
     else if (e.type === "ModelUsage") upd((a) => { a.usage = { tokens: e.data.usage.total, cost: e.data.cost_usd }; });
-    // 任务计划思考（scope=plan_reasoning）：流式累积成单独的"任务计划思考"块，不入 progress 列
+    // 任务计划思考（scope=plan_reasoning）：流式累积成单独的"任务计划思考"块，不入 progress 列。
+    // 末尾带 detail.elapsed_ms 的是耗时标记（后端权威），据此冻结耗时。
     else if (e.type === "Progress" && e.data.scope === "plan_reasoning") upd((a) => {
+      if (e.data.detail?.elapsed_ms != null) { a.planReasoningMs = e.data.detail.elapsed_ms; return; }
       if (a.planReasoningStartedAt == null) a.planReasoningStartedAt = Date.now();
       a.planReasoning = (a.planReasoning || "") + e.data.text;
     });

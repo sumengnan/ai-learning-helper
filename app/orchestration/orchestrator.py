@@ -108,18 +108,24 @@ class Orchestrator:
                 queue.put_nowait(sentinel)
 
         token = set_reason_sink(queue.put_nowait)
+        t0 = _now_ms()
+        saw_reasoning = False
         task = asyncio.create_task(_worker())
         try:
             while True:
                 item = await queue.get()
                 if item is sentinel:
                     break
+                saw_reasoning = True
                 yield Progress(scope="plan_reasoning", text=item)
         finally:
             reset_reason_sink(token)
             if not task.done():
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        if saw_reasoning:   # 末尾发规划思考耗时（落 progress 列，刷新后可还原耗时）
+            yield Progress(scope="plan_reasoning", text="", key="__plan_reasoning_elapsed__",
+                           detail={"elapsed_ms": _now_ms() - t0})
 
     # ---- triage ----
     async def _is_simple(self, message: str) -> bool:
