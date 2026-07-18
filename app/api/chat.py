@@ -811,6 +811,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             delivered = None
             delivered_sources: list[dict] = []   # 交付那次尝试的权威来源
             errored = False
+            used_orchestrator = False    # 本轮是否走编排器路径（其计划终态自洽，不需清单收尾 shim）
             # 交付门结构化判定轨迹（门未开则保持 None，不落库）：progress 列只存渲染用中文，
             # 统计「哪层失败率高/平均重答几次」要的是这里未拍扁的 failed[]/hard_failed[]。
             verify_trace: dict | None = None
@@ -868,6 +869,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     # （其 run(message) 签名与 AgentLoop 相同、只 yield 既有 Event 类型），复用同一套
                     # 事件处理与 SSE 下发。天然跳过交付门——编排器自带质量把关与计划终态（见设计 §4）。
                     # 事件源换成编排器，_drain 之后的兜底逻辑照抄下方直通路径。
+                    used_orchestrator = True
                     collect = {"final": None, "error": None, "steps": steps,
                                "grounding": [], "progress": progress, "usage": None,
                                "reasoning": ""}
@@ -1106,7 +1108,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 # 清单收尾：交付门开与不开两条路径都会漏，故放在二者汇合处。仅当模型真的
                 # 没把清单更新完才会花那一次调用（实测约 1/6 的多步任务会）。答案已定稿，
                 # 这里只动清单。errored 时不补：运行都没跑完，那些步骤本就该显示为未完成。
-                if not errored:
+                # 编排器路径跳过：其状态机保证每步有终态（done/failed/skipped），清单天然自洽（spec §6）。
+                if not errored and not used_orchestrator:
                     _plan_ev = await _finalize_stale_plan(
                         _plan_finalizer, progress, steps, plan_trace)
                     if _plan_ev is not None:
