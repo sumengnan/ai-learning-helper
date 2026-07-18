@@ -20,6 +20,8 @@ async def _collect(gen):
     async for ev in gen:
         if isinstance(ev, StepArtifact):
             artifact = ev.artifact
+            # 便于测试直接查 artifact.error，而不必额外返回整个 StepArtifact 信号
+            artifact.error = ev.error
         else:
             events.append(ev)
     return events, artifact
@@ -43,10 +45,49 @@ async def test_executor_emits_progress_not_textdelta(make_mock):
     assert all(isinstance(e, Progress) for e in events)
 
 
-async def test_executor_injects_dep_artifacts(make_mock):
-    """依赖产物应进入 Executor 的 prompt（用 mock 无法看 prompt，改测不崩且产出正常）。"""
-    client = make_mock(_text_only_turns("已参考前置结果"))
-    ex = Executor(client=client, registry=ToolRegistry(), system_prompt="sp", model="m", max_steps=3)
-    deps = {"s0": Artifact(summary="前置：X=42")}
-    _, artifact = await _collect(ex.execute(_step(deps=["s0"]), deps))
-    assert artifact is not None
+def test_build_prompt_includes_deps_and_hint():
+    from app.orchestration.executor import _build_prompt
+    p = _build_prompt(_step(deps=["s0"]), {"s0": Artifact(summary="前置：X=42")}, hint="补充示例")
+    assert "回答质数定义" in p and "质数定义" in p
+    assert "[s0]" in p and "前置：X=42" in p
+    assert "补充示例" in p
+
+
+def _tool_then_done_turns():
+    from harness.llm.base import ToolCallDelta
+    return [
+        [StreamChunk(type="tool_call", tool_call_delta=ToolCallDelta(
+            index=0, id="c1", name="calculator", arguments='{"expression": "1+1"}')),
+         StreamChunk(type="done")],
+        [StreamChunk(type="text", text="算完了"), StreamChunk(type="done")],
+    ]
+
+
+async def test_executor_tool_call_emits_progress(make_mock):
+    from harness.tools.builtins.calculator import CalculatorTool
+    reg = ToolRegistry(); reg.register(CalculatorTool())
+    client = make_mock(_tool_then_done_turns())
+    ex = Executor(client=client, registry=reg, system_prompt="sp", model="m", max_steps=3)
+    events, artifact = await _collect(ex.execute(_step(), {}))
+    progs = [e for e in events if isinstance(e, Progress)]
+    assert any(p.scope == "subagent:executor:s1" for p in progs)
+    assert any(p.status == "running" for p in progs)
+    assert any(p.status == "ok" for p in progs)
+    assert "算完了" in artifact.summary
+
+
+def _always_tool_turns():
+    from harness.llm.base import ToolCallDelta
+    return [[StreamChunk(type="tool_call", tool_call_delta=ToolCallDelta(
+        index=0, id="c1", name="calculator", arguments='{"expression":"1+1"}')),
+        StreamChunk(type="done")]]
+
+
+async def test_executor_runerror_sets_error_and_empty_summary(make_mock):
+    from harness.tools.builtins.calculator import CalculatorTool
+    reg = ToolRegistry(); reg.register(CalculatorTool())
+    client = make_mock(_always_tool_turns())
+    ex = Executor(client=client, registry=reg, system_prompt="sp", model="m", max_steps=1)
+    events, artifact = await _collect(ex.execute(_step(), {}))
+    assert artifact.error is not None
+    assert artifact.summary == ""

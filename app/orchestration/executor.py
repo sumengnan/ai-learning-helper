@@ -19,7 +19,11 @@ from .plan import Artifact, PlanStep
 
 @dataclass
 class StepArtifact:
-    """内部信号：Executor 产出的最终产物。Orchestrator 消费、不外发（非 Event）。"""
+    """内部信号：Executor 产出的最终产物。Orchestrator 消费、不外发（非 Event）。
+
+    不变式：error 非空时表示该步执行失败，此时 artifact.summary 可能为空字符串，
+    消费方必须先查 error 再决定是否采信 summary。
+    """
     artifact: Artifact
     error: str | None = None
 
