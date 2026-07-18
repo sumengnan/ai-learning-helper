@@ -490,13 +490,17 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                 const planItems = m.progress.filter((p) => p.scope === "plan");
                 const plan = planItems[planItems.length - 1];
                 const live = busy && i === messages.length - 1 && m.status === "streaming";
+                // 编排器 executor 的执行明细挂到对应计划步下（计划步 → agent+工具 → 入参/返回）
+                const execSubs = m.progress.filter((p) => p.scope.startsWith("subagent:executor:"));
                 return plan ? (
-                  <PlanBlock text={plan.text} live={live} status={m.status} />
+                  <PlanBlock text={plan.text} live={live} status={m.status} subItems={execSubs} />
                 ) : null;
               })()}
               {showTools && m.role === "assistant" && m.progress && m.progress.length > 0 && (() => {
                 const sandbox = m.progress.filter((p) => p.scope === "sandbox");
-                const sub = m.progress.filter((p) => p.scope.startsWith("subagent:"));
+                // executor 子代理已并入 PlanBlock 的计划树；这里只留 dispatch 派发的子代理，避免与顶部计划步重复
+                const sub = m.progress.filter(
+                  (p) => p.scope.startsWith("subagent:") && !p.scope.startsWith("subagent:executor:"));
                 const skill = m.progress.filter((p) => p.scope === "skill");
                 const live = busy && i === messages.length - 1 && m.status === "streaming";
                 const stopped = m.status === "stopped";

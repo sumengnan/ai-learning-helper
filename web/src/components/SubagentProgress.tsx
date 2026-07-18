@@ -1,19 +1,10 @@
-import {
-  Accordion, AccordionSummary, AccordionDetails, Box, Typography, Chip, CircularProgress,
-} from "@mui/material";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import { Box, Typography, Chip } from "@mui/material";
 import AccountTreeIcon from "@mui/icons-material/AccountTree";
-import CheckCircleIcon from "@mui/icons-material/CheckCircle";
-import CancelIcon from "@mui/icons-material/Cancel";
 import { CollapsibleBlock } from "./CollapsibleBlock";
-import { ToolCallDetail } from "./ToolCallDetail";
 import { EllipsisText } from "./EllipsisText";
+import { ToolCallRows, mergeByKey, type ToolRow } from "./ToolCallRows";
 
-type Item = {
-  scope: string; text: string;
-  status?: "running" | "ok" | "error" | null; key?: string | null;
-  detail?: { tool: string; args?: unknown; result?: string; is_error?: boolean } | null;
-};
+type Item = ToolRow & { scope: string };
 
 // scope 形如 subagent:executor:s1 / subagent:研究员 → 取冒号后的 agent 标识
 const agentOf = (scope: string) =>
@@ -32,30 +23,8 @@ function groupByAgent(items: Item[]): { agent: string; rows: Item[] }[] {
   return groups;
 }
 
-// 同 key 的开始/完成折叠成一行（后到覆盖），保留末态（带 result 的完成行）
-function mergeByKey(items: Item[]): Item[] {
-  const rows: Item[] = [];
-  const pos = new Map<string, number>();
-  for (const p of items) {
-    if (p.key) {
-      const i = pos.get(p.key);
-      if (i !== undefined) rows[i] = p;
-      else { pos.set(p.key, rows.length); rows.push(p); }
-    } else rows.push(p);
-  }
-  return rows;
-}
-
-function rowIcon(p: Item, live: boolean) {
-  if (p.status === "error" || p.detail?.is_error)
-    return <CancelIcon sx={{ fontSize: 16 }} color="error" />;
-  if (p.status === "running")
-    return live ? <CircularProgress size={12} /> : <CheckCircleIcon sx={{ fontSize: 16 }} color="success" />;
-  return <CheckCircleIcon sx={{ fontSize: 16 }} color="success" />;
-}
-
-// 子代理执行进度：按 agent 分组，组标题用步骤描述（头行），每次工具调用渲染成可展开的明细块。
-// 编排器（executor:sN）与 dispatch（角色名）两条 subagent: 通道共用。
+// 子代理执行进度：按 agent 分组，组标题用步骤描述（头行），每次工具调用可展开看入参/返回。
+// 编排器的 executor 步已并入 PlanBlock 的计划树，这里主要服务 dispatch 派发的子代理。
 export function SubagentProgress({ items, live, stopped, status }: {
   items: Item[]; live: boolean; stopped: boolean;
   status: "running" | "ok" | "error" | "stopped";
@@ -83,21 +52,7 @@ export function SubagentProgress({ items, live, stopped, status }: {
                 sx={{ height: 16, flexShrink: 0, "& .MuiChip-label": { px: 0.5, fontSize: 10, fontWeight: 700 } }} />
               <EllipsisText text={title} sx={{ fontWeight: 600 }} />
             </Box>
-            {toolRows.map((p, i) => (
-              <Accordion key={p.key ?? i} disableGutters elevation={0}
-                sx={{ bgcolor: "transparent", "&:before": { display: "none" }, pl: 1 }}>
-                <AccordionSummary expandIcon={<ExpandMoreIcon fontSize="small" />}
-                  sx={{ minHeight: 0, px: 0,
-                        "& .MuiAccordionSummary-content": { my: 0.4, alignItems: "center", gap: 0.75 } }}>
-                  {rowIcon(p, live)}
-                  <Typography variant="caption">{p.detail?.tool || p.text}</Typography>
-                </AccordionSummary>
-                <AccordionDetails sx={{ px: 0, pt: 0 }}>
-                  <ToolCallDetail args={p.detail?.args} result={p.detail?.result}
-                    isError={p.detail?.is_error} />
-                </AccordionDetails>
-              </Accordion>
-            ))}
+            <ToolCallRows rows={toolRows} live={live} />
           </Box>
         );
       })}
