@@ -76,6 +76,28 @@ async def test_executor_disable_thinking_sets_override():
     assert seen["thinking"] is False
 
 
+async def test_executor_prompt_steers_to_web_search():
+    """执行子步的系统提示词应引导优先用联网搜索工具、少用 http_request 抓网页。"""
+    seen = {}
+    class ProbeClient:
+        async def stream(self, messages, schemas):
+            parts = []
+            for m in messages:
+                c = getattr(m, "content", None)
+                if c is None and isinstance(m, dict):
+                    c = m.get("content")
+                if isinstance(c, str):
+                    parts.append(c)
+            seen["sys"] = "\n".join(parts)
+            yield StreamChunk(type="text", text="ok")
+            yield StreamChunk(type="done")
+    ex = Executor(client=ProbeClient(), registry=ToolRegistry(), system_prompt="你是执行者",
+                  model="m", max_steps=1)
+    await _collect(ex.execute(_step(), {}))
+    assert "搜索" in seen["sys"] and "http_request" in seen["sys"]   # 明确工具偏好引导
+    assert "你是执行者" in seen["sys"]                                # 基座 prompt 仍在
+
+
 async def test_executor_thinking_untouched_by_default():
     """默认 disable_thinking=False → 不动 override（沿用外层上下文）。"""
     from harness.llm.openai_compat import get_extra_body_override
