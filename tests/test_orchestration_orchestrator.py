@@ -182,13 +182,15 @@ async def test_planner_error_falls_back_to_simple_answer():
     assert order == []   # 从未进入编排/执行
 
 
-def test_plan_progress_includes_step_id():
-    """计划进度带上步骤 id，供前端把 executor:s1 的执行明细挂到对应计划步下。"""
+def test_plan_progress_includes_id_and_depends_on():
+    """计划进度带上步骤 id 与 depends_on：前端据此把执行明细挂到对应步、并算并行/依赖关系。"""
     import json
     from app.orchestration.orchestrator import _plan_progress
-    p = _plan_progress(_plan(_s("s1"), _s("s2")))
+    p = _plan_progress(_plan(_s("s1"), _s("s2"), _s("s3", deps=["s1", "s2"])))
     steps = json.loads(p.text)
-    assert [s["id"] for s in steps] == ["s1", "s2"]
+    assert [s["id"] for s in steps] == ["s1", "s2", "s3"]
+    assert steps[2]["depends_on"] == ["s1", "s2"]
+    assert steps[0]["depends_on"] == []
     assert all("title" in s and "status" in s for s in steps)
 
 

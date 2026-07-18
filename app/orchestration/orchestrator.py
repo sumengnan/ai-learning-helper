@@ -49,7 +49,8 @@ def _plan_progress(plan: Plan) -> Progress:
 
     带上 id：前端据此把 executor:<id> 的执行明细（工具调用）挂到对应计划步下，合并成一棵树。
     """
-    steps = [{"id": s.id, "title": s.description, "status": s.status} for s in plan.steps]
+    steps = [{"id": s.id, "title": s.description, "status": s.status,
+              "depends_on": list(s.depends_on)} for s in plan.steps]
     return Progress(scope="plan", text=json.dumps(steps, ensure_ascii=False), key="plan")
 
 

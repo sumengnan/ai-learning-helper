@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 from harness.context.manager import ContextManager
 from harness.events import Progress, RunError, RunFinished, ToolFinished, ToolStarted
@@ -26,6 +27,20 @@ class StepArtifact:
     """
     artifact: Artifact
     error: str | None = None
+
+
+# 子步默认只有裸系统提示词，缺少主聊天那套工具引导，模型会拿 http_request/浏览器乱抓网页
+# 而不调专门的联网搜索工具。这段引导补上工具偏好，让它优先用搜索工具。
+EXECUTOR_GUIDE = (
+    "\n\n【工具使用】需要最新、事实性或联网信息时，优先使用联网搜索工具"
+    "（web 搜索类工具，如可用的 *_web_search），不要用 http_request 或浏览器逐个抓取网页——"
+    "搜索工具更快、覆盖更全；http_request/浏览器只在需要读取某个具体已知网址时才用。"
+)
+
+
+def _system_with_guide(base: str) -> str:
+    """给执行子步的系统提示词补上工具偏好引导 + 当前日期（时效/未来趋势类任务需要知道"现在"）。"""
+    return f"{base}{EXECUTOR_GUIDE}\n\n今日日期：{date.today().isoformat()}（涉及时效或未来趋势时以此为基准）。"
 
 
 def _build_prompt(step: PlanStep, deps: dict[str, Artifact], hint: str = "") -> str:
@@ -61,7 +76,7 @@ class Executor:
         prompt = _build_prompt(step, deps, hint)
         loop = AgentLoop(
             client=self._client, registry=self._registry,
-            context=ContextManager(self._system_prompt),
+            context=ContextManager(_system_with_guide(self._system_prompt)),
             max_steps=self._max_steps, budget=self._budget, model_name=self._model,
             loop_detect_window=self._loop_detect_window)
         scope = f"subagent:executor:{step.id}"

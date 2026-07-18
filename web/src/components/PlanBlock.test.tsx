@@ -136,6 +136,41 @@ describe("PlanBlock · 运行结束但模型没把清单更新完", () => {
   });
 });
 
+describe("PlanBlock · 并行/依赖标注", () => {
+  const plan = JSON.stringify([
+    { id: "s1", title: "调研技术", status: "done", depends_on: [] },
+    { id: "s2", title: "调研案例", status: "running", depends_on: [] },
+    { id: "s3", title: "调研风险", status: "done", depends_on: [] },
+    { id: "s4", title: "整合", status: "pending", depends_on: ["s1", "s2", "s3"] },
+    { id: "s5", title: "生成报告", status: "pending", depends_on: ["s4"] },
+  ]);
+
+  it("同层多步标『并行』，依赖步标『依赖 序号』", () => {
+    render(<PlanBlock text={plan} live status="streaming" />);
+    // s1/s2/s3 同为第 0 层、3 步 → 并行徽章（出现 3 次）
+    expect(screen.getAllByText("并行").length).toBe(3);
+    // s4 依赖 s1·s2·s3 → 依赖 1·2·3
+    expect(screen.getByText("依赖 1·2·3")).toBeTruthy();
+    // s5 依赖 s4 → 依赖 4
+    expect(screen.getByText("依赖 4")).toBeTruthy();
+  });
+
+  it("s5 独占第 2 层 → 不标并行", () => {
+    render(<PlanBlock text={plan} live status="streaming" />);
+    // s4 独占第 1 层、s5 独占第 2 层：都不并行；只有 s1/s2/s3 三个并行徽章
+    expect(screen.getAllByText("并行").length).toBe(3);
+  });
+
+  it("ReAct 清单（无 id/依赖）不出现并行/依赖标注", () => {
+    const react = JSON.stringify([
+      { title: "查资料", status: "done" }, { title: "汇总", status: "done" },
+    ]);
+    render(<PlanBlock text={react} />);
+    expect(screen.queryByText("并行")).toBeNull();
+    expect(screen.queryByText(/依赖/)).toBeNull();
+  });
+});
+
 describe("PlanBlock · 编排器计划步嵌套执行明细", () => {
   const plan = JSON.stringify([
     { id: "s1", title: "调研快排", status: "done" },
