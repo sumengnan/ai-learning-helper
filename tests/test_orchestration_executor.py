@@ -83,6 +83,27 @@ def _always_tool_turns():
         StreamChunk(type="done")]]
 
 
+async def test_executor_emits_step_header_and_tool_detail(make_mock):
+    """首个进度是步骤描述头行；工具行带 detail（tool+args），完成行 detail 带 result+is_error 且保留 args。"""
+    from harness.tools.builtins.calculator import CalculatorTool
+    reg = ToolRegistry(); reg.register(CalculatorTool())
+    client = make_mock(_tool_then_done_turns())
+    ex = Executor(client=client, registry=reg, system_prompt="sp", model="m", max_steps=3)
+    events, _ = await _collect(ex.execute(_step(), {}))
+    progs = [e for e in events if isinstance(e, Progress)]
+    # (a) 头行：文字=步骤描述，key=__hdr__:s1，无 detail
+    assert progs[0].text == "回答质数定义" and progs[0].key == "__hdr__:s1"
+    assert progs[0].detail is None
+    # (b) 工具开始行 detail 带 tool + args
+    started = [p for p in progs if p.status == "running" and p.detail]
+    assert any(p.detail["tool"] == "calculator" and p.detail["args"] == {"expression": "1+1"}
+               for p in started)
+    # (c) 工具完成行 detail 带 result + is_error，且仍保留 args（前端按 key 合并只留最后一条）
+    finished = [p for p in progs if p.status in ("ok", "error") and p.detail and "result" in p.detail]
+    assert finished and finished[-1].detail["args"] == {"expression": "1+1"}
+    assert "is_error" in finished[-1].detail
+
+
 async def test_executor_runerror_sets_error_and_empty_summary(make_mock):
     from harness.tools.builtins.calculator import CalculatorTool
     reg = ToolRegistry(); reg.register(CalculatorTool())
