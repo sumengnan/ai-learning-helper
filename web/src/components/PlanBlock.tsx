@@ -6,6 +6,7 @@ import CancelIcon from "@mui/icons-material/Cancel";
 import RadioButtonUncheckedIcon from "@mui/icons-material/RadioButtonUnchecked";
 import HelpOutlineIcon from "@mui/icons-material/HelpOutlined";
 import StopCircleIcon from "@mui/icons-material/StopCircle";
+import RemoveCircleOutlineIcon from "@mui/icons-material/RemoveCircleOutlined";
 import PlaylistAddCheckIcon from "@mui/icons-material/PlaylistAddCheck";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import { CollapsibleBlock } from "./CollapsibleBlock";
@@ -13,7 +14,7 @@ import { fmtDuration } from "./duration";
 import { LiveDuration } from "./LiveDuration";
 import { ToolCallRows, mergeByKey, type ToolRow } from "./ToolCallRows";
 
-type PlanStatus = "pending" | "running" | "done" | "failed";
+type PlanStatus = "pending" | "running" | "done" | "failed" | "skipped";
 // 计时字段由后端跨 update_plan 快照算出、烤进 plan JSON（见 app/tools/plan_tool.py）：
 // 已结束的步骤给 elapsed_ms（定格值），进行中的给 started_at_ms（epoch 毫秒，供前端读秒）。
 // plan 走 progress 通道落库，故刷新后耗时仍在、进行中的也能接着读。没走过 running 的两者皆无。
@@ -67,8 +68,9 @@ function parseSteps(text?: string | null): PlanStepData[] {
 type Fate = "unknown" | "incomplete" | "cancelled" | "pending" | "live";
 
 function fateOf(s: PlanStepData, live: boolean, status?: string): Fate {
-  if (s.status === "done" || s.status === "failed") return "pending";  // 终态，不需裁决
-  if (live) return "live";
+  if (s.status === "done" || s.status === "failed" || s.status === "skipped") return "pending";  // 终态，不需裁决
+  // 生成中：只有正在执行的那步转圈；待办步保持静态（等待），不要全都转圈
+  if (live) return s.status === "running" ? "live" : "pending";
   if (status === "stopped") return s.status === "running" ? "cancelled" : "pending";
   if (status === "error" || status === "interrupted") return "incomplete";
   if (status === "done") return "unknown";   // 运行成功但模型没再更新清单
@@ -76,13 +78,14 @@ function fateOf(s: PlanStepData, live: boolean, status?: string): Fate {
 }
 
 function stepIcon(s: PlanStepData, fate: Fate) {
-  if (s.status === "done") return <CheckCircleIcon sx={{ fontSize: 15 }} color="success" />;
-  if (s.status === "failed") return <CancelIcon sx={{ fontSize: 15 }} color="error" />;
-  if (fate === "live") return <CircularProgress size={12} />;
-  if (fate === "cancelled") return <StopCircleIcon sx={{ fontSize: 15 }} color="disabled" />;
+  if (s.status === "done") return <CheckCircleIcon sx={{ fontSize: 17 }} color="success" />;
+  if (s.status === "failed") return <CancelIcon sx={{ fontSize: 17 }} color="error" />;
+  if (s.status === "skipped") return <RemoveCircleOutlineIcon sx={{ fontSize: 17 }} color="disabled" />;
+  if (fate === "live") return <CircularProgress size={14} />;
+  if (fate === "cancelled") return <StopCircleIcon sx={{ fontSize: 17 }} color="disabled" />;
   // 未知用问号而非空心圈：空心圈=「没开始」，是个我们没资格下的断言
-  if (fate === "unknown") return <HelpOutlineIcon sx={{ fontSize: 15 }} color="disabled" />;
-  return <RadioButtonUncheckedIcon sx={{ fontSize: 15 }} color="disabled" />;
+  if (fate === "unknown") return <HelpOutlineIcon sx={{ fontSize: 17 }} color="disabled" />;
+  return <RadioButtonUncheckedIcon sx={{ fontSize: 17 }} color="disabled" />;
 }
 
 const SUFFIX: Partial<Record<Fate, string>> = {
@@ -135,19 +138,24 @@ export function PlanBlock({ text, live = false, stopped = false, status, subItem
   );
   return (
     <CollapsibleBlock
-      icon={<PlaylistAddCheckIcon sx={{ fontSize: 16 }} color="action" />}
-      title="任务步骤" status={blockStatus} summary={summary} defaultExpanded
+      icon={<PlaylistAddCheckIcon sx={{ fontSize: 20 }} color="primary" />}
+      title="任务步骤" status={blockStatus} summary={summary} defaultExpanded large
     >
       {steps.map((s, i) => {
+        // 步骤间加分隔线（最后一步不加）
+        const sep = i < steps.length - 1
+          ? { borderBottom: 1, borderColor: "divider" } : {};
         // 行内容（图标+标题+耗时），纯行与可展开步的摘要共用
         const rowContent = (
           <>
             {stepIcon(s, fates[i])}
             <Typography
-              variant="caption"
+              variant="body2"
               sx={{
-                color: s.status === "failed" ? "error.main" : "text.secondary",
-                textDecoration: s.status === "done" ? "line-through" : "none",
+                fontWeight: 500,   // 着重突出步骤项，不再是淡灰小字
+                color: s.status === "failed" ? "error.main"
+                  : s.status === "skipped" ? "text.disabled" : "text.primary",
+                // 完成后不加删除线（此前的 line-through 已去掉）
               }}
             >
               {s.title}{SUFFIX[fates[i]] ?? ""}
@@ -174,14 +182,14 @@ export function PlanBlock({ text, live = false, stopped = false, status, subItem
           : [];
         if (!toolRows.length) {
           return (
-            <Box key={i} sx={{ display: "flex", alignItems: "center", gap: 0.75, py: 0.2 }}>
+            <Box key={i} sx={{ display: "flex", alignItems: "center", gap: 0.75, py: 0.5, ...sep }}>
               {rowContent}
             </Box>
           );
         }
         return (
           <Accordion key={i} disableGutters elevation={0}
-            sx={{ bgcolor: "transparent", "&:before": { display: "none" } }}>
+            sx={{ bgcolor: "transparent", "&:before": { display: "none" }, ...sep }}>
             <AccordionSummary expandIcon={<ExpandMoreIcon fontSize="small" />}
               sx={{ minHeight: 0, px: 0,
                     "& .MuiAccordionSummary-content": { my: 0.2, alignItems: "center", gap: 0.75 } }}>

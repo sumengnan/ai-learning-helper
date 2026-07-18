@@ -36,6 +36,18 @@ describe("PlanBlock", () => {
     expect(container.querySelector('[role="progressbar"]')).toBeTruthy();
   });
 
+  it("生成中：只有正在执行的步转圈，待办步不转圈", () => {
+    const snap = JSON.stringify([
+      { title: "已完成", status: "done" },
+      { title: "执行中", status: "running" },
+      { title: "待办1", status: "pending" },
+      { title: "待办2", status: "pending" },
+    ]);
+    const { container } = render(<PlanBlock text={snap} live />);
+    // 恰好一个进度圈（正在执行的那步），而不是所有非终态步都转圈
+    expect(container.querySelectorAll('[role="progressbar"]').length).toBe(1);
+  });
+
   it("用户停止后：运行中的步骤标『已取消』且不再转圈（issue 2）", () => {
     const snap = JSON.stringify([
       { title: "查资料", status: "done" },
