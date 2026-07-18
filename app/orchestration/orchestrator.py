@@ -89,16 +89,43 @@ class Orchestrator:
         self._max_replan = max_replan
 
     @staticmethod
-    async def _plan_capturing_reasoning(coro):
-        """跑一次 planner 调用，期间捕获其思考（ReasoningDelta），返回 (plan, 思考片段列表)。
-        让"先思考再出严格 JSON"里的思考能在计划之前发给前端。"""
-        parts: list[str] = []
-        token = set_reason_sink(parts.append)
+    async def _plan_streaming(coro, out: dict):
+        """跑一次 planner 调用，把它"先思考再出严格 JSON"里的思考**实时**转成
+        Progress(scope=plan_reasoning) 流式 yield（不是等规划完再一次性发）；
+        规划结果写进 out["plan"]，PlannerError 写进 out["error"]。
+
+        用后台任务 + 队列：planner 在 task 里跑（继承本上下文里挂的 reason sink），思考经
+        sink → 队列，本生成器边收边 yield，实现流式。提前放弃迭代时取消 task，避免悬挂。"""
+        queue: asyncio.Queue = asyncio.Queue()
+        sentinel = object()
+
+        async def _worker():
+            try:
+                out["plan"] = await coro
+            except PlannerError as e:
+                out["error"] = e
+            finally:
+                queue.put_nowait(sentinel)
+
+        token = set_reason_sink(queue.put_nowait)
+        t0 = _now_ms()
+        saw_reasoning = False
+        task = asyncio.create_task(_worker())
         try:
-            plan = await coro
+            while True:
+                item = await queue.get()
+                if item is sentinel:
+                    break
+                saw_reasoning = True
+                yield Progress(scope="plan_reasoning", text=item)
         finally:
             reset_reason_sink(token)
-        return plan, parts
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        if saw_reasoning:   # 末尾发规划思考耗时（落 progress 列，刷新后可还原耗时）
+            yield Progress(scope="plan_reasoning", text="", key="__plan_reasoning_elapsed__",
+                           detail={"elapsed_ms": _now_ms() - t0})
 
     # ---- triage ----
     async def _is_simple(self, message: str) -> bool:
@@ -162,15 +189,14 @@ class Orchestrator:
                     yield ev
                 return
 
-            try:
-                plan, reason = await self._plan_capturing_reasoning(
-                    self._planner.plan(user_message))
-            except PlannerError:
+            out: dict = {}   # 边规划边流式发规划思考（顶部"任务计划思考"块），先于计划
+            async for ev in self._plan_streaming(self._planner.plan(user_message), out):
+                yield ev
+            if "error" in out:
                 async for ev in self._simple_answer(user_message, budget):   # 降级
                     yield ev
                 return
-            for _t in reason:   # 规划思考走独立通道（前端顶部"任务计划思考"块），先于计划展示
-                yield Progress(scope="plan_reasoning", text=_t)
+            plan = out["plan"]
             yield _plan_progress(plan)
 
             replan_count = 0
@@ -203,14 +229,14 @@ class Orchestrator:
                 for s in plan.steps:
                     if s.status in ("pending", "running"):
                         s.status = "skipped"
-                try:
-                    plan, reason = await self._plan_capturing_reasoning(
-                        self._planner.replan(user_message, plan, review.feedback))
-                except PlannerError:
+                out2: dict = {}   # 重规划思考也流式发，在新计划之前
+                async for ev in self._plan_streaming(
+                        self._planner.replan(user_message, plan, review.feedback), out2):
+                    yield ev
+                if "error" in out2:
                     break
+                plan = out2["plan"]
                 retry_hints = {}
-                for _t in reason:   # 重规划的思考也走 plan_reasoning 通道，在新计划之前发
-                    yield Progress(scope="plan_reasoning", text=_t)
                 yield _plan_progress(plan)
 
             # 无论产物多寡都尽力 synthesize：spec §5「其余一律尽量给用户一个（可能残缺但有说明的）

@@ -7,7 +7,7 @@ import { ToolLabel } from "./ToolLabel";
 
 export type ToolRow = {
   text: string; status?: "running" | "ok" | "error" | null; key?: string | null;
-  detail?: { tool: string; args?: unknown; result?: string; is_error?: boolean } | null;
+  detail?: { tool?: string; args?: unknown; result?: string; is_error?: boolean; elapsed_ms?: number } | null;
 };
 
 // 同 key 的开始/完成折叠成一行（后到覆盖），保留末态（带 result 的完成行）

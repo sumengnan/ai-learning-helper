@@ -20,10 +20,12 @@ export type ChatMessage = {
   content: string;
   reasoning?: string;   // 思考模式的推理内容（reasoning_content）；先于正文流式到达
   planReasoning?: string;  // 编排器"任务计划思考"（规划前的思考），走 Progress(scope=plan_reasoning)
+  planReasoningStartedAt?: number;  // 首个规划思考到达的时间戳，用于读秒
+  planReasoningMs?: number;         // 规划思考耗时（毫秒），计划出现时冻结
   reasoningMs?: number; // 思考耗时（毫秒）：首个 reasoning token→首个正文 token，完成时冻结；刷新后由后端还原
   reasoningStartedAt?: number;  // 客户端首次收到 reasoning 的时间戳，用于实时读秒（不落库）
   steps?: { tool: string; args: any; result?: string; isError?: boolean }[];
-  progress?: { scope: string; text: string; status?: "running" | "ok" | "error" | null; key?: string | null; agent?: string | null; detail?: { tool: string; args?: unknown; result?: string; is_error?: boolean } | null }[];
+  progress?: { scope: string; text: string; status?: "running" | "ok" | "error" | null; key?: string | null; agent?: string | null; detail?: { tool?: string; args?: unknown; result?: string; is_error?: boolean; elapsed_ms?: number } | null }[];
   // 每步校验标记（scope=check）：每个高风险工具一行，✓/✗ + 文案
   checks?: { tool: string; status: "ok" | "error"; text: string }[];
   // 轨迹 judge 三层质量分（scope=quality）：拆分/关键步/最终 + 简评；解析失败为 null
