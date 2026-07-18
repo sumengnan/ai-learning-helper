@@ -36,14 +36,16 @@ def _build_prompt(step: PlanStep, deps: dict[str, Artifact], hint: str = "") -> 
             lines.append(f"[{dep_id}] {art.summary}")
     if hint:
         lines.append(f"\n上次尝试未通过质检，请改进：{hint}")
-    lines.append("\n完成后直接给出该子任务的结果。")
+    # 节流引导：减少每步的联网/工具往返（延迟主要来自这些串行调用）
+    lines.append("\n要高效：检索类工具最多调用 2-3 次，信息够了就直接作答，不必反复搜。")
+    lines.append("完成后直接给出该子任务的结果。")
     return "\n".join(lines)
 
 
 class Executor:
     def __init__(self, client, registry: ToolRegistry, system_prompt: str,
                  model: str, *, max_steps: int = 10, budget=None,
-                 loop_detect_window: int = 0) -> None:
+                 loop_detect_window: int = 0, disable_thinking: bool = False) -> None:
         self._client = client
         self._registry = registry
         self._system_prompt = system_prompt
@@ -51,6 +53,8 @@ class Executor:
         self._max_steps = max_steps
         self._budget = budget
         self._loop_detect_window = loop_detect_window
+        # 子步是"带工具干活"的机械执行，思考链多为白烧延迟；开则本步强制关思考（与 fast/judge 档一致）
+        self._disable_thinking = disable_thinking
 
     async def execute(self, step: PlanStep, deps: dict[str, Artifact], hint: str = ""):
         """执行一步。yield Progress 事件，最后 yield 一个 StepArtifact。"""
@@ -66,6 +70,12 @@ class Executor:
         tool_names: dict[str, str] = {}
         tool_args: dict[str, object] = {}   # 暂存入参，供完成行带全（前端按 key 合并只留最后一条）
         token = set_current_agent(f"executor:{step.id}")
+        think_token = None
+        if self._disable_thinking:  # 本步强制关思考：叠加在外层 override 之上，finally 还原
+            from harness.llm.openai_compat import (
+                get_extra_body_override, set_extra_body_override)
+            think_token = set_extra_body_override(
+                {**get_extra_body_override(), "enable_thinking": False})
         try:
             # 步骤头行：让前端分组标题显示步骤描述而非裸 id（s1）
             yield Progress(scope, step.description, status="running", key=f"__hdr__:{step.id}")
@@ -89,4 +99,7 @@ class Executor:
                     error = ev.error
         finally:
             reset_current_agent(token)
+            if think_token is not None:
+                from harness.llm.openai_compat import reset_extra_body_override
+                reset_extra_body_override(think_token)
         yield StepArtifact(Artifact(summary=final_text, data={}, files=[]), error=error)

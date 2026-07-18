@@ -53,6 +53,43 @@ def test_build_prompt_includes_deps_and_hint():
     assert "补充示例" in p
 
 
+def test_build_prompt_nudges_economical_search():
+    """提示词含"少搜、够了就作答"的节流引导，减少每步的联网/工具往返。"""
+    from app.orchestration.executor import _build_prompt
+    p = _build_prompt(_step(), {})
+    assert "够了" in p or "最多" in p or "不必反复" in p
+
+
+async def test_executor_disable_thinking_sets_override():
+    """disable_thinking=True → 子步执行期间强制 enable_thinking=False（省思考链延迟）。"""
+    from harness.llm.openai_compat import get_extra_body_override
+    seen = {}
+    class ProbeClient:
+        async def stream(self, messages, schemas):
+            cur = get_extra_body_override() or {}
+            seen["thinking"] = cur.get("enable_thinking", "unset")
+            yield StreamChunk(type="text", text="ok")
+            yield StreamChunk(type="done")
+    ex = Executor(client=ProbeClient(), registry=ToolRegistry(), system_prompt="sp",
+                  model="m", max_steps=1, disable_thinking=True)
+    await _collect(ex.execute(_step(), {}))
+    assert seen["thinking"] is False
+
+
+async def test_executor_thinking_untouched_by_default():
+    """默认 disable_thinking=False → 不动 override（沿用外层上下文）。"""
+    from harness.llm.openai_compat import get_extra_body_override
+    seen = {}
+    class ProbeClient:
+        async def stream(self, messages, schemas):
+            seen["thinking"] = (get_extra_body_override() or {}).get("enable_thinking", "unset")
+            yield StreamChunk(type="text", text="ok")
+            yield StreamChunk(type="done")
+    ex = Executor(client=ProbeClient(), registry=ToolRegistry(), system_prompt="sp", model="m", max_steps=1)
+    await _collect(ex.execute(_step(), {}))
+    assert seen["thinking"] == "unset"
+
+
 def _tool_then_done_turns():
     from harness.llm.base import ToolCallDelta
     return [
