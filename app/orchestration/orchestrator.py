@@ -195,23 +195,31 @@ class Orchestrator:
 
             tasks = [asyncio.create_task(_worker(s)) for s in ready]
             remaining = len(tasks)
-            while remaining:
-                kind, payload = await queue.get()
-                if kind == "ev":
-                    yield payload
-                    continue
-                step, art, err = payload
-                remaining -= 1
-                if art is None or err:
-                    self._on_step_fail(step, retry_hints, err or "执行未产出结果")
-                    continue
-                verdict = await self._critic.validate(step, art)
-                if verdict.ok:
-                    step.status = "done"
-                    step.result = art
-                    retry_hints.pop(step.id, None)
-                else:
-                    self._on_step_fail(step, retry_hints, verdict.reason)
+            try:
+                while remaining:
+                    kind, payload = await queue.get()
+                    if kind == "ev":
+                        yield payload
+                        continue
+                    step, art, err = payload
+                    remaining -= 1
+                    if art is None or err:
+                        self._on_step_fail(step, retry_hints, err or "执行未产出结果")
+                        continue
+                    verdict = await self._critic.validate(step, art)
+                    if verdict.ok:
+                        step.status = "done"
+                        step.result = art
+                        retry_hints.pop(step.id, None)
+                    else:
+                        self._on_step_fail(step, retry_hints, verdict.reason)
+            finally:
+                # 提前放弃迭代（客户端断连/停止 → 本生成器 aclose，GeneratorExit 抛在 yield 处）
+                # 时，同批未完成的 worker 必须取消，否则会变成继续跑 LLM 的悬挂任务。正常跑完时
+                # 所有 task 已 done，cancel 是空操作、gather 立即返回，零额外开销。
+                for t in tasks:
+                    t.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
             yield _plan_progress(plan)
 
     def _on_step_fail(self, step, retry_hints: dict[str, str], reason: str) -> None:

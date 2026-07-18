@@ -182,3 +182,36 @@ async def test_parallel_steps_actually_concurrent():
     orch._executor = probe
     await _run(orch)
     assert probe.peak >= 2   # 两个无依赖步真的同时在跑；顺序执行时 peak 恒为 1
+
+
+async def test_early_abort_cancels_pending_workers():
+    """提前放弃迭代（客户端断连/停止 → 生成器 aclose）时，同批未完成的 worker 必须被取消，
+    不能变成继续跑 LLM 的悬挂任务。"""
+    import asyncio
+    from app.orchestration.executor import StepArtifact
+    from app.orchestration.plan import Artifact
+    cancelled: set[str] = set()
+
+    class MixedExecutor:
+        """s_fast 立刻产出一个事件；s_slow 阻塞，被取消时记录自己。"""
+        async def execute(self, step, deps, hint=""):
+            if step.id == "s_slow":
+                try:
+                    await asyncio.sleep(100)
+                except asyncio.CancelledError:
+                    cancelled.add(step.id)
+                    raise
+                yield StepArtifact(Artifact(summary="done-s_slow"))
+            else:
+                yield Progress(f"subagent:executor:{step.id}", "开始")
+                await asyncio.sleep(100)   # 让首个事件先被 yield 出去，随后也挂住
+                yield StepArtifact(Artifact(summary="done-s_fast"))
+
+    orch = _mk(FakePlanner([_plan(_s("s_fast"), _s("s_slow"))]), FakeCritic(), [])
+    orch._executor = MixedExecutor()
+    agen = orch._schedule_rounds(_plan(_s("s_fast"), _s("s_slow")), {})
+    first = await agen.__anext__()          # 拿到 s_fast 的首个 Progress，此时两 worker 都在途
+    assert isinstance(first, Progress)
+    await agen.aclose()                      # 模拟提前放弃 → 应取消未完成 worker
+    await asyncio.sleep(0)                    # 放行取消回调
+    assert "s_slow" in cancelled             # 悬挂 worker 被取消（未取消时此断言失败）
