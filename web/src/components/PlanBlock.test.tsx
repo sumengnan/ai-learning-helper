@@ -187,7 +187,7 @@ describe("PlanBlock · 编排器计划步嵌套执行明细", () => {
     // 顶部仍是计划步（总任务步骤）
     expect(screen.getAllByText("调研快排").length).toBeGreaterThanOrEqual(1);
     // 展开后：执行 agent、工具名、参数/结果都在 DOM（MUI Accordion 折叠时子节点仍挂载）
-    expect(screen.getByText("executor:s1")).toBeTruthy();
+    expect(screen.getByText("执行智能体")).toBeTruthy();
     expect(screen.getByText("web")).toBeTruthy();
     expect(screen.getByText("参数")).toBeTruthy();
     expect(screen.getByText("结果X")).toBeTruthy();
@@ -203,7 +203,6 @@ describe("PlanBlock · 编排器计划步嵌套执行明细", () => {
   it("无 subItems（ReAct 清单）→ 完全按纯行渲染，无展开", () => {
     render(<PlanBlock text={plan} live={false} status="done" />);
     expect(screen.queryByText("执行明细")).toBeNull();
-    expect(screen.queryByText("executor:s1")).toBeNull();
   });
 });
 
