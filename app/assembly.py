@@ -32,6 +32,7 @@ class Harness:
     sandbox: object | None = None            # 绑进工具的会话级沙箱代理（SandboxProxy）
     sandbox_manager: object | None = None    # 会话级容器生命周期管理（销毁/关停/清扫）
     mcp_manager: object | None = None        # MCP 客户端管理器（startup 期连接、注册远程工具）
+    orchestrator: object | None = None       # 启用编排器时的 Plan-Execute-Reflect 控制器
 
 
 def build_harness(config) -> Harness:
@@ -243,6 +244,27 @@ def build_harness(config) -> Harness:
         from harness.mcp import MCPManager
         mcp_manager = MCPManager(config)
 
+    # 编排器（Plan-Execute-Reflect，按开关组装；默认关闭 → 零行为变更，走原 ReAct AgentLoop）
+    orchestrator = None
+    if config.enable_orchestrator:
+        from app.completion import build_completer, build_fast_completer
+        from app.orchestration.orchestrator import Orchestrator
+        from app.orchestration.planner import Planner
+        from app.orchestration.critic import Critic
+        from app.orchestration.executor import Executor
+        _plan_complete = build_completer(client, config.model)     # 规划/裁判用主模型
+        _fast_complete = build_fast_completer(client, config)      # triage 用快速档
+        orchestrator = Orchestrator(
+            client=client, registry=reg, model=config.model,
+            planner=Planner(_plan_complete, max_retries=config.orchestrator_planner_max_retries),
+            critic=Critic(_plan_complete),
+            executor=Executor(client, reg, config.app_system_prompt, config.model,
+                              max_steps=config.orchestrator_step_max_steps,
+                              loop_detect_window=config.loop_detect_window),
+            fast_complete=_fast_complete,
+            max_step_retry=config.orchestrator_max_step_retry,
+            max_replan=config.orchestrator_max_replan)
+
     traj = TrajectoryStore(config.persistence_db_path)
     return Harness(
         client=client, registry=reg,
@@ -253,4 +275,4 @@ def build_harness(config) -> Harness:
         memory_maintainer=memory_maintainer,
         download_store=dstore,
         skill_registry=skill_registry, sandbox=sandbox, sandbox_manager=sandbox_manager,
-        mcp_manager=mcp_manager)
+        mcp_manager=mcp_manager, orchestrator=orchestrator)
