@@ -19,6 +19,7 @@ import { MessageMeta } from "./MessageMeta";
 import { linkifyCitations, citeId } from "./citations";
 import { EmptyHint } from "./EmptyHint";
 import { ProgressBlock } from "./ProgressBlock";
+import { SubagentProgress } from "./SubagentProgress";
 import { VerifyBadge, isGateOpen } from "./VerifyBadge";
 import { PlanBlock } from "./PlanBlock";
 import { Markdown } from "./Markdown";
@@ -516,7 +517,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                   <>
                     <ProgressBlock title="技能" kind="skill" items={skill} status="ok" />
                     <ProgressBlock title="沙箱执行" kind="sandbox" items={sandbox} status={sbStatus} />
-                    <ProgressBlock title="子代理执行" kind="subagent" items={sub} status={subStatus} />
+                    <SubagentProgress items={sub} live={live} stopped={stopped} status={subStatus} />
                   </>
                 );
               })()}
