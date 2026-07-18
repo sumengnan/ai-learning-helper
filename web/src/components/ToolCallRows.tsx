@@ -3,6 +3,7 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
 import { ToolCallDetail } from "./ToolCallDetail";
+import { ToolLabel } from "./ToolLabel";
 
 export type ToolRow = {
   text: string; status?: "running" | "ok" | "error" | null; key?: string | null;
@@ -42,7 +43,9 @@ export function ToolCallRows({ rows, live }: { rows: ToolRow[]; live: boolean })
             sx={{ minHeight: 0, px: 0,
                   "& .MuiAccordionSummary-content": { my: 0.4, alignItems: "center", gap: 0.75 } }}>
             {rowIcon(p, live)}
-            <Typography variant="caption">{p.detail?.tool || p.text}</Typography>
+            <Typography variant="caption" component="div">
+              <ToolLabel name={p.detail?.tool || p.text} />
+            </Typography>
           </AccordionSummary>
           <AccordionDetails sx={{ px: 0, pt: 0 }}>
             <ToolCallDetail args={p.detail?.args} result={p.detail?.result} isError={p.detail?.is_error} />

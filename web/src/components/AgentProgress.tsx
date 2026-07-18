@@ -9,30 +9,11 @@ import CancelIcon from "@mui/icons-material/Cancel";
 import StopCircleIcon from "@mui/icons-material/StopCircle";
 import BuildIcon from "@mui/icons-material/Build";
 import { CollapsibleBlock } from "./CollapsibleBlock";
-import { EllipsisText } from "./EllipsisText";
 import { ToolCallDetail } from "./ToolCallDetail";
-
-// MCP 工具名为 mcp__<server>__<tool>；拆出来友好展示为「server · tool」并挂 MCP 标签。
-function mcpParts(name: string): { server: string; tool: string } | null {
-  const m = /^mcp__(.+?)__(.+)$/.exec(name);
-  return m ? { server: m[1], tool: m[2] } : null;
-}
+import { ToolLabel } from "./ToolLabel";
 
 // 标题右侧「最后一步」预览的硬字数上限，超出显示 …
 const SUMMARY_MAX = 24;
-
-// 工具名标签：MCP 工具显示「MCP」小标签 + server·tool，普通工具原样显示。
-function ToolLabel({ name, sx, maxChars }: { name: string; sx?: object; maxChars?: number }) {
-  const mcp = mcpParts(name);
-  if (!mcp) return <EllipsisText text={name} sx={sx} maxChars={maxChars} />;
-  return (
-    <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, minWidth: 0, ...sx }}>
-      <Chip label="MCP" size="small" color="secondary" variant="outlined"
-        sx={{ height: 16, "& .MuiChip-label": { px: 0.5, fontSize: 10, fontWeight: 700 } }} />
-      <EllipsisText text={`${mcp.server} · ${mcp.tool}`} maxChars={maxChars} />
-    </Box>
-  );
-}
 
 // 未完成步骤的图标：仅生成中(live)转圈；用户停止→灰色停止；其余终态→红叉（被打断，未完成）
 function pendingIcon(live: boolean, stopped: boolean, size: number) {
