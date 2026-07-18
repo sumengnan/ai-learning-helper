@@ -12,7 +12,7 @@ import uuid
 
 from harness.context.manager import ContextManager
 from harness.events import (
-    Progress, RunFinished, RunStarted, TextDelta,
+    Progress, ReasoningDelta, RunFinished, RunStarted, TextDelta,
 )
 from harness.loop.agent_loop import AgentLoop
 from harness.reliability.budget import BudgetExceeded
@@ -93,7 +93,8 @@ class Orchestrator:
 
     # ---- synthesize ----
     async def _synthesize(self, goal: str, artifacts: dict[str, Artifact]):
-        """流式汇总最终答复。只 yield TextDelta；run() 累加这些 delta 得最终文本。"""
+        """流式汇总最终答复。yield TextDelta（run() 累加得最终文本）+ ReasoningDelta（开思考模式时
+        把最终答复的思考过程透传给前端——编排器路径唯一该展示思考的地方）。"""
         loop = AgentLoop(
             client=self._client, registry=ToolRegistry(),
             context=ContextManager(SYNTH_SYSTEM), max_steps=1, model_name=self._model)
@@ -102,6 +103,8 @@ class Orchestrator:
         async for ev in loop.run(_synth_user(goal, artifacts)):
             if isinstance(ev, TextDelta):
                 streamed = True
+                yield ev
+            elif isinstance(ev, ReasoningDelta):   # 思考过程透传（前端 ThinkingBlock 展示）
                 yield ev
             elif isinstance(ev, RunFinished):
                 final = ev.message.content or ""

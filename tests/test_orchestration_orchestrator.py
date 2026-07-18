@@ -162,6 +162,21 @@ async def test_validate_fail_retries_bounded_then_failed():
     assert order.count("s1") == 2                # 初次 + 1 次重试（max_step_retry=2）
 
 
+async def test_synthesize_forwards_reasoning(make_mock):
+    """开思考模式时，最终答复(synthesize)的思考过程应转发到前端，而不是被吞掉。"""
+    from harness.llm.base import StreamChunk
+    from harness.events import ReasoningDelta
+    orch = Orchestrator.__new__(Orchestrator)
+    orch._client = make_mock([[StreamChunk(type="reasoning", text="先想一下"),
+                               StreamChunk(type="text", text="答复"),
+                               StreamChunk(type="done")]])
+    orch._model = "m"
+    from app.orchestration.plan import Artifact
+    evs = [ev async for ev in orch._synthesize("目标", {"s1": Artifact(summary="x")})]
+    assert any(isinstance(e, ReasoningDelta) and "先想一下" in e.text for e in evs)
+    assert any(isinstance(e, TextDelta) and "答复" in e.text for e in evs)
+
+
 async def test_synthesize_falls_back_when_no_stream(make_mock):
     from harness.llm.base import StreamChunk
     orch = Orchestrator.__new__(Orchestrator)
