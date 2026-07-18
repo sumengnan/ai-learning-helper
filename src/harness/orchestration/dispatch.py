@@ -71,22 +71,28 @@ class DispatchTool(Tool):
         error = None
         scope = f"subagent:{params.agent}"
         emit(Progress(scope, f"开始任务：{params.task}"))
-        # 记录每个工具调用 id 对应的工具名，以便在 ToolFinished 时回填名称与状态
+        # 记录每个工具调用 id 对应的工具名/入参，以便在 ToolFinished 时回填名称、状态与明细
         tool_names: dict[str, str] = {}
+        tool_args: dict[str, object] = {}
         # 标记归属：子 agent 执行期间深层沙箱进度由 emit() 自动打上本 agent 名
         agent_token = set_current_agent(params.agent)
         try:
             async for ev in sub_loop.run(params.task):
                 if isinstance(ev, ToolStarted):
-                    tool_names[ev.tool_call.id] = ev.tool_call.name
+                    tc = ev.tool_call
+                    tool_names[tc.id] = tc.name
+                    tool_args[tc.id] = tc.arguments
                     # status=running + key=工具调用 id：前端把「开始/完成」折叠成同一行并更新状态
-                    emit(Progress(scope, f"调用工具 {ev.tool_call.name}",
-                                  status="running", key=ev.tool_call.id))
+                    emit(Progress(scope, f"调用工具 {tc.name}",
+                                  status="running", key=tc.id,
+                                  detail={"tool": tc.name, "args": tc.arguments}))
                 elif isinstance(ev, ToolFinished):
                     r = ev.result
                     name = tool_names.get(r.tool_call_id, "工具")
                     emit(Progress(scope, f"调用工具 {name}",
-                                  status="error" if r.is_error else "ok", key=r.tool_call_id))
+                                  status="error" if r.is_error else "ok", key=r.tool_call_id,
+                                  detail={"tool": name, "args": tool_args.get(r.tool_call_id),
+                                          "result": r.content, "is_error": r.is_error}))
                 elif isinstance(ev, RunFinished):
                     final = ev.message.content
                 elif isinstance(ev, RunError):
