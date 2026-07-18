@@ -221,8 +221,14 @@ class Orchestrator:
                 if not verify:   # 结果校验关：跑完一轮直接汇总交付，不做终局 review/重规划
                     break
 
+                # 结果校验过程可见（对应前端结果校验开关）：走 scope=verify，前端 VerifyBadge 据此
+                # 显示「结果校验中…→通过/未通过」；不通过带缺口说明，重规划后会再发一轮，形成校验历史。
+                yield Progress(scope="verify", text="结果校验中…", status="running")
                 review = await self._critic.review(user_message, plan, all_artifacts)
-                yield Progress(scope="reflect", text=("通过" if review.accept else f"需改进：{review.feedback}"))
+                yield Progress(scope="verify",
+                               text="结果校验通过" if review.accept
+                                    else (review.feedback or "存在缺口，重新规划"),
+                               status="ok" if review.accept else "error")
                 if review.accept or replan_count >= self._max_replan:
                     break
                 replan_count += 1

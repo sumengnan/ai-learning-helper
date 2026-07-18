@@ -26,6 +26,15 @@ describe("ProgressBlock", () => {
     expect(screen.getByText(long)).toBeTruthy();       // 展开正文仍是完整文本
   });
 
+  it("沙箱步骤的 executor:sN 归属 → 显示为可读的「步骤 sN」", () => {
+    render(<ProgressBlock title="沙箱执行" kind="sandbox" status="ok" items={[
+      { scope: "sandbox", text: "执行 python", status: "ok", agent: "executor:s2" },
+    ]} />);
+    // 机器味的 "executor:s2" 转成用户能读懂的「步骤 s2」（标题预览 + 正文均出现）
+    expect(screen.getAllByText("步骤 s2").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("executor:s2")).toBeNull();
+  });
+
   it("子代理块：每步前缀子 agent 名", () => {
     render(<ProgressBlock title="子代理执行" kind="subagent" status="ok" items={[
       { scope: "subagent:出题官", text: "调用工具 sample_questions", status: "ok" },

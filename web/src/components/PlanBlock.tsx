@@ -1,5 +1,5 @@
 import { type ReactNode } from "react";
-import { Box, Typography, CircularProgress, Chip, Accordion, AccordionSummary, AccordionDetails } from "@mui/material";
+import { Box, Typography, CircularProgress, Chip, Tooltip, Accordion, AccordionSummary, AccordionDetails } from "@mui/material";
 import { EllipsisText } from "./EllipsisText";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
@@ -193,17 +193,23 @@ export function PlanBlock({ text, live = false, stopped = false, status, subItem
               {i + 1}.
             </Typography>
             {stepIcon(s, fates[i])}
-            <Typography
-              variant="body2"
-              sx={{
-                fontWeight: 500,   // 着重突出步骤项，不再是淡灰小字
-                color: s.status === "failed" ? "error.main"
-                  : s.status === "skipped" ? "text.disabled" : "text.primary",
-                // 完成后不加删除线（此前的 line-through 已去掉）
-              }}
-            >
-              {s.title}{SUFFIX[fates[i]] ?? ""}
-            </Typography>
+            {/* 步骤标题只占一行：超出宽度截断为 …，hover 显示完整（issue 1）。
+                flex:1+minWidth:0 让它撑到最右再截断，并把右侧簇（并行/依赖/耗时）顶到行末。 */}
+            <Tooltip title={`${s.title}${SUFFIX[fates[i]] ?? ""}`} placement="top">
+              <Typography
+                variant="body2"
+                noWrap
+                sx={{
+                  flex: 1, minWidth: 0,
+                  fontWeight: 500,   // 着重突出步骤项，不再是淡灰小字
+                  color: s.status === "failed" ? "error.main"
+                    : s.status === "skipped" ? "text.disabled" : "text.primary",
+                  // 完成后不加删除线（此前的 line-through 已去掉）
+                }}
+              >
+                {s.title}{SUFFIX[fates[i]] ?? ""}
+              </Typography>
+            </Tooltip>
             {/* 右侧簇：并行徽章 / 依赖标注 / 耗时，整体右对齐到本行最右侧。
                 读秒严格以 fate==="live" 为闸：已停止/已中断/已结束的 run 快照里仍留着 running 步，
                 照读会一直涨（此时该步已按 已取消/状态未知 呈现）；无 elapsed_ms 的不显示时间。 */}
