@@ -863,7 +863,32 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 return Progress("sources", json.dumps(items, ensure_ascii=False))
 
             try:
-                if not gate_on:
+                if config.enable_orchestrator and getattr(harness, "orchestrator", None) is not None:
+                    # 编排器路径：单次流式，直接把 harness.orchestrator 当作 loop_obj 交给 _drain
+                    # （其 run(message) 签名与 AgentLoop 相同、只 yield 既有 Event 类型），复用同一套
+                    # 事件处理与 SSE 下发。天然跳过交付门——编排器自带质量把关与计划终态（见设计 §4）。
+                    # 事件源换成编排器，_drain 之后的兜底逻辑照抄下方直通路径。
+                    collect = {"final": None, "error": None, "steps": steps,
+                               "grounding": [], "progress": progress, "usage": None,
+                               "reasoning": ""}
+                    run_id_a = uuid4().hex
+                    store.add_run(req.conversation_id, run_id_a)
+                    source_sink.reset()
+                    async for s in _drain(harness.orchestrator, run_id_a, model_message, True, collect):
+                        yield _acc(s)
+                    errored = collect["final"] is None
+                    if not errored:
+                        delivered = collect["final"]
+                    elif collect["error"] is not None:
+                        partial = "".join(parts).strip()
+                        hint = "（本轮未能完成，请重试）"
+                        delivered = f"{partial}\n\n{hint}" if partial else hint
+                    else:
+                        empty_text = "模型未返回任何内容（可能触发内容策略或上游限流），请重试"
+                        delivered = f"[出错] {empty_text}"
+                        yield RunError(error=empty_text)
+                    delivered_sources = source_sink.snapshot()
+                elif not gate_on:
                     # 直通路径：单次尝试、逐字流式（与开门前行为一致）
                     collect = {"final": None, "error": None, "steps": steps,
                                "grounding": [], "progress": progress, "usage": None,
