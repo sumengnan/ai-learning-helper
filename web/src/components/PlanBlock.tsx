@@ -1,5 +1,5 @@
 import { type ReactNode } from "react";
-import { Box, Typography, CircularProgress } from "@mui/material";
+import { Box, Typography, CircularProgress, Chip, Accordion, AccordionSummary, AccordionDetails } from "@mui/material";
 import { EllipsisText } from "./EllipsisText";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
@@ -7,18 +7,25 @@ import RadioButtonUncheckedIcon from "@mui/icons-material/RadioButtonUnchecked";
 import HelpOutlineIcon from "@mui/icons-material/HelpOutlined";
 import StopCircleIcon from "@mui/icons-material/StopCircle";
 import PlaylistAddCheckIcon from "@mui/icons-material/PlaylistAddCheck";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import { CollapsibleBlock } from "./CollapsibleBlock";
 import { fmtDuration } from "./duration";
 import { LiveDuration } from "./LiveDuration";
+import { ToolCallRows, mergeByKey, type ToolRow } from "./ToolCallRows";
 
 type PlanStatus = "pending" | "running" | "done" | "failed";
 // 计时字段由后端跨 update_plan 快照算出、烤进 plan JSON（见 app/tools/plan_tool.py）：
 // 已结束的步骤给 elapsed_ms（定格值），进行中的给 started_at_ms（epoch 毫秒，供前端读秒）。
 // plan 走 progress 通道落库，故刷新后耗时仍在、进行中的也能接着读。没走过 running 的两者皆无。
+// id：编排器计划步带（见 orchestrator._plan_progress），供把 executor:<id> 的执行明细挂到该步下；
+// ReAct 的 update_plan 清单无 id，则各步照常渲染成不可展开的纯行。
 type PlanStepData = {
-  title: string; status: PlanStatus;
+  id?: string; title: string; status: PlanStatus;
   elapsed_ms?: number | null; started_at_ms?: number | null;
 };
+
+// 归属该计划步的 executor 执行明细（工具调用），来自 scope=subagent:executor:<id> 的进度行
+type SubItem = ToolRow & { scope: string };
 
 // 步骤耗时多为秒级，fmtDuration 对不足 1 秒会显示「0 秒」，这里改用「<1 秒」避免误读
 const fmtStep = (ms: number) => (ms < 1000 ? "<1 秒" : fmtDuration(ms));
@@ -85,8 +92,11 @@ const SUFFIX: Partial<Record<Fate, string>> = {
 };
 
 // 任务步骤：可折叠（issue 3）；用户停止后运行中的步骤标「已取消」（issue 2）
-export function PlanBlock({ text, live = false, stopped = false, status }: {
+// subItems：编排器 executor 的执行明细；带 id 的计划步会把对应 executor:<id> 的工具调用
+// 嵌到该步下、可逐层展开（计划步 → 执行 agent+工具 → 工具入参/返回）。
+export function PlanBlock({ text, live = false, stopped = false, status, subItems = [] }: {
   text?: string | null; live?: boolean; stopped?: boolean; status?: string;
+  subItems?: SubItem[];
 }) {
   const steps = parseSteps(text);
   if (!steps.length) return null;
@@ -128,33 +138,66 @@ export function PlanBlock({ text, live = false, stopped = false, status }: {
       icon={<PlaylistAddCheckIcon sx={{ fontSize: 16 }} color="action" />}
       title="任务步骤" status={blockStatus} summary={summary} defaultExpanded
     >
-      {steps.map((s, i) => (
-        <Box key={i} sx={{ display: "flex", alignItems: "center", gap: 0.75, py: 0.2 }}>
-          {stepIcon(s, fates[i])}
-          <Typography
-            variant="caption"
-            sx={{
-              color: s.status === "failed" ? "error.main" : "text.secondary",
-              textDecoration: s.status === "done" ? "line-through" : "none",
-            }}
-          >
-            {s.title}{SUFFIX[fates[i]] ?? ""}
-          </Typography>
-          {/* 进行中且确实还在跑 → 读秒；已结束 → 定格耗时。
-              读秒严格以 fate==="live" 为闸：已停止/已中断/已结束的 run 其快照里仍留着
-              running 步骤，照读会一直涨下去（此时该步已按 已取消/状态未知 呈现，
-              再给个跳动的秒数只会误导）。
-              没有 elapsed_ms 的步骤不显示时间：模型跳过 running 直接置 done 时后端拿不到
-              起点，宁可留空也不编（见 plan_tool._apply_timing）。 */}
-          {fates[i] === "live" && s.status === "running" && s.started_at_ms != null ? (
-            <StepDuration>
-              <LiveDuration startedAt={s.started_at_ms} format={fmtStep} />
-            </StepDuration>
-          ) : s.elapsed_ms != null ? (
-            <StepDuration>{fmtStep(s.elapsed_ms)}</StepDuration>
-          ) : null}
-        </Box>
-      ))}
+      {steps.map((s, i) => {
+        // 行内容（图标+标题+耗时），纯行与可展开步的摘要共用
+        const rowContent = (
+          <>
+            {stepIcon(s, fates[i])}
+            <Typography
+              variant="caption"
+              sx={{
+                color: s.status === "failed" ? "error.main" : "text.secondary",
+                textDecoration: s.status === "done" ? "line-through" : "none",
+              }}
+            >
+              {s.title}{SUFFIX[fates[i]] ?? ""}
+            </Typography>
+            {/* 进行中且确实还在跑 → 读秒；已结束 → 定格耗时。
+                读秒严格以 fate==="live" 为闸：已停止/已中断/已结束的 run 其快照里仍留着
+                running 步骤，照读会一直涨下去（此时该步已按 已取消/状态未知 呈现，
+                再给个跳动的秒数只会误导）。
+                没有 elapsed_ms 的步骤不显示时间：模型跳过 running 直接置 done 时后端拿不到
+                起点，宁可留空也不编（见 plan_tool._apply_timing）。 */}
+            {fates[i] === "live" && s.status === "running" && s.started_at_ms != null ? (
+              <StepDuration>
+                <LiveDuration startedAt={s.started_at_ms} format={fmtStep} />
+              </StepDuration>
+            ) : s.elapsed_ms != null ? (
+              <StepDuration>{fmtStep(s.elapsed_ms)}</StepDuration>
+            ) : null}
+          </>
+        );
+        // 该步对应的 executor 执行明细（工具调用）；无 id 或无匹配（如 ReAct 清单）→ 纯行
+        const toolRows = s.id
+          ? mergeByKey(subItems.filter((p) => p.scope === `subagent:executor:${s.id}`))
+              .filter((r) => r.detail)
+          : [];
+        if (!toolRows.length) {
+          return (
+            <Box key={i} sx={{ display: "flex", alignItems: "center", gap: 0.75, py: 0.2 }}>
+              {rowContent}
+            </Box>
+          );
+        }
+        return (
+          <Accordion key={i} disableGutters elevation={0}
+            sx={{ bgcolor: "transparent", "&:before": { display: "none" } }}>
+            <AccordionSummary expandIcon={<ExpandMoreIcon fontSize="small" />}
+              sx={{ minHeight: 0, px: 0,
+                    "& .MuiAccordionSummary-content": { my: 0.2, alignItems: "center", gap: 0.75 } }}>
+              {rowContent}
+            </AccordionSummary>
+            <AccordionDetails sx={{ px: 0, pt: 0, pl: 2 }}>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 0.25 }}>
+                <Chip label={`executor:${s.id}`} size="small" color="secondary" variant="outlined"
+                  sx={{ height: 16, "& .MuiChip-label": { px: 0.5, fontSize: 10, fontWeight: 700 } }} />
+                <Typography variant="caption" color="text.disabled">执行明细</Typography>
+              </Box>
+              <ToolCallRows rows={toolRows} live={live} />
+            </AccordionDetails>
+          </Accordion>
+        );
+      })}
     </CollapsibleBlock>
   );
 }
