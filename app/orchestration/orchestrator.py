@@ -125,12 +125,12 @@ class Orchestrator:
         replan_count = 0
         retry_hints: dict[str, str] = {}
         while True:
-            deadlock = False
+            aborted = False
             async for ev in self._schedule_rounds(plan, retry_hints):
                 yield ev
                 if isinstance(ev, RunError):
-                    deadlock = True
-            if deadlock:
+                    aborted = True
+            if aborted:
                 return
 
             artifacts = {s.id: s.result for s in plan.steps

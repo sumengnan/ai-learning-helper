@@ -1,13 +1,17 @@
 from harness.events import Progress, RunError, RunFinished, RunStarted, TextDelta
 from app.orchestration.orchestrator import Orchestrator
 from app.orchestration.plan import Artifact, Plan, PlanStep, Verdict, Review
+from app.orchestration.planner import PlannerError
 
 
 # ---- 测试替身 ----
 class FakePlanner:
-    def __init__(self, plans):
+    def __init__(self, plans, raise_on_plan=False):
         self._plans = list(plans); self._i = 0
+        self._raise_on_plan = raise_on_plan
     async def plan(self, goal):
+        if self._raise_on_plan:
+            raise PlannerError("boom")
         p = self._plans[0]; return p
     async def replan(self, goal, plan, feedback):
         self._i += 1
@@ -125,3 +129,56 @@ async def test_validate_fail_retries_bounded_then_failed():
     events = await _run(orch)
     assert isinstance(events[-1], RunFinished)   # 不因单步失败崩溃
     assert order.count("s1") == 2                # 初次 + 1 次重试（max_step_retry=2）
+
+
+async def test_synthesize_falls_back_when_no_stream(make_mock):
+    from harness.llm.base import StreamChunk
+    orch = Orchestrator.__new__(Orchestrator)
+    orch._client = make_mock([[StreamChunk(type="text", text="汇总答复"), StreamChunk(type="done")]])
+    orch._model = "m"
+    from app.orchestration.plan import Artifact
+    evs = [ev async for ev in orch._synthesize("目标", {"s1": Artifact(summary="x")})]
+    from harness.events import TextDelta
+    assert any(isinstance(e, TextDelta) and "汇总答复" in e.text for e in evs)
+
+
+async def test_planner_error_falls_back_to_simple_answer():
+    order = []
+    orch = _mk(FakePlanner([], raise_on_plan=True), FakeCritic(), order)
+    events = await _run(orch)
+    assert isinstance(events[-1], RunFinished)
+    assert events[-1].message.content == "简单答复"
+    assert order == []   # 从未进入编排/执行
+
+
+async def test_budget_exceeded_aborts():
+    from harness.reliability.budget import BudgetExceeded
+    class BadBudget:
+        def start(self): pass
+        def check(self): raise BudgetExceeded("超预算")
+    order = []
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(reviews=(True,)), order)
+    orch._budget = BadBudget()
+    events = await _run(orch)
+    from harness.events import RunError, RunFinished
+    assert any(isinstance(e, RunError) for e in events)
+    assert not isinstance(events[-1], RunFinished)
+
+
+async def test_parallel_steps_actually_concurrent():
+    import asyncio
+    from app.orchestration.executor import StepArtifact
+    from app.orchestration.plan import Artifact
+    class ProbeExecutor:
+        def __init__(self):
+            self.now = 0; self.peak = 0
+        async def execute(self, step, deps, hint=""):
+            self.now += 1; self.peak = max(self.peak, self.now)
+            await asyncio.sleep(0)
+            self.now -= 1
+            yield StepArtifact(Artifact(summary=f"done-{step.id}"))
+    probe = ProbeExecutor()
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2"))]), FakeCritic(reviews=(True,)), [])
+    orch._executor = probe
+    await _run(orch)
+    assert probe.peak >= 2   # 两个无依赖步真的同时在跑；顺序执行时 peak 恒为 1
