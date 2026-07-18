@@ -67,12 +67,13 @@ def _review_user(goal: str, plan: Plan, artifacts: dict) -> str:
 
 
 class Critic:
-    def __init__(self, complete) -> None:
-        self._complete = complete
+    def __init__(self, complete, *, validate_complete=None) -> None:
+        self._complete = complete                        # 终局 review 用（质量要求高，走主模型）
+        self._validate = validate_complete or complete   # 单步 validate 用（频繁，可走快速档提速）
 
     async def validate(self, step: PlanStep, artifact: Artifact) -> Verdict:
         try:
-            v = await call_json(self._complete, VALIDATE_SYSTEM, _validate_user(step, artifact))
+            v = await call_json(self._validate, VALIDATE_SYSTEM, _validate_user(step, artifact))
             return Verdict(ok=_coerce_bool(v.get("ok"), True), reason=str(v.get("reason", "")))
         except Exception as e:  # fail-open：抖动放行
             _log.warning("Critic.validate 调用失败，fail-open 放行：%s", e)

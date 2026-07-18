@@ -69,6 +69,7 @@ class AppConfig(HarnessConfig):
     orchestrator_max_replan: int = 2           # 终局重规划轮数上限
     orchestrator_planner_max_retries: int = 2  # Planner 出无效 DAG 的重试上限
     orchestrator_step_max_steps: int = 10      # 每个 Executor 步内部 AgentLoop 的步数上限
+    orchestrator_step_disable_thinking: bool = True  # 执行子步强制关思考链（机械执行提速；关闭则跟随聊天开关）
     enable_skills: bool = False
     enable_mcp: bool = False          # MCP 客户端总开关；开则按 mcp_config_path 连接 server
     cors_origins: list = ["http://localhost:5173"]

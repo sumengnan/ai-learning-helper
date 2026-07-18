@@ -32,6 +32,32 @@ async def test_validate_fail():
     assert v.ok is False and "答非所问" in v.reason
 
 
+async def test_validate_uses_separate_completer_review_uses_main():
+    """validate 走 validate_complete（快速档），review 走主 complete；各自命中不串。"""
+    calls = []
+    def _tagged(tag, payload):
+        async def complete(system, user):
+            calls.append(tag)
+            return json.dumps(payload)
+        return complete
+    critic = Critic(_tagged("main", {"accept": True, "feedback": ""}),
+                    validate_complete=_tagged("fast", {"ok": True, "reason": "ok"}))
+    await critic.validate(_step(), Artifact(summary="x"))
+    assert calls == ["fast"], "validate 应走 validate_complete"
+    await critic.review("目标", Plan(goal="g", steps=[_step()]), {"s1": Artifact(summary="x")})
+    assert calls == ["fast", "main"], "review 应走主 complete"
+
+
+async def test_validate_complete_defaults_to_main():
+    """不传 validate_complete 时回退主 complete（向后兼容）。"""
+    calls = []
+    async def complete(system, user):
+        calls.append("main"); return json.dumps({"ok": True, "reason": ""})
+    critic = Critic(complete)
+    await critic.validate(_step(), Artifact(summary="x"))
+    assert calls == ["main"]
+
+
 async def test_validate_fail_open_on_error():
     """线上路径：判官调用抖动 → 放行（ok=True），绝不因基建抖动拦交付。"""
     critic = Critic(_raising_complete())

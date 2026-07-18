@@ -46,7 +46,7 @@ def _mk(planner, critic, order, triage_simple=False, synth="最终答复", max_r
     async def fake_synth(goal, artifacts):
         from harness.events import TextDelta
         yield TextDelta(text=synth)
-    async def fake_simple(msg):
+    async def fake_simple(msg, budget=None):
         yield RunFinished(message=__import__("harness.types", fromlist=["Message"]).Message(
             role=__import__("harness.types", fromlist=["Role"]).Role.ASSISTANT, content="简单答复"))
     orch = Orchestrator.__new__(Orchestrator)
@@ -59,6 +59,7 @@ def _mk(planner, critic, order, triage_simple=False, synth="最终答复", max_r
     orch._max_replan = max_replan
     orch._max_step_retry = 2
     orch._budget = None
+    orch._budget_factory = None
     return orch
 
 
@@ -179,6 +180,22 @@ async def test_planner_error_falls_back_to_simple_answer():
     assert isinstance(events[-1], RunFinished)
     assert events[-1].message.content == "简单答复"
     assert order == []   # 从未进入编排/执行
+
+
+async def test_budget_factory_fresh_per_run():
+    """编排器是单例：每次 run 应经工厂新建独立预算，不跨轮累加、不写回 self。"""
+    made = []
+    class B:
+        def start(self): pass
+        def check(self): pass
+    def factory():
+        b = B(); made.append(b); return b
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(reviews=(True,)), [])
+    orch._budget_factory = factory
+    await _run(orch)
+    await _run(orch)
+    assert len(made) == 2, "每次 run 应新建独立预算"
+    assert getattr(orch, "_budget") is None, "预算不应写回 self（并发安全）"
 
 
 async def test_budget_exceeded_degrades_to_synthesize():
