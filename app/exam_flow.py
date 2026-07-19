@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from .exam_grader import (
-    END_INTENT_RE, answer_text, grade_objective, grade_short,
+    END_INTENT_RE, RESTART_INTENT_RE, answer_text, grade_objective, grade_short,
     parse_choice, present_question)
 from .exam_session import ExamSessionStore
 
@@ -83,6 +83,12 @@ async def grade_exam_turn(exam_store, wrong_store, judge_complete, *,
     if END_INTENT_RE.search(message or ""):        # 结束意图 → 结束，不判分
         exam_store.end(user_id, conv_id)
         return ("\n\n[考试系统] 用户要求结束考试，考试已结束。请给出简短小结。", False)
+
+    if RESTART_INTENT_RE.search(message or ""):    # 重开/换考意图 → 结束当前场，放行让模型重新开考
+        # 不当作作答（不判分/不存错题/不推进）：返回 ('', False) 使本条消息照常流到模型，
+        # 由其调用 start_exam 起一场新考试。旧场先结束，避免 ON CONFLICT 更新时残留旧状态。
+        exam_store.end(user_id, conv_id)
+        return "", False
 
     q = ExamSessionStore.current(exam)
     if q is None:                                  # 防御：已答完未结束

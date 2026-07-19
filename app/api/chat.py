@@ -645,6 +645,11 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         # 只省指引文本 —— 万一触发词漏判，模型仍能靠工具描述兜底，是降级而非失能。
         exam_guide = EXAM_GUIDE if _needs_exam_guide(
             req.message, history, exam_active) else ""
+        # 考试/练习是有状态、多轮、模型驱动的交互流程（开考→逐题判分交接），只适合 ReAct 单循环：
+        # 模型调 start_exam 拿到题、同一轮原样呈现、下一轮由 grade_exam_turn 拦截判分。编排器的
+        # plan→execute→synthesize 会把它拆成多步再二次概括，吞掉「原样呈现第一题」，且 Critic 判某步
+        # 不合格触发重试会再次 start_exam 把考试重置。故凡注入考试指引（=命中考试语境）即钉死简单直答。
+        force_simple = bool(exam_guide)
         # 清单收尾结果 → 并进 context 列，供统计「模型多久不收一次尾 / 补救成没成」
         plan_trace: dict = {}
         ctx_trace: dict = {}      # 上下文组装结果 → finish_turn 落 context 列，供 stats 统计
@@ -924,7 +929,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     _orch_src = SimpleNamespace(
                         run=lambda m: harness.orchestrator.run(
                             m, verify=req.verify, context=_octx, registry=registry,
-                            recent_dialogue=recent_dialogue))
+                            recent_dialogue=recent_dialogue, force_simple=force_simple))
                     async for s in _drain(_orch_src, run_id_a, model_message, True, collect):
                         yield _acc(s)
                     errored = collect["final"] is None
