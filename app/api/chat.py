@@ -30,7 +30,7 @@ from harness.telemetry.tracer import get_tracer
 from harness.tools.base import ToolRegistry
 from harness.tools.builtins.memory_search import SearchMemoryTool
 from harness.types import Message, Role
-from harness.usage import reset_price_tiers, set_price_tiers
+from harness.usage import reset_pricing, set_pricing
 
 from ..auth import current_user
 from ..completion import build_fast_completer
@@ -681,8 +681,24 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             step_by_id: dict[str, dict] = {}
             tool_t0: dict[str, float] = {}   # tool_call_id -> 开始时刻，用于算单个工具耗时
 
+            # 用量事件旁路：带模型名的 ModelUsage（编排器各子调用 record_usage、embedding/rerank
+            # 上报）经 emit() 进这个队列，被 _merged 并入主事件流 → 经 sink 落 trajectory（进历史
+            # 分模型统计）+ 前端；其余 emit 事件（沙箱进度等）直达 queue（仅前端）。
+            usage_q: asyncio.Queue = asyncio.Queue()
+
+            def _emit(ev):
+                (usage_q if isinstance(ev, ModelUsage) else queue).put_nowait(ev)
+
+            async def _merged(src):
+                async for ev in src:
+                    while not usage_q.empty():
+                        yield usage_q.get_nowait()
+                    yield ev
+                while not usage_q.empty():
+                    yield usage_q.get_nowait()
+
             async def pump():
-                token = set_emitter(queue.put_nowait)
+                token = set_emitter(_emit)
                 atoken = set_context(run_id=run_id_a, timeout=config.sandbox_approval_timeout)
                 stoken = set_sandbox_conv(req.conversation_id)
                 ptoken = set_plan_clock()   # 本轮步骤计时表；重答的每次尝试各自重新计时
@@ -690,10 +706,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 # 想那么久」，管的是回答用户的那些调用，而不是交付门校验、记忆调和、记忆整合
                 # 这些旁路。此前它设在 gen() 里且从不 reset，那些旁路全都悄悄继承了它。
                 btoken = set_extra_body_override({"enable_thinking": req.think})
-                # 分层计费回退：price_map 未配某模型价时，实时成本按 model_price_tiers 估算，
-                # 主循环与其派生的所有子任务（编排器 executor/synthesize/planner/critic 等）都读得到，
-                # 否则聊天气泡的花费会一直显示 0（真实 ¥ 计费此前只接进后台 stats）。
-                cttoken = set_price_tiers(config.model_price_tiers)
+                # 按模型计价上下文：扁平价表 price_map + 默认分层表 + 按模型分层表，主循环与其派生的所有
+                # 子任务（编排器 executor/synthesize/planner/critic 走各自模型）都据各自 model 名精确计价。
+                cttoken = set_pricing(
+                    price_map=config.price_map,
+                    tiers=config.model_price_tiers,
+                    tiers_by_model=config.model_price_tiers_by_model)
                 try:
                     # 本轮附件播种进会话沙箱 /workspace/uploads/，供模型直接执行（写盘≠给模型）
                     if attachment_metas and harness.sandbox is not None:
@@ -707,12 +725,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                     scope="sandbox",
                                     text=f"附件 {meta['filename']} 载入沙箱失败：{e}",
                                     status="error"))
-                    async for ev in harness.sink.wrap(loop_obj.run(message)):
+                    async for ev in harness.sink.wrap(_merged(loop_obj.run(message))):
                         queue.put_nowait(ev)
                 except Exception as e:  # 兜底成 RunError，避免流卡死
                     queue.put_nowait(RunError(error=str(e)))
                 finally:
-                    reset_price_tiers(cttoken)
+                    reset_pricing(cttoken)
                     reset_extra_body_override(btoken)
                     reset_plan_clock(ptoken)
                     reset_sandbox_conv(stoken)
@@ -786,8 +804,14 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         reason_ms += (time.monotonic() - reason_t0) * 1000
                         reason_t0 = None
                     elif isinstance(ev, ModelUsage):
-                        # 记录用量供落库（与前端一致取最新一次的 total/cost），刷新后仍可展示
-                        collect["usage"] = {"tokens": ev.usage.total_tokens, "cost": ev.cost_usd}
+                        # 所有 ModelUsage 都是**逐模型增量**（编排器各子调用 record_usage、
+                        # embedding/rerank、ReAct 每步）：按模型累加，合计所有模型即本轮总额（落库同前端）。
+                        ubm = collect.setdefault("usage_by_model", {})
+                        e = ubm.setdefault(ev.model or "", {"tokens": 0, "cost": 0.0})
+                        e["tokens"] += ev.usage.total_tokens
+                        e["cost"] += ev.cost_usd or 0.0
+                        collect["usage"] = {"tokens": sum(x["tokens"] for x in ubm.values()),
+                                            "cost": sum(x["cost"] for x in ubm.values())}
                     elif isinstance(ev, Progress):
                         collect["progress"].append({"scope": ev.scope, "text": ev.text,
                                                     "status": ev.status, "key": ev.key,

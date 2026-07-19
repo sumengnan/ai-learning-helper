@@ -33,6 +33,7 @@ const OV: StatsOverview = {
       conversations: 7, messages: 44,
     },
     daily: Array.from({ length: 14 }, (_, i) => ({ date: `2026-07-${i + 1}`, runs: i, tokens: i * 100 })),
+    by_model: [],
     tools: [
       { name: "http_request", count: 71, errors: 0, success_rate: 1.0 },
       { name: "run_shell", count: 43, errors: 2, success_rate: 0.953 },

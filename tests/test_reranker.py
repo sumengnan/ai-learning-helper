@@ -158,3 +158,29 @@ async def test_dashscope_falls_back_on_error(fake_httpx):
                      "sk-1", "qwen3-rerank", style="dashscope")
     out = await r.rerank("q", [_cand("a"), _cand("b"), _cand("c")])
     assert _texts(out) == ["a", "b", "c"]
+
+
+def test_emit_rerank_usage_dashscope_reports_per_model():
+    from harness.progress import set_emitter, reset_emitter
+    from harness.events import ModelUsage
+    from harness.memory.reranker import _emit_rerank_usage
+    seen = []
+    tok = set_emitter(seen.append)
+    try:
+        _emit_rerank_usage({"usage": {"total_tokens": 50}}, "rr-model")
+    finally:
+        reset_emitter(tok)
+    mu = [e for e in seen if isinstance(e, ModelUsage)]
+    assert len(mu) == 1 and mu[0].model == "rr-model" and mu[0].usage.total_tokens == 50
+
+
+def test_emit_rerank_usage_missing_is_noop():
+    from harness.progress import set_emitter, reset_emitter
+    from harness.memory.reranker import _emit_rerank_usage
+    seen = []
+    tok = set_emitter(seen.append)
+    try:
+        _emit_rerank_usage({"results": []}, "m")   # 端点未返回 usage
+    finally:
+        reset_emitter(tok)
+    assert seen == []

@@ -188,6 +188,8 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
                                      memory_store=getattr(harness, "memory_store", None),
                                      maintainer=getattr(harness, "memory_maintainer", None),
                                      price_tiers=config.model_price_tiers,
+                                     price_tiers_by_model=config.model_price_tiers_by_model,
+                                     price_map=config.price_map,
                                      currency=config.price_currency)
     app.include_router(make_stats_router(stats_service))
 

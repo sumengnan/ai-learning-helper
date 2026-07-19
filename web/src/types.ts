@@ -31,7 +31,9 @@ export type ChatMessage = {
   // 轨迹 judge 三层质量分（scope=quality）：拆分/关键步/最终 + 简评；解析失败为 null
   quality?: { plan?: number | null; steps?: number | null; final?: number | null; feedback?: string } | null;
   sources?: SourceItem[];
-  usage?: { tokens: number; cost: number | null };
+  usage?: { tokens: number; cost: number | null };   // 本轮合计（所有模型，含 embedding/rerank）
+  // 分模型用量明细 {模型名: {tokens, cost}}：各子调用/embedding/rerank 逐模型增量实时累加得来。
+  usageByModel?: Record<string, { tokens: number; cost: number | null }>;
   attachments?: Attachment[];
   // 助手回复状态：streaming=生成中；done=完成；error=失败；stopped=用户停止；interrupted=服务重启中断
   status?: "streaming" | "done" | "error" | "stopped" | "interrupted";

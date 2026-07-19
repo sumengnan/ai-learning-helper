@@ -60,6 +60,10 @@ export interface StatsOverview {
       cost_currency: string;
       conversations: number; messages: number;
     };
+    // 分模型明细：token/调用次数/成本按模型拆开（totals 是所有模型的汇总）。
+    // 含 embedding/rerank：其 emit 用量已并入主流落 trajectory，进历史分模型统计。
+    by_model: { model: string; calls: number; prompt: number; completion: number;
+                total_tokens: number; cost_usd: number | null }[];
     daily: DailyPoint[];
     tools: ToolStat[];
     steps_histogram: StepBucket[];

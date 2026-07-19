@@ -71,6 +71,20 @@ def _iso_delta_ms(start: str, end: str) -> float | None:
     return (b - a).total_seconds() * 1000.0
 
 
+def _by_model_rows(by_model: dict) -> list[dict]:
+    """把 {model: {...}} 转成按 total token 降序的列表，供前端分模型表格。"""
+    rows = [{
+        "model": name,
+        "calls": m["calls"],
+        "prompt": m["prompt"],
+        "completion": m["completion"],
+        "total_tokens": m["total"],
+        "cost_usd": round(m["cost"], 6) if m["has_cost"] else None,   # ¥ 金额可能很小，多留精度
+    } for name, m in by_model.items()]
+    rows.sort(key=lambda r: r["total_tokens"], reverse=True)
+    return rows
+
+
 def _cn_day(created_at: str) -> str:
     """UTC ISO 时间戳 → UTC+8 自然日 (YYYY-MM-DD)；空串/解析失败返回空串。
 
@@ -126,6 +140,8 @@ class StatsService:
                  memory_store=None,
                  maintainer=None,
                  price_tiers: list | None = None,
+                 price_tiers_by_model: dict | None = None,
+                 price_map: dict | None = None,
                  currency: str = "$",
                  now=None) -> None:
         self._traj = trajectory_conn
@@ -139,8 +155,22 @@ class StatsService:
         # 分层单价表（按输入长度分档）；配置后由 token 数现算成本，可回溯历史事件。
         # 为空则回退累加事件里已存的 cost_usd（旧口径）。
         self._price_tiers = price_tiers or []
+        # 按模型的分层表 {model: tiers} 与扁平价表 {model: [in,out]/1k}：让 stats 也按模型精确回溯成本
+        self._price_tiers_by_model = price_tiers_by_model or {}
+        self._price_map = price_map or {}
         self._currency = currency
         self._now = now or (lambda: datetime.now(timezone.utc))
+
+    def _model_cost(self, prompt: int, completion: int, model: str) -> float | None:
+        """按模型回溯成本：扁平 price_map（per-model）→ 该模型分层表 → 全局默认分层表。都无则 None。"""
+        price = self._price_map.get(model)
+        if price:
+            in_1k, out_1k = price
+            return prompt / 1000 * in_1k + completion / 1000 * out_1k
+        tiers = self._price_tiers_by_model.get(model) or self._price_tiers
+        if tiers:
+            return tiered_cost(prompt, completion, tiers)
+        return None
 
     # ---------- 公开入口 ----------
 
@@ -304,6 +334,7 @@ class StatsService:
         retries = 0
         total_cost = 0.0
         any_cost = False
+        by_model: dict[str, dict] = {}   # {模型名: {prompt,completion,total,calls,cost,has_cost}}
         tool_name_by_id: dict[str, str] = {}
         tool_counts: Counter = Counter()
         tool_errors: Counter = Counter()
@@ -345,18 +376,20 @@ class StatsService:
                     latencies.append(float(lat))
                 if (d.get("attempts") or 1) > 1:
                     retries += 1
-                if self._price_tiers:
-                    # 由本次调用的输入/输出 token 现算，历史事件也能回溯出成本
-                    c = tiered_cost(u.get("prompt", 0) or 0, u.get("completion", 0) or 0,
-                                    self._price_tiers)
-                    if c is not None:
-                        any_cost = True
-                        total_cost += c
-                else:
+                # 按模型计价（可回溯）：per-model 扁平价/分层表 → 全局默认分层表 → 事件里存的 cost_usd
+                p_, c_ = u.get("prompt", 0) or 0, u.get("completion", 0) or 0
+                model = d.get("model") or "(未知)"
+                mc = self._model_cost(p_, c_, model)
+                if mc is None:
                     cost = d.get("cost_usd")
-                    if isinstance(cost, (int, float)):
-                        any_cost = True
-                        total_cost += float(cost)
+                    mc = float(cost) if isinstance(cost, (int, float)) else None
+                bm = by_model.setdefault(model, {"prompt": 0, "completion": 0, "total": 0,
+                                                 "calls": 0, "cost": 0.0, "has_cost": False})
+                bm["prompt"] += p_; bm["completion"] += c_; bm["total"] += tok; bm["calls"] += 1
+                if mc is not None:
+                    bm["cost"] += mc; bm["has_cost"] = True
+                    any_cost = True
+                    total_cost += mc
             elif typ == "ToolStarted":
                 tc = d.get("tool_call", {}) or {}
                 name = tc.get("name") or "?"
@@ -404,6 +437,7 @@ class StatsService:
             "tool_errors": tool_errors,
             "steps_per_run": steps_per_run,
             "daily": daily,
+            "by_model": by_model,
         }
 
     def _daily_series(self, daily: dict, now: datetime, days: int) -> list[dict]:
@@ -748,6 +782,9 @@ class StatsService:
                 "conversations": counts["conversations"],
                 "messages": counts["messages"],
             },
+            # 分模型明细：token/调用次数/成本按模型拆开，供前端表格展示（totals 是全部模型的汇总）。
+            # 含 embedding/rerank：它们的 emit 用量已经 _merged 并入主流落 trajectory（见 chat.py pump）。
+            "by_model": _by_model_rows(agg["by_model"]),
             "daily": series,
             "tools": self._tools_list(agg["tool_counts"], agg["tool_errors"]),
             "steps_histogram": self._steps_histogram(agg["steps_per_run"]),

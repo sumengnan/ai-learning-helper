@@ -132,6 +132,11 @@ class AppConfig(HarnessConfig):
     # 这个是「塞得下但不划算」——典型用法是填分档计价的档位阈值（超档单价可能翻数倍）。
     # 不设它就只能靠谎报 window 来控成本，那会让 window 字段的含义失真。
     context_max_prompt_tokens: int = 240000
+    # 快速/judge 模型各自的输入 token 上限（0=不设，默认关闭 → 零开销、行为不变）。用于按更小窗口
+    # 的模型口径再收一道：编排器简单直答走快速模型，用 fast 值把（按主模型裁过的）上下文再确定性重裁；
+    # 单轮 judge 用 judge 值给巨型输入（大段 grounding）加硬上限。<=0 关闭。
+    context_max_prompt_tokens_fast: int = 0
+    context_max_prompt_tokens_judge: int = 0
     context_working_ratio: float = 0.9             # 最近原文（L1）占可用预算的比例。注意剩余
                                                    # 部分不会被强制留给 L2/L3，见 ContextBudget
     context_summary_max_tokens: int = 2000         # L2 摘要块 token 上限

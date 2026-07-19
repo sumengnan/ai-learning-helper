@@ -95,6 +95,7 @@ class Orchestrator:
     def __init__(self, *, client, registry: ToolRegistry, model: str,
                  planner: Planner, critic: Critic, executor: Executor,
                  fast_complete, fast_client=None, fast_model: str | None = None,
+                 fast_max_prompt_tokens: int = 0,
                  budget=None, budget_factory=None,
                  max_step_retry: int = 2, max_replan: int = 2) -> None:
         self._client = client
@@ -108,6 +109,9 @@ class Orchestrator:
         # 故这里回退 self._client/self._model —— 没配快速模型即零行为变更。
         self._fast_client = fast_client if fast_client is not None else client
         self._fast_model = fast_model or model
+        # 简单直答的上下文按快速模型口径再收一道（>0 时启用）：base_ctx 是按主模型预算裁的，
+        # 快速模型窗口更小时据此确定性重裁，防溢出。0=不裁（默认）。
+        self._fast_max_prompt_tokens = int(fast_max_prompt_tokens or 0)
         self._budget = budget                # 直接注入的预算实例（主要供测试）
         # 每次 run() 新建预算的工厂：编排器是单例，用工厂产出每轮独立的 BudgetTracker，
         # 避免跨轮累加、且并发安全（预算以局部变量贯穿一次 run，绝不写回 self）。
@@ -169,6 +173,10 @@ class Orchestrator:
         历史+记忆，由 chat 路由传入）——多轮对话、附件/考试/引用/日期/个性化全靠它；缺省回退到最小
         SYNTH_SYSTEM+澄清指引（测试/back-compat）。registry 为本轮每请求工具表（含用户级工具）。"""
         ctx = context if context is not None else ContextManager(SYNTH_SYSTEM + CLARIFY_GUIDE)
+        # 按快速模型口径重裁（>0 时）：base_ctx 是按主模型裁的，快速模型窗口更小时防溢出
+        if context is not None and self._fast_max_prompt_tokens > 0:
+            from harness.context.clamp import ClampedContextManager
+            ctx = ClampedContextManager(ctx, self._fast_model, self._fast_max_prompt_tokens)
         loop = AgentLoop(client=self._fast_client,
                          registry=registry if registry is not None else self._registry,
                          context=ctx, max_steps=10, budget=budget, model_name=self._fast_model)
@@ -196,7 +204,7 @@ class Orchestrator:
             elif isinstance(ev, ReasoningDelta):   # 思考过程透传（前端 ThinkingBlock 展示）
                 yield ev
             elif isinstance(ev, ModelUsage):       # 用量记进累加器，run() 末尾汇总
-                record_usage(ev.usage, ev.cost_usd)
+                record_usage(ev.usage, ev.cost_usd, ev.model)
             elif isinstance(ev, RunFinished):
                 final = ev.message.content or ""
         # 端点未流式（只在 RunFinished 给全量）时，补一个 TextDelta，保证 run() 能累加到文本
@@ -303,8 +311,9 @@ class Orchestrator:
                     final_parts.append(ev.text)
                 yield ev
             final = "".join(final_parts) or "（未能生成答复）"
-            if acc.usage.total_tokens or acc.cost:   # 汇总总用量，供前端显示总 tokens/成本
-                yield ModelUsage(usage=acc.usage, cost_usd=acc.cost, attempts=1, latency_ms=0.0)
+            # 用量不再在此聚合发射：各子调用（executor/synthesize/planner/critic）的 record_usage
+            # 已一路 emit 逐模型增量，经 chat 路由的 emitter 并入主流 → sink 落 trajectory（分模型
+            # 历史统计）+ 前端（按模型累加得合计）。与 embedding/rerank 走同一条路，零重复。
             yield RunFinished(message=Message(role=Role.ASSISTANT, content=final))
         finally:
             reset_acc(acc_token)

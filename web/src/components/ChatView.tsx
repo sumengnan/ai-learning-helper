@@ -234,7 +234,20 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
       const s = a.steps![a.steps!.length - 1];
       if (s) { s.result = e.data.result.content; s.isError = e.data.result.is_error; }
     });
-    else if (e.type === "ModelUsage") upd((a) => { a.usage = { tokens: e.data.usage.total, cost: e.data.cost_usd }; });
+    else if (e.type === "ModelUsage") upd((a) => {
+      // 所有 ModelUsage 都是逐模型增量：按模型累加，合计所有模型即本轮总额（含 embedding/rerank）。
+      const m: string = e.data.model || "";
+      const bm = { ...(a.usageByModel || {}) };
+      const prev = bm[m] || { tokens: 0, cost: 0 };
+      bm[m] = { tokens: prev.tokens + e.data.usage.total,
+                cost: (prev.cost ?? 0) + (e.data.cost_usd ?? 0) };
+      a.usageByModel = bm;
+      const vals = Object.values(bm);
+      a.usage = {
+        tokens: vals.reduce((s, x) => s + x.tokens, 0),
+        cost: vals.reduce((s, x) => s + (x.cost ?? 0), 0),
+      };
+    });
     // 任务计划思考（scope=plan_reasoning）：流式累积成单独的"任务计划思考"块，不入 progress 列。
     // 末尾带 detail.elapsed_ms 的是耗时标记（后端权威），据此冻结耗时。
     else if (e.type === "Progress" && e.data.scope === "plan_reasoning") upd((a) => {
@@ -644,7 +657,8 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                     {hasVerify && <VerifyBadge message={m} live={live} />}
                     {showMetaRow && (
                       <MessageMeta status={m.status} live={live} startedAt={m.startedAt}
-                        elapsedMs={m.elapsedMs} usage={m.usage} showMeta={showTools} />
+                        elapsedMs={m.elapsedMs} usage={m.usage} usageByModel={m.usageByModel}
+                        showMeta={showTools} />
                     )}
                     {hasSources && (
                       <SourceList sources={m.sources!} msgKey={String(i)} flashId={flashId} />
