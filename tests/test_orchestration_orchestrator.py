@@ -245,15 +245,21 @@ async def test_run_aggregates_all_usage_incl_planner_critic():
     async def usynth(goal, arts, recent_dialogue=""):
         record_usage(Usage(0, 0, 50), 0.005); yield TextDelta(text="答复")
 
+    from harness.progress import set_emitter, reset_emitter
     orch = _mk(UPlanner(), UCritic(), [])
     orch._executor = UExec()
     orch._synthesize = usynth
-    events = [ev async for ev in orch.run("复杂")]
-    usages = [e for e in events if isinstance(e, ModelUsage)]
-    assert len(usages) == 1, "应只发一条聚合"
-    # plan 30 + s1/s2 各 100 + validate 各 10 + review 20 + synth 50 = 320
-    assert usages[0].usage.total_tokens == 30 + 100 * 2 + 10 * 2 + 20 + 50
-    assert abs((usages[0].cost_usd or 0) - (0.003 + 0.01 * 2 + 0.001 * 2 + 0.002 + 0.005)) < 1e-9
+    seen: list = []
+    tok = set_emitter(seen.append)   # record_usage 经 emit 发逐调用增量 ModelUsage
+    try:
+        _ = [ev async for ev in orch.run("复杂")]
+    finally:
+        reset_emitter(tok)
+    usages = [e for e in seen if isinstance(e, ModelUsage)]
+    # plan 30 + s1/s2 各 100 + validate 各 10 + review 20 + synth 50 = 320（增量之和）
+    assert sum(u.usage.total_tokens for u in usages) == 30 + 100 * 2 + 10 * 2 + 20 + 50
+    assert abs(sum(u.cost_usd or 0 for u in usages)
+               - (0.003 + 0.01 * 2 + 0.001 * 2 + 0.002 + 0.005)) < 1e-9
 
 
 async def test_review_emits_verify_progress():
@@ -287,9 +293,9 @@ async def test_verify_off_emits_no_verify_progress():
     assert not any(isinstance(e, Progress) and e.scope == "verify" for e in events)
 
 
-async def test_record_usage_emits_live_snapshot_when_emitter_set():
-    """设了进度 emitter（编排器 SSE 路径）时，record_usage 每次累加都发一条累计 ModelUsage 快照，
-    让前端 tokens/￥ 实时增长；未设 emitter（单测/非编排器）时不发，对既有行为透明。"""
+async def test_record_usage_emits_per_call_increment_with_model():
+    """设了 emitter 时，record_usage 每次发一条**本次调用的增量** ModelUsage（带 model 名），
+    下游按模型累加得合计；未设 emitter（单测）时 no-op。"""
     from harness.events import ModelUsage
     from harness.usage import Usage
     from harness.progress import set_emitter, reset_emitter
@@ -299,15 +305,17 @@ async def test_record_usage_emits_live_snapshot_when_emitter_set():
     etoken = set_emitter(seen.append)
     atoken = set_acc(UsageAcc())
     try:
-        record_usage(Usage(0, 0, 10), 0.01)
-        record_usage(Usage(0, 0, 5), 0.005)
+        record_usage(Usage(0, 0, 10), 0.01, "m1")
+        record_usage(Usage(0, 0, 5), 0.005, "m1")
+        record_usage(Usage(0, 0, 7), 0.007, "m2")
     finally:
         reset_acc(atoken)
         reset_emitter(etoken)
     snaps = [e for e in seen if isinstance(e, ModelUsage)]
-    assert len(snaps) == 2, "每次 record 发一条快照"
-    assert snaps[-1].usage.total_tokens == 15, "快照是累计值"
-    assert abs((snaps[-1].cost_usd or 0) - 0.015) < 1e-9
+    assert len(snaps) == 3, "每次 record 发一条增量"
+    assert [(s.usage.total_tokens, s.model) for s in snaps] == [(10, "m1"), (5, "m1"), (7, "m2")]
+    # 按模型累加：m1=15、m2=7
+    assert sum(s.usage.total_tokens for s in snaps if s.model == "m1") == 15
 
 
 async def test_record_usage_no_emit_without_emitter():
@@ -611,9 +619,11 @@ def test_orchestrator_fast_falls_back_to_main_when_unset():
 
 
 async def test_run_emits_per_model_usage():
-    """末尾按模型各发一条 ModelUsage（带 model 名），供 stats 分模型统计。"""
+    """各子调用 record_usage 经 emit 发**逐模型增量** ModelUsage（带 model 名），供落 trajectory
+    分模型统计；同模型的多次增量累加即该模型总量。"""
     from harness.events import ModelUsage
     from harness.usage import Usage
+    from harness.progress import set_emitter, reset_emitter
     from app.orchestration.usage_ctx import record_usage
     from app.orchestration.executor import StepArtifact
     from app.orchestration.plan import Artifact
@@ -641,10 +651,19 @@ async def test_run_emits_per_model_usage():
     orch = _mk(MPlanner(), MCritic(), [])
     orch._executor = MExec()
     orch._synthesize = msynth
-    events = [ev async for ev in orch.run("复杂")]
-    by = {e.model: e for e in events if isinstance(e, ModelUsage)}
-    assert set(by) == {"fast-model", "main-model"}
-    assert by["fast-model"].usage.total_tokens == 110      # exec 100 + validate 10
-    assert by["main-model"].usage.total_tokens == 100      # plan 30 + review 20 + synth 50
-    assert abs(by["fast-model"].cost_usd - 0.011) < 1e-9
-    assert abs(by["main-model"].cost_usd - 0.010) < 1e-9
+    seen: list = []
+    tok = set_emitter(seen.append)
+    try:
+        _ = [ev async for ev in orch.run("复杂")]
+    finally:
+        reset_emitter(tok)
+    usages = [e for e in seen if isinstance(e, ModelUsage)]
+    agg: dict = {}
+    for u in usages:
+        e = agg.setdefault(u.model, {"tok": 0, "cost": 0.0})
+        e["tok"] += u.usage.total_tokens; e["cost"] += u.cost_usd or 0.0
+    assert set(agg) == {"fast-model", "main-model"}
+    assert agg["fast-model"]["tok"] == 110      # exec 100 + validate 10
+    assert agg["main-model"]["tok"] == 100      # plan 30 + review 20 + synth 50
+    assert abs(agg["fast-model"]["cost"] - 0.011) < 1e-9
+    assert abs(agg["main-model"]["cost"] - 0.010) < 1e-9

@@ -111,3 +111,39 @@ def test_orchestrator_stream_becomes_main_flow(make_mock, monkeypatch):
     asst = _last_assistant(store, cid)
     assert asst["status"] == "done"
     assert asst["content"] == "编排答复", "落库的本轮 assistant 内容应为编排器的最终答复"
+
+
+class EmbeddingUsageOrchestrator:
+    """模拟 run 期间有 embedding/子调用经 emit 上报逐模型用量（带模型名）。"""
+    async def run(self, message, verify=True, *, context=None, registry=None, recent_dialogue=""):
+        from harness.events import RunStarted, TextDelta, RunFinished, ModelUsage
+        from harness.usage import Usage
+        from harness.progress import emit
+        from harness.types import Message, Role
+        yield RunStarted(run_id="r1")
+        emit(ModelUsage(usage=Usage(0, 0, 42), cost_usd=0.001, attempts=1,
+                        latency_ms=0.0, model="emb-model"))   # 模拟 embedding 上报
+        yield TextDelta(text="答复")
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content="答复"))
+
+
+def test_emit_model_usage_reaches_sse_and_trajectory(make_mock, monkeypatch):
+    """带模型名的 emit(ModelUsage)（embedding/rerank/编排器子调用）经 _merged 并入主流 →
+    既下发 SSE（前端合计）、又落 trajectory（供历史分模型统计）。"""
+    traj = TrajectoryStore(":memory:")
+    harness = Harness(client=make_mock([]), registry=ToolRegistry(),
+                      checkpoint_store=CheckpointStore(":memory:"),
+                      trajectory_store=traj, sink=TrajectorySink(traj),
+                      system_prompt="你是助手", orchestrator=EmbeddingUsageOrchestrator())
+    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None, enable_answer_gate=False)
+    store = ConversationStore(":memory:")
+    c = TestClient(create_app(config=cfg, harness=harness, store=store,
+                              doc_store=DocumentStore(":memory:")))
+    cid, events = _chat(c, _auth(c))
+    # SSE 有该 ModelUsage（带 model 名）
+    mu = [e for e in events if e["type"] == "ModelUsage" and e["data"].get("model") == "emb-model"]
+    assert mu and mu[0]["data"]["usage"]["total"] == 42, "emit 的用量应下发 SSE"
+    # 落进 trajectory（run_id=r1）：历史统计据此按模型分组
+    traj_events = traj.load("r1")
+    tmu = [e for e in traj_events if e["type"] == "ModelUsage" and e["data"].get("model") == "emb-model"]
+    assert tmu and tmu[0]["data"]["usage"]["total"] == 42, "emit 的用量应落 trajectory"

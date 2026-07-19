@@ -311,14 +311,9 @@ class Orchestrator:
                     final_parts.append(ev.text)
                 yield ev
             final = "".join(final_parts) or "（未能生成答复）"
-            # 末尾按**模型**各发一条 ModelUsage（带 model 名）：这些经生成器 → sink 落 trajectory，
-            # 供 stats 分模型统计；前端也收到，累加成分模型明细。前端的合计总额由 record_usage 一路
-            # emit 的 model=None 累计快照（live）提供，故这里不再单发一条聚合（避免与快照重复置显）。
-            for m, e in acc.by_model.items():
-                u = e["usage"]
-                if u.total_tokens or e["cost"]:
-                    yield ModelUsage(usage=u, cost_usd=e["cost"], attempts=1, latency_ms=0.0,
-                                     model=m or None)
+            # 用量不再在此聚合发射：各子调用（executor/synthesize/planner/critic）的 record_usage
+            # 已一路 emit 逐模型增量，经 chat 路由的 emitter 并入主流 → sink 落 trajectory（分模型
+            # 历史统计）+ 前端（按模型累加得合计）。与 embedding/rerank 走同一条路，零重复。
             yield RunFinished(message=Message(role=Role.ASSISTANT, content=final))
         finally:
             reset_acc(acc_token)

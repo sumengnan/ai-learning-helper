@@ -235,20 +235,15 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
       if (s) { s.result = e.data.result.content; s.isError = e.data.result.is_error; }
     });
     else if (e.type === "ModelUsage") upd((a) => {
-      // model=None 是累计总额快照（编排器一路 emit）→ 权威合计；带 model 的是分模型增量 → 累加。
-      const m: string | null = e.data.model ?? null;
-      if (!m) {
-        a.usageTotal = { tokens: e.data.usage.total, cost: e.data.cost_usd };
-      } else {
-        const bm = { ...(a.usageByModel || {}) };
-        const prev = bm[m] || { tokens: 0, cost: 0 };
-        bm[m] = { tokens: prev.tokens + e.data.usage.total,
-                  cost: (prev.cost ?? 0) + (e.data.cost_usd ?? 0) };
-        a.usageByModel = bm;
-      }
-      const bm = a.usageByModel || {};
+      // 所有 ModelUsage 都是逐模型增量：按模型累加，合计所有模型即本轮总额（含 embedding/rerank）。
+      const m: string = e.data.model || "";
+      const bm = { ...(a.usageByModel || {}) };
+      const prev = bm[m] || { tokens: 0, cost: 0 };
+      bm[m] = { tokens: prev.tokens + e.data.usage.total,
+                cost: (prev.cost ?? 0) + (e.data.cost_usd ?? 0) };
+      a.usageByModel = bm;
       const vals = Object.values(bm);
-      a.usage = a.usageTotal ?? {
+      a.usage = {
         tokens: vals.reduce((s, x) => s + x.tokens, 0),
         cost: vals.reduce((s, x) => s + (x.cost ?? 0), 0),
       };

@@ -49,15 +49,16 @@ _acc: contextvars.ContextVar = contextvars.ContextVar("orchestrator_usage_acc", 
 
 
 def record_usage(usage: Usage, cost: float | None, model: str | None = None) -> None:
-    """把一次模型调用的用量按**模型**记进当前累加器；无累加器（非编排器路径）时 no-op。
+    """把一次模型调用的用量按**模型**记进当前累加器；无累加器（非编排器路径）时仍会 emit。
 
-    累加后经 emit() 旁路发一条**累计总量**快照（ModelUsage，model=None），让前端底部 tokens/￥
-    一边跑一边涨（合计所有模型）；emit 未设 emitter（单测/非编排器）时 no-op，对既有行为透明。
-    run() 末尾另按模型各发一条 ModelUsage（带 model 名）→ 落 trajectory 供 stats 分模型统计。"""
+    emit() 旁路发一条**本次调用的增量** ModelUsage（带 model 名）：chat 路由的 emitter 把带模型名的
+    ModelUsage 并入主事件流 → 经 sink 落 trajectory（进历史分模型统计）+ 前端（按模型累加得合计）。
+    与 embedding/rerank 的用量上报走同一条路。emit 未设 emitter（单测）时 no-op，对既有行为透明。
+    acc 用于同一进程内需要读汇总的场景（非编排器路径 acc 为 None，仅 emit）。"""
     acc = _acc.get()
     if acc is not None:
         acc.add(usage, cost, model)
-        emit(ModelUsage(usage=acc.usage, cost_usd=acc.cost, attempts=1, latency_ms=0.0))
+    emit(ModelUsage(usage=usage, cost_usd=cost, attempts=1, latency_ms=0.0, model=model))
 
 
 def set_acc(acc: UsageAcc):

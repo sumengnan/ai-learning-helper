@@ -681,8 +681,24 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             step_by_id: dict[str, dict] = {}
             tool_t0: dict[str, float] = {}   # tool_call_id -> 开始时刻，用于算单个工具耗时
 
+            # 用量事件旁路：带模型名的 ModelUsage（编排器各子调用 record_usage、embedding/rerank
+            # 上报）经 emit() 进这个队列，被 _merged 并入主事件流 → 经 sink 落 trajectory（进历史
+            # 分模型统计）+ 前端；其余 emit 事件（沙箱进度等）直达 queue（仅前端）。
+            usage_q: asyncio.Queue = asyncio.Queue()
+
+            def _emit(ev):
+                (usage_q if isinstance(ev, ModelUsage) else queue).put_nowait(ev)
+
+            async def _merged(src):
+                async for ev in src:
+                    while not usage_q.empty():
+                        yield usage_q.get_nowait()
+                    yield ev
+                while not usage_q.empty():
+                    yield usage_q.get_nowait()
+
             async def pump():
-                token = set_emitter(queue.put_nowait)
+                token = set_emitter(_emit)
                 atoken = set_context(run_id=run_id_a, timeout=config.sandbox_approval_timeout)
                 stoken = set_sandbox_conv(req.conversation_id)
                 ptoken = set_plan_clock()   # 本轮步骤计时表；重答的每次尝试各自重新计时
@@ -709,7 +725,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                     scope="sandbox",
                                     text=f"附件 {meta['filename']} 载入沙箱失败：{e}",
                                     status="error"))
-                    async for ev in harness.sink.wrap(loop_obj.run(message)):
+                    async for ev in harness.sink.wrap(_merged(loop_obj.run(message))):
                         queue.put_nowait(ev)
                 except Exception as e:  # 兜底成 RunError，避免流卡死
                     queue.put_nowait(RunError(error=str(e)))
@@ -788,19 +804,14 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         reason_ms += (time.monotonic() - reason_t0) * 1000
                         reason_t0 = None
                     elif isinstance(ev, ModelUsage):
-                        # 用量落库（与前端同规则）：model=None 是累计总额快照（编排器 record_usage 一路
-                        # emit，取其为权威总额）；带 model 的是分模型增量（末尾各发一条 / ReAct 每步一条），
-                        # 累加进 usage_by_model。总额优先用 model=None 快照，否则取分模型之和。
+                        # 所有 ModelUsage 都是**逐模型增量**（编排器各子调用 record_usage、
+                        # embedding/rerank、ReAct 每步）：按模型累加，合计所有模型即本轮总额（落库同前端）。
                         ubm = collect.setdefault("usage_by_model", {})
-                        if not ev.model:
-                            collect["usage_total"] = {"tokens": ev.usage.total_tokens, "cost": ev.cost_usd}
-                        else:
-                            e = ubm.setdefault(ev.model, {"tokens": 0, "cost": 0.0})
-                            e["tokens"] += ev.usage.total_tokens
-                            e["cost"] += ev.cost_usd or 0.0
-                        collect["usage"] = collect.get("usage_total") or {
-                            "tokens": sum(e["tokens"] for e in ubm.values()),
-                            "cost": sum(e["cost"] for e in ubm.values())}
+                        e = ubm.setdefault(ev.model or "", {"tokens": 0, "cost": 0.0})
+                        e["tokens"] += ev.usage.total_tokens
+                        e["cost"] += ev.cost_usd or 0.0
+                        collect["usage"] = {"tokens": sum(x["tokens"] for x in ubm.values()),
+                                            "cost": sum(x["cost"] for x in ubm.values())}
                     elif isinstance(ev, Progress):
                         collect["progress"].append({"scope": ev.scope, "text": ev.text,
                                                     "status": ev.status, "key": ev.key,

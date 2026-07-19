@@ -752,7 +752,7 @@ class StatsService:
                 "messages": counts["messages"],
             },
             # 分模型明细：token/调用次数/成本按模型拆开，供前端表格展示（totals 是全部模型的汇总）。
-            # 注：embedding/rerank 用量目前只进实时聊天合计、尚未进 trajectory，故这里主要是 LLM 各档模型。
+            # 含 embedding/rerank：它们的 emit 用量已经 _merged 并入主流落 trajectory（见 chat.py pump）。
             "by_model": _by_model_rows(agg["by_model"]),
             "daily": series,
             "tools": self._tools_list(agg["tool_counts"], agg["tool_errors"]),
