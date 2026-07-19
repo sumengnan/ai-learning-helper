@@ -275,6 +275,8 @@ def build_harness(config) -> Harness:
                           sandbox_guide_text=(sandbox_guide(config)
                                               if sandbox is not None else "")),
         fast_complete=_fast_complete,
+        # 简单直答走快速档模型/端点（省钱提速）；未配 fast_model 时 _exec_* 即回退主 client/主模型
+        fast_client=_exec_client, fast_model=_exec_model,
         # 每次 run 新建独立预算封顶时长/token（超限带现有成果收尾）；单例并发安全
         budget_factory=lambda: BudgetTracker(config.max_tokens_budget, config.max_wall_seconds),
         max_step_retry=config.orchestrator_max_step_retry,

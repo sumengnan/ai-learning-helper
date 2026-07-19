@@ -47,6 +47,9 @@ def test_orchestrator_speed_wiring(monkeypatch):
     o = build_harness(AppConfig()).orchestrator
     assert o._executor._disable_thinking is True                 # 子步关思考
     assert o._critic._validate is not o._critic._complete        # validate 走独立(快速档)completer
+    # 简单直答走快速档 client/model（与执行子步同源）；未配 fast_model 时回退主 client/主模型
+    assert o._fast_client is o._executor._client
+    assert o._fast_model == o._executor._model
     assert o._budget_factory is not None                         # 预算工厂已挂
     b = o._budget_factory()
     from harness.reliability.budget import BudgetTracker

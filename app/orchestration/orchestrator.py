@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 
@@ -43,6 +44,24 @@ TRIAGE_SYSTEM = (
     "只回一个词：simple 或 complex。"
 )
 
+# 无需 LLM 判别的「明显简单」：整条消息就是纯寒暄/致谢/短应答。命中即跳过 triage 的那次模型调用，
+# 直接走简单直答（省一次调用/延迟）。只放高置信度社交短句，且要求整条消息就是这些词、无其它实质
+# 内容——带任务的消息（如「你好，帮我查资料」含"帮我"）不会命中，仍交 LLM triage。误判为简单的代价
+# 也低：simple_answer 本就是全工具 ReAct，只是少做一次规划。
+_GREETING_RE = re.compile(
+    r"^[\s，。,.!！?？~、]*"
+    r"(你好+|您好|哈喽|嗨|hi|hello|hey|在吗|在不在|早|早上?好|中午好|下午好|晚上好|晚安|"
+    r"谢谢+|多谢|感谢|thanks|thank\s*you|thx|ok|okay|好的?|好嘞|行|嗯+|哦+|噢+|收到|"
+    r"辛苦了?|不错|棒|赞|再见|拜拜|bye|goodbye)"
+    r"[\s，。,.!！?？~、]*$",
+    re.IGNORECASE)
+
+
+def _obvious_simple(message: str) -> bool:
+    """启发式短路：纯寒暄/致谢/短应答无需 LLM triage。高精度优先，宁可漏判（回退 LLM）不可误判。"""
+    m = (message or "").strip()
+    return bool(m) and len(m) <= 20 and _GREETING_RE.match(m) is not None
+
 SYNTH_SYSTEM = (
     "你是汇总员。根据用户目标和各步骤的产出，写出面向用户的最终答复。"
     "只使用已给出的产出，不要编造；条理清晰、直接作答。"
@@ -75,7 +94,8 @@ def _plan_progress(plan: Plan) -> Progress:
 class Orchestrator:
     def __init__(self, *, client, registry: ToolRegistry, model: str,
                  planner: Planner, critic: Critic, executor: Executor,
-                 fast_complete, budget=None, budget_factory=None,
+                 fast_complete, fast_client=None, fast_model: str | None = None,
+                 budget=None, budget_factory=None,
                  max_step_retry: int = 2, max_replan: int = 2) -> None:
         self._client = client
         self._registry = registry
@@ -84,6 +104,10 @@ class Orchestrator:
         self._critic = critic
         self._executor = executor
         self._fast_complete = fast_complete
+        # 简单直答走快速档模型（省钱/提速）：未配 fast_model 时 build_fast_client 回退主 client/主模型，
+        # 故这里回退 self._client/self._model —— 没配快速模型即零行为变更。
+        self._fast_client = fast_client if fast_client is not None else client
+        self._fast_model = fast_model or model
         self._budget = budget                # 直接注入的预算实例（主要供测试）
         # 每次 run() 新建预算的工厂：编排器是单例，用工厂产出每轮独立的 BudgetTracker，
         # 避免跨轮累加、且并发安全（预算以局部变量贯穿一次 run，绝不写回 self）。
@@ -145,9 +169,9 @@ class Orchestrator:
         历史+记忆，由 chat 路由传入）——多轮对话、附件/考试/引用/日期/个性化全靠它；缺省回退到最小
         SYNTH_SYSTEM+澄清指引（测试/back-compat）。registry 为本轮每请求工具表（含用户级工具）。"""
         ctx = context if context is not None else ContextManager(SYNTH_SYSTEM + CLARIFY_GUIDE)
-        loop = AgentLoop(client=self._client,
+        loop = AgentLoop(client=self._fast_client,
                          registry=registry if registry is not None else self._registry,
-                         context=ctx, max_steps=10, budget=budget, model_name=self._model)
+                         context=ctx, max_steps=10, budget=budget, model_name=self._fast_model)
         async for ev in loop.run(message):
             if isinstance(ev, RunStarted):
                 continue
@@ -206,7 +230,8 @@ class Orchestrator:
         acc = UsageAcc()
         acc_token = set_acc(acc)
         try:
-            if await self._is_simple(user_message):
+            # 零成本短路优先：纯寒暄直接简单直答，省掉 triage 的模型调用；否则再让 LLM 判简单/复杂
+            if _obvious_simple(user_message) or await self._is_simple(user_message):
                 async for ev in self._simple_answer(user_message, budget,
                                                     context=context, registry=registry):
                     yield ev

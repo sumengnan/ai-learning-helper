@@ -550,3 +550,61 @@ async def test_run_backcompat_no_per_request_deps():
     orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(reviews=(True,)), [])
     events = await _run(orch)
     assert isinstance(events[-1], RunFinished)
+
+
+def test_obvious_simple_heuristic():
+    from app.orchestration.orchestrator import _obvious_simple
+    assert _obvious_simple("你好") and _obvious_simple("谢谢！") and _obvious_simple("  ok ")
+    assert _obvious_simple("thanks") and _obvious_simple("嗯嗯") and _obvious_simple("晚上好~")
+    assert not _obvious_simple("你好，帮我查资料")   # 带任务，不短路
+    assert not _obvious_simple("解释一下光合作用")
+    assert not _obvious_simple("考我5道题")
+    assert not _obvious_simple("")
+
+
+async def test_greeting_short_circuits_without_llm_triage():
+    """纯寒暄应零成本短路：不调 LLM triage，直接简单直答。"""
+    from harness.types import Message, Role
+    calls = {"triage": 0}
+    async def counting_triage(msg):
+        calls["triage"] += 1
+        return False
+    hit = {"simple": 0}
+    async def cap_simple(msg, budget=None, *, context=None, registry=None):
+        hit["simple"] += 1
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content="hi"))
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [])
+    orch._is_simple = counting_triage
+    orch._simple_answer = cap_simple
+    events = [ev async for ev in orch.run("你好")]
+    assert calls["triage"] == 0, "寒暄不应调 LLM triage"
+    assert hit["simple"] == 1 and isinstance(events[-1], RunFinished)
+
+
+async def test_non_greeting_still_uses_llm_triage():
+    """非寒暄消息仍交 LLM triage 判简单/复杂。"""
+    calls = {"triage": 0}
+    async def counting_triage(msg):
+        calls["triage"] += 1
+        return True
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [])
+    orch._is_simple = counting_triage
+    _ = [ev async for ev in orch.run("帮我分析这段代码的时间复杂度")]
+    assert calls["triage"] == 1
+
+
+def test_orchestrator_uses_fast_model_for_simple_answer():
+    """简单直答走快速档 client/model（省钱提速）。"""
+    orch = Orchestrator.__new__(Orchestrator)
+    orch.__init__(client="MAIN", registry=None, model="main-model",
+                  planner=None, critic=None, executor=None, fast_complete=None,
+                  fast_client="FAST", fast_model="fast-model")
+    assert orch._fast_client == "FAST" and orch._fast_model == "fast-model"
+
+
+def test_orchestrator_fast_falls_back_to_main_when_unset():
+    """未配快速模型 → 回退主 client/主模型（零行为变更）。"""
+    orch = Orchestrator.__new__(Orchestrator)
+    orch.__init__(client="MAIN", registry=None, model="main-model",
+                  planner=None, critic=None, executor=None, fast_complete=None)
+    assert orch._fast_client == "MAIN" and orch._fast_model == "main-model"
