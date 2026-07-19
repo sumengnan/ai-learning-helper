@@ -14,7 +14,7 @@ import { EmptyState } from "../components/EmptyState";
 import {
   WrongAnswerDetailDrawer, answerText, typeColor, type WrongItem,
 } from "./WrongAnswerDetailDrawer";
-import { fromNow } from "./statsShared";
+import { fromNow, recencyColor } from "./statsShared";
 
 const PAGE_SIZE = 10;
 const TYPES = [
@@ -153,7 +153,7 @@ export default function WrongAnswersView() {
                         <Chip size="small" variant="outlined"
                           label={typeLabel(w.snapshot.type)} color={typeColor(w.snapshot.type)} />
                         {/* 相对时间：复习场景下「多久以前错的」比具体日期更有用 */}
-                        <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                        <Typography variant="caption" sx={{ color: recencyColor(w.created_at) }}>
                           {fromNow(w.created_at)}
                         </Typography>
                       </Stack>

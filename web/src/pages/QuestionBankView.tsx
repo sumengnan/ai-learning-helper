@@ -17,7 +17,7 @@ import { api, type Question } from "../api/client";
 import { listItemVariants } from "../components/motion";
 import { EmptyState } from "../components/EmptyState";
 import { QuestionDetailDrawer } from "./QuestionDetailDrawer";
-import { fromNow } from "./statsShared";
+import { fromNow, recencyColor } from "./statsShared";
 
 const PAGE_SIZE = 10;
 const TYPES = [
@@ -217,7 +217,7 @@ export default function QuestionBankView() {
                           <Stack direction="row" spacing={0.4}
                             sx={{ alignItems: "center", ml: "auto", color: "text.disabled" }}>
                             <AccessTimeIcon sx={{ fontSize: 14 }} />
-                            <Typography variant="caption" sx={{ fontSize: 12 }}>
+                            <Typography variant="caption" sx={{ fontSize: 12, color: recencyColor(item.created_at) }}>
                               {fromNow(item.created_at)}
                             </Typography>
                           </Stack>

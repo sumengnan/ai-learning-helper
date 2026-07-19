@@ -5,7 +5,7 @@ import { alpha } from "@mui/material/styles";
 import CloseIcon from "@mui/icons-material/Close";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
-import { fromNow } from "./statsShared";
+import { fromNow, recencyColor } from "./statsShared";
 
 export interface WrongItem {
   id: string;
@@ -85,7 +85,7 @@ export function WrongAnswerDetailDrawer({ item, onClose }: {
             <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1 }}>
               <Chip size="small" color={typeColor(type)} label={TYPE_LABEL[type] ?? type} />
               <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                {fromNow(item.created_at)}答错
+                <Box component="span" sx={{ color: recencyColor(item.created_at) }}>{fromNow(item.created_at)}</Box>答错
               </Typography>
             </Stack>
             <Divider />

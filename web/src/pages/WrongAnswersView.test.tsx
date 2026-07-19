@@ -53,7 +53,9 @@ describe("WrongAnswersView", () => {
     await waitFor(() => expect(screen.getByText(/光合作用在哪/)).toBeTruthy());
     fireEvent.click(screen.getByText(/光合作用在哪/));
     await waitFor(() => expect(screen.getByText("错题详情")).toBeTruthy());
-    expect(screen.getByText("3 天前答错")).toBeTruthy();
+    // 时间已按新鲜度上色，与「答错」拆成两个节点；「3 天前」列表+详情各一处，故用 getAllByText
+    expect(screen.getAllByText("3 天前").length).toBeGreaterThan(0);
+    expect(screen.getByText("答错")).toBeTruthy();
   });
 
   it("没有批量删除按钮", async () => {

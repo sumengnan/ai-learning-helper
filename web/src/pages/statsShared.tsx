@@ -46,6 +46,16 @@ export function fromNow(iso?: string): string {
   return fmtDateTime(d);   // 超过 7 天：显示具体日期和时间，而非“N 天前”
 }
 
+// 时间远近上色：越新越「暖绿」，越旧越淡，一眼看出新鲜度（返回 MUI palette 路径，可用于 color/sx）
+export function recencyColor(iso?: string): string {
+  if (!iso) return "text.disabled";
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 86400) return "success.main";        // 一天内
+  if (s < 7 * 86400) return "info.main";        // 一周内
+  if (s < 30 * 86400) return "warning.main";    // 一月内
+  return "text.disabled";                       // 更久
+}
+
 export const cardSx = (t: Theme) => ({
   border: 1, borderColor: "divider", borderRadius: 3,
   bgcolor: "background.paper", boxShadow: t.palette.mode === "light"

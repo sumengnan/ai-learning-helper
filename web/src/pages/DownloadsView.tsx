@@ -13,7 +13,7 @@ import { api } from "../api/client";
 import { listItemVariants } from "../components/motion";
 import { EmptyState } from "../components/EmptyState";
 import { formatBytes, fileMeta, previewKind } from "./downloadsUtils";
-import { fromNow } from "./statsShared";
+import { fromNow, recencyColor } from "./statsShared";
 import { DownloadPreviewDialog, type PreviewFile } from "./DownloadPreviewDialog";
 
 interface Download {
@@ -138,7 +138,7 @@ export default function DownloadsView() {
                       <Chip size="small" color={meta.color} variant="outlined" label={meta.label} />
                       <Typography variant="caption" color="text.secondary">{formatBytes(d.size)}</Typography>
                       <Typography variant="caption" color="text.disabled">·</Typography>
-                      <Typography variant="caption" color="text.secondary"
+                      <Typography variant="caption" sx={{ color: recencyColor(d.created_at) }}
                         title={new Date(d.created_at).toLocaleString()}>{fromNow(d.created_at)}</Typography>
                     </Stack>
                   </Box>

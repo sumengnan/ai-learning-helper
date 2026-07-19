@@ -11,18 +11,8 @@ import PsychologyIcon from "@mui/icons-material/Psychology";
 import ChecklistIcon from "@mui/icons-material/Checklist";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import { statsApi, type MemoryItem } from "../api/stats";
-import { fromNow } from "./statsShared";
+import { fromNow, recencyColor } from "./statsShared";
 import { Markdown } from "../components/Markdown";
-
-// 时间远近上色：越新越「暖绿」，越旧越淡，一眼看出记忆新鲜度
-function recencyColor(iso?: string): string {
-  if (!iso) return "text.disabled";
-  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 86400) return "success.main";        // 一天内
-  if (s < 7 * 86400) return "info.main";        // 一周内
-  if (s < 30 * 86400) return "warning.main";    // 一月内
-  return "text.disabled";                       // 更久
-}
 
 // 记忆类型（mem_type）→ 中文标签 / 配色
 const TYPE_LABEL: Record<string, string> = { semantic: "语义", episodic: "情景", procedural: "程序" };
