@@ -29,16 +29,49 @@ from harness.sandbox.factory import _docker_for, build_sandbox
 _log = logging.getLogger("app.sandbox")
 
 
-def sandbox_guide(workspace: str = "/workspace") -> str:
-    """提醒模型沙箱的工作目录位置，避免它用宿主机路径或臆想目录读写文件、生成产物。
+def _is_online(net) -> bool:
+    """该网络配置是否可联网：'none'/空为禁网，其余（bridge/host/...）视为可联网。"""
+    return str(net or "none").strip().lower() not in ("none", "")
 
+
+def sandbox_guide(config) -> str:
+    """按配置如实告诉模型沙箱的工作目录、镜像与联网情况，避免它用宿主机路径、或在禁网环境里
+    执意联网装包、选错命令。
+
+    关键区别（按配置渲染）：run_shell 在**基础容器**执行（镜像 sandbox_image、网络 sandbox_network），
+    run_python/run_node/run_java 在**语言子沙箱**执行（镜像 sandbox_lang_images、网络 sandbox_sub_network）——
+    两者的镜像和联网可不同，模型据此才知道「能否自行安装依赖、该用哪个工具」。
     主聊天路径（chat.py）与编排器执行子步（executor.py）共用同一段文案，DRY。
     """
-    return (
+    ws = getattr(config, "sandbox_workspace", "/workspace")
+    guide = (
         f"\n\n【沙箱工作目录】run_python / run_shell / run_node 等沙箱工具的当前工作目录（cwd）"
-        f"就是 {workspace}。读写文件用相对路径（相对 {workspace}），或以 {workspace}/ 开头的绝对路径；"
-        f"生成的文件也放在这里。用户上传的附件在 {workspace}/uploads/ 下。"
+        f"就是 {ws}。读写文件用相对路径（相对 {ws}），或以 {ws}/ 开头的绝对路径；"
+        f"生成的文件也放在这里。用户上传的附件在 {ws}/uploads/ 下。"
         f"不要使用宿主机路径（如 /Users、/home、/tmp）或其它臆想的目录——那些在沙箱里并不存在。")
+    if getattr(config, "sandbox_backend", "") != "docker":
+        return guide   # 本地后端跑在宿主机，无镜像/网络隔离概念，只给工作目录提醒
+    base_img = getattr(config, "sandbox_image", "") or "（未配置）"
+    base_online = _is_online(getattr(config, "sandbox_network", "none"))
+    lang = getattr(config, "sandbox_lang_images", None) or {}
+    sub_online = _is_online(getattr(config, "sandbox_sub_network", "none"))
+    net = lambda ok: "可联网" if ok else "禁止联网"   # noqa: E731
+    lines = [f"\n\n【沙箱镜像与联网】run_shell 在基础容器执行：镜像 {base_img}，{net(base_online)}。"]
+    if lang:
+        primary = {k: lang[k] for k in ("python", "node", "java") if k in lang}
+        shown = primary or dict(list(lang.items())[:3])
+        imgs = "、".join(f"{k}→{v}" for k, v in shown.items())
+        jvers = sorted(k for k in lang if k not in ("python", "node", "java"))
+        ver = f"（Java 另有 {', '.join(jvers)}，可传 version 指定）" if jvers else ""
+        lines.append(
+            f"run_python / run_node / run_java 各在对应语言子沙箱执行（{imgs}）{ver}，{net(sub_online)}。")
+    # 能否自行安装依赖，严格按各自网络如实说——防止在禁网沙箱里执意联网装包/选错命令
+    lines.append(
+        "需要用到额外的库或命令时：在【可联网】的环境里可以自行安装（Python 用 pip install、"
+        "Node 用 npm i、系统命令按镜像发行版用 dnf/apt 等），装好后再用；在【禁止联网】的环境里"
+        "无法联网下载，只能使用镜像已自带的标准库与预装命令，不要执意 pip/npm/apt 联网安装（必然失败），"
+        "改用镜像已有的等价命令，或改用可联网的那个工具（如基础容器里的 run_shell）来完成需要联网的步骤。")
+    return guide + "".join(lines)
 
 # 当前请求所属会话；由 chat 处理器在 pump() 内 set，工具执行都在此上下文内。
 _current_conv: ContextVar[str | None] = ContextVar("sandbox_conv", default=None)

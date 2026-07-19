@@ -173,19 +173,43 @@ async def test_executor_runerror_sets_error_and_empty_summary(make_mock):
     assert artifact.summary == ""
 
 
-def test_system_with_guide_includes_sandbox_workdir_when_workspace_given():
-    """有沙箱工作目录时，执行子步的系统提示词应提醒 cwd 与附件目录；无则不提。"""
+def test_system_with_guide_appends_prerendered_sandbox_text():
+    """执行子步系统提示词应把装配层预渲染的沙箱指引原样附上；空则不附。"""
     from app.orchestration.executor import _system_with_guide
-    with_ws = _system_with_guide("基座提示", "/workspace")
-    assert "/workspace" in with_ws and "工作目录" in with_ws
-    assert "/workspace/uploads/" in with_ws
-    without = _system_with_guide("基座提示", None)
-    assert "工作目录" not in without   # 无沙箱不提工作目录，避免误导
+    with_g = _system_with_guide("基座提示", "\n\n【沙箱工作目录】cwd 是 /workspace")
+    assert "/workspace" in with_g and "工作目录" in with_g
+    without = _system_with_guide("基座提示", "")
+    assert "工作目录" not in without   # 无沙箱不提，避免误导
 
 
-def test_sandbox_guide_text_mentions_workspace_and_forbids_host_paths():
+def _sbx_cfg(**kw):
+    from app.config import AppConfig
+    return AppConfig(api_key="k", app_db_path=":memory:", **kw)
+
+
+def test_sandbox_guide_local_only_workdir_and_forbids_host_paths():
     from app.sandbox_manager import sandbox_guide
-    g = sandbox_guide("/workspace")
-    assert "/workspace" in g
-    assert "uploads" in g
-    assert "宿主机" in g   # 明确禁止用宿主机路径
+    g = sandbox_guide(_sbx_cfg(sandbox_backend="local"))
+    assert "/workspace" in g and "uploads" in g
+    assert "宿主机" in g          # 明确禁止用宿主机路径
+    assert "镜像" not in g         # 非 docker 不提镜像/联网
+
+
+def test_sandbox_guide_docker_reports_images_and_network():
+    """docker 后端：如实报告基础容器/语言子沙箱的镜像与联网，并据网络说明能否装依赖。"""
+    from app.sandbox_manager import sandbox_guide
+    g = sandbox_guide(_sbx_cfg(
+        sandbox_backend="docker", sandbox_image="quay.io/centos/centos:stream9",
+        sandbox_network="bridge", sandbox_sub_network="none"))
+    assert "quay.io/centos/centos:stream9" in g   # 基础容器镜像
+    assert "python:3.12-slim" in g                # 语言子沙箱镜像（默认 lang_images）
+    assert "可联网" in g and "禁止联网" in g        # base=bridge 可联网、子沙箱=none 禁网
+    assert "pip install" in g                     # 联网环境可自行装包的指引
+
+
+def test_sandbox_guide_docker_reflects_sub_network_online():
+    """子沙箱放开网络（bridge）时，指引里子沙箱也应体现「可联网」。"""
+    from app.sandbox_manager import sandbox_guide
+    g = sandbox_guide(_sbx_cfg(
+        sandbox_backend="docker", sandbox_network="none", sandbox_sub_network="bridge"))
+    assert "可联网" in g and "禁止联网" in g        # 基础禁网、子沙箱可联网都如实出现
