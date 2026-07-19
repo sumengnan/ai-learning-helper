@@ -57,7 +57,12 @@ class AppConfig(HarnessConfig):
     require_captcha: bool = False
     # 应用领域各表统一存于此单一数据库文件（可用 HARNESS_APP_DB_PATH 覆盖）
     app_db_path: str = "app.db"
-    app_system_prompt: str = "你是一个 AI 学习助手，可用工具检索知识、联网、计算来帮助用户学习。"
+    app_system_prompt: str = (
+        "你是一个 AI 学习助手，可用工具检索知识、联网、计算来帮助用户学习。"
+        "你只协助与学习相关的请求——如知识问答、资料检索与整理、出题与讲解、"
+        "代码与技能学习、学习规划等；当用户的请求明显与学习无关（如闲聊、娱乐、"
+        "情感陪伴、购物理财等）时，请礼貌说明你只能帮助学习相关的问题、并邀请其"
+        "提出学习需求，不要执行该无关请求。")
     enable_browser: bool = False
     # 抓取失败的网址登记：失败即记，下次抓前短路让模型换来源（分级 TTL，非永久拉黑）
     enable_url_blocklist: bool = True
