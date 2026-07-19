@@ -176,9 +176,21 @@ export type ModelsInfo = {
   embedding: string | null; rerank: string | null;
 };
 
+// 考试状态：active 为真时前端显示「考试中」标识（当前第 cursor+1/total 题、模式）
+export type ExamStatus = {
+  active: boolean; cursor?: number; total?: number;
+  mode?: string; type?: string | null;
+};
+
 export const api = {
   // 各角色当前模型名，供聊天区展示「当前模型」
   models: (): Promise<ModelsInfo> => authFetch("/api/models").then((r) => r.json()),
+  // 本会话考试状态，供聊天区展示「考试中」标识
+  exam: {
+    status: (conversationId: string): Promise<ExamStatus> =>
+      authFetch(`/api/exam/status?conversation_id=${encodeURIComponent(conversationId)}`)
+        .then((r) => r.json()),
+  },
   list: (): Promise<Conversation[]> => authFetch("/api/conversations").then((r) => r.json()),
   create: (title?: string): Promise<{ id: string }> =>
     authFetch("/api/conversations", { method: "POST", headers: { "Content-Type": "application/json" },

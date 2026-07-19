@@ -17,6 +17,7 @@ from .api.downloads import make_downloads_router
 from .api.profile import make_profile_router
 from .api.questions import make_questions_router
 from .api.stats import make_stats_router
+from .api.exam_status import make_exam_router
 from .api.models_info import make_models_router
 from .api.version import make_version_router
 from .api.wrong_answers import make_wrong_answers_router
@@ -161,6 +162,7 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
                                         trajectory_judge=trajectory_judge,
                                         exam_session_store=exam_session_store,
                                         url_block_store=url_block_store))
+    app.include_router(make_exam_router(exam_session_store))
     app.include_router(make_documents_router(service, doc_store, config))
     app.include_router(make_attachments_router(attachment_store, store, config))
 

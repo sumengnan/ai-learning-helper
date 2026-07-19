@@ -21,6 +21,7 @@ vi.mock("../api/client", () => ({
     autotitle: vi.fn(async () => ({ title: null })),
     downloads: { save: vi.fn(async () => undefined) },
     models: vi.fn(async () => ({ main: "m", fast: "m", judge: "m", embedding: null, rerank: null })),
+    exam: { status: vi.fn(async () => ({ active: false })) },
   },
 }));
 
