@@ -751,7 +751,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
       {/* 考试中标识：告知用户当前处于考试状态、只应作答考试内容；显示进度与模式，及退出方式 */}
       {exam?.active && (
         <Box sx={{
-          mx: 1.5, mb: 1, px: 1.5, py: 0.75, borderRadius: 1.5,
+          mx: 1.5,mt:1, mb: 0.3, px: 1.5, py: 0.75, borderRadius: 1.5,
           display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap",
           bgcolor: (t) => alpha(t.palette.warning.main, 0.12),
           border: (t) => `1px solid ${alpha(t.palette.warning.main, 0.5)}`,
