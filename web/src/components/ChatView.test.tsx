@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, cleanup, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ChatView, fmtDuration } from "./ChatView";
 import { GATE_OPEN_KEY } from "./VerifyBadge";
@@ -69,6 +69,7 @@ describe("ChatView", () => {
 
   it("流被掐断且后端并无在途 run → 落可重试终态，不停在空的「…」", async () => {
     // 请求压根没到后端（无占位可捞）：此时必须收尾成失败态，而不是把气泡吊死在「…」。
+    // 刻意全程不回调 onRunId（本地始终没有 run 句柄），复现"流被掐断且无在途 run"。
     vi.mocked(streamChat).mockImplementationOnce(
       (_cid: string, _msg: string, _onEvent: (e: any) => void, signal?: AbortSignal) =>
         new Promise((_resolve, reject) => {
@@ -170,6 +171,29 @@ describe("ChatView", () => {
     expect((screen.getByLabelText("展示工具调用和 Token") as HTMLInputElement).disabled).toBe(true);
     // 附件按钮禁用
     expect((screen.getByLabelText("上传文件") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("拿到 run 句柄前「停止」禁用；句柄到达后启用并调 stopRun", async () => {
+    // 未拿到 X-Run-Id 前停止只能断本地流、杀不掉后端任务，故按钮先禁用；句柄到达后再启用。
+    let fireRunId: ((rid: string) => void) | null = null;
+    vi.mocked(streamChat).mockImplementationOnce(
+      (_c: string, _m: string, onEvent: (e: any) => void,
+       _sig?: AbortSignal, _att?: string[], onRunId?: (rid: string) => void) =>
+        new Promise<void>(() => {                 // 全程挂住，保持 busy
+          onEvent({ type: "TextDelta", data: { text: "答" } });
+          fireRunId = onRunId ?? null;            // 句柄暂不回调，稍后手动触发
+        }));
+    render(<ChatView conversationId="c1" initial={[]} />);
+    fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "hi" } });
+    fireEvent.click(screen.getByText("发送"));
+    const btn = (await screen.findByText("停止")).closest("button") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);              // 句柄未到 → 禁用
+    fireEvent.click(btn);                          // 禁用态点击无效
+    expect(vi.mocked(stopRun)).not.toHaveBeenCalled();
+    act(() => fireRunId?.("R1"));                 // 句柄到达
+    await waitFor(() => expect(btn.disabled).toBe(false));   // → 启用
+    fireEvent.click(btn);
+    expect(vi.mocked(stopRun)).toHaveBeenCalledWith("R1");
   });
 
   it("开关默认值：展示工具/Token 开", () => {
@@ -280,8 +304,10 @@ describe("ChatView", () => {
 
   it("生成中显示「停止」按钮，点击后中断并恢复「发送」", async () => {
     vi.mocked(streamChat).mockImplementationOnce(
-      (_cid: string, _msg: string, _onEvent: (e: any) => void, signal?: AbortSignal) =>
+      (_cid: string, _msg: string, _onEvent: (e: any) => void, signal?: AbortSignal,
+       _att?: string[], onRunId?: (rid: string) => void) =>
         new Promise((_resolve, reject) => {
+          onRunId?.("R-stop");   // 提供 run 句柄，使「停止」按钮可用（否则新逻辑下禁用）
           signal?.addEventListener("abort", () =>
             reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
         }));
@@ -315,8 +341,10 @@ describe("ChatView", () => {
 
   it("用户停止后显示「已停止」状态", async () => {
     vi.mocked(streamChat).mockImplementationOnce(
-      (_cid: string, _msg: string, _onEvent: (e: any) => void, signal?: AbortSignal) =>
+      (_cid: string, _msg: string, _onEvent: (e: any) => void, signal?: AbortSignal,
+       _att?: string[], onRunId?: (rid: string) => void) =>
         new Promise((_resolve, reject) => {
+          onRunId?.("R-stop");   // 提供 run 句柄，使「停止」按钮可用（否则新逻辑下禁用）
           signal?.addEventListener("abort", () =>
             reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
         }));
