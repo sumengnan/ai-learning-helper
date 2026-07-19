@@ -43,7 +43,7 @@ async def test_real_endpoint_orchestrator_flow():
     from app.assembly import build_harness
     from app.config import AppConfig
 
-    cfg = AppConfig(enable_orchestrator=True)
+    cfg = AppConfig()   # 编排器已是唯一主流程，恒构建，无需开关
     h = build_harness(cfg)
     final = ""
     async for ev in h.orchestrator.run("用一段话解释什么是二分查找，并给出它的时间复杂度"):

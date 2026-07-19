@@ -182,6 +182,24 @@ def test_system_with_guide_appends_prerendered_sandbox_text():
     assert "工作目录" not in without   # 无沙箱不提，避免误导
 
 
+def test_executor_system_prompt_includes_clarify_guide():
+    """执行子步系统提示词应带「信息不足先问、不要猜」指引（无论有无沙箱）。"""
+    from app.orchestration.executor import _system_with_guide, CLARIFY_GUIDE
+    assert "信息不足先问" in CLARIFY_GUIDE
+    assert "信息不足先问" in _system_with_guide("基座提示", "")
+    assert "信息不足先问" in _system_with_guide("基座提示", "\n\n【沙箱工作目录】x")
+
+
+def test_orchestrator_simple_answer_carries_clarify_guide():
+    """全编排器/编排器模式下简单直答面向用户，其系统提示应带澄清指引。"""
+    from app.orchestration.orchestrator import Orchestrator
+    from app.orchestration.executor import CLARIFY_GUIDE
+    import inspect
+    src = inspect.getsource(Orchestrator._simple_answer)
+    assert "CLARIFY_GUIDE" in src   # 简单直答上下文拼接了澄清指引
+    assert "信息不足先问" in CLARIFY_GUIDE
+
+
 def _sbx_cfg(**kw):
     from app.config import AppConfig
     return AppConfig(api_key="k", app_db_path=":memory:", **kw)

@@ -15,31 +15,7 @@ from .tools.plan_tool import UpdatePlanTool, PLAN_SYSTEM_GUIDANCE
 from .tools.validating import ValidatingTool, relevance_check
 
 
-class _HidingRegistry(ToolRegistry):
-    """对底层 registry 的**活视图**，隐藏若干工具名。底层后续新增的工具（如 startup 时才
-    注册进 reg 的 MCP 远程工具）自动可见——故执行子步既拿得到 MCP 搜索工具、又看不到被隐藏的
-    update_plan（子步调它会发 scope=plan 覆盖编排器总计划）。不能用静态拷贝：那会错过 startup
-    才注册的工具。"""
-
-    def __init__(self, base: ToolRegistry, hidden: set[str]) -> None:
-        super().__init__()
-        self._base = base
-        self._hidden = set(hidden)
-
-    def get(self, name: str):
-        return None if name in self._hidden else self._base.get(name)
-
-    def tools(self) -> list:
-        return [t for t in self._base.tools() if t.name not in self._hidden]
-
-    def schemas(self) -> list[dict]:
-        return [t.schema() for t in self.tools()]
-
-    def register(self, tool) -> None:
-        self._base.register(tool)
-
-    def unregister(self, name: str) -> None:
-        self._base.unregister(name)
+# 执行子步的隐藏工具视图 HidingRegistry 已移至 app.orchestration.executor（供编排器与装配层共用）。
 
 
 @dataclass
@@ -271,39 +247,40 @@ def build_harness(config) -> Harness:
         from harness.mcp import MCPManager
         mcp_manager = MCPManager(config)
 
-    # 编排器（Plan-Execute-Reflect，按开关组装；默认关闭 → 零行为变更，走原 ReAct AgentLoop）
-    orchestrator = None
-    if config.enable_orchestrator:
-        from app.completion import build_completer, build_fast_completer, build_fast_client
-        from app.orchestration.orchestrator import Orchestrator
-        from app.orchestration.planner import Planner
-        from app.orchestration.critic import Critic
-        from app.orchestration.executor import Executor
-        from app.sandbox_manager import sandbox_guide
-        from harness.reliability.budget import BudgetTracker
-        _plan_complete = build_completer(client, config.model)     # 规划 + 终局 review 用主模型（判断质量要求高）
-        _fast_complete = build_fast_completer(client, config)      # triage + 单步 validate 用快速档（频繁，提速）
-        _exec_client, _exec_model = build_fast_client(client, config)   # 执行子步走快速档模型（占大头往返，提速）
-        # 执行子步的工具表：对 reg 的活视图，只隐藏 update_plan（子步调它会发 scope=plan 覆盖顶部
-        # 总计划）。必须是活视图而非静态拷贝——MCP 工具是 startup 才注册进 reg 的，拷贝会漏掉它们，
-        # 导致子步"用不了联网搜索"。主 reg 保留 update_plan，simple 直答走 ReAct 仍可用。
-        _exec_reg = _HidingRegistry(reg, {"update_plan"})
-        orchestrator = Orchestrator(
-            client=client, registry=reg, model=config.model,
-            planner=Planner(_plan_complete, max_retries=config.orchestrator_planner_max_retries),
-            critic=Critic(_plan_complete, validate_complete=_fast_complete),
-            executor=Executor(_exec_client, _exec_reg, config.app_system_prompt, _exec_model,
-                              max_steps=config.orchestrator_step_max_steps,
-                              loop_detect_window=config.loop_detect_window,
-                              disable_thinking=config.orchestrator_step_disable_thinking,
-                              # 有沙箱才按配置预渲染指引（工作目录/镜像/联网）；无沙箱这些工具没注册，提了反误导
-                              sandbox_guide_text=(sandbox_guide(config)
-                                                  if sandbox is not None else "")),
-            fast_complete=_fast_complete,
-            # 每次 run 新建独立预算封顶时长/token（超限带现有成果收尾）；单例并发安全
-            budget_factory=lambda: BudgetTracker(config.max_tokens_budget, config.max_wall_seconds),
-            max_step_retry=config.orchestrator_max_step_retry,
-            max_replan=config.orchestrator_max_replan)
+    # 编排器（Plan-Execute-Reflect）：已成为唯一主流程，恒构建、无开关。chat 路由每请求把
+    # 会话上下文（历史+全部指引+记忆）与每请求工具表（用户级工具）注入其 run()，故它可作为唯一
+    # 主流程而不丢失多轮对话/附件/考试/引用/个性化。简单问答仍在其内部短路成单个 ReAct 直答，
+    # 复杂任务才拆分并行执行，不额外增加简单场景开销。
+    from app.completion import build_completer, build_fast_completer, build_fast_client
+    from app.orchestration.orchestrator import Orchestrator
+    from app.orchestration.planner import Planner
+    from app.orchestration.critic import Critic
+    from app.orchestration.executor import Executor, HidingRegistry
+    from app.sandbox_manager import sandbox_guide
+    from harness.reliability.budget import BudgetTracker
+    _plan_complete = build_completer(client, config.model)     # 规划 + 终局 review 用主模型（判断质量要求高）
+    _fast_complete = build_fast_completer(client, config)      # triage + 单步 validate 用快速档（频繁，提速）
+    _exec_client, _exec_model = build_fast_client(client, config)   # 执行子步走快速档模型（占大头往返，提速）
+    # 装配期回退用的执行子步工具视图（隐藏 update_plan）；实际运行时由 chat 路由传入每请求 registry 覆盖。
+    _exec_reg = HidingRegistry(reg, {"update_plan"})
+    orchestrator = Orchestrator(
+        client=client, registry=reg, model=config.model,
+        planner=Planner(_plan_complete, max_retries=config.orchestrator_planner_max_retries),
+        critic=Critic(_plan_complete, validate_complete=_fast_complete),
+        executor=Executor(_exec_client, _exec_reg, config.app_system_prompt, _exec_model,
+                          max_steps=config.orchestrator_step_max_steps,
+                          loop_detect_window=config.loop_detect_window,
+                          disable_thinking=config.orchestrator_step_disable_thinking,
+                          # 有沙箱才按配置预渲染指引（工作目录/镜像/联网）；无沙箱这些工具没注册，提了反误导
+                          sandbox_guide_text=(sandbox_guide(config)
+                                              if sandbox is not None else "")),
+        fast_complete=_fast_complete,
+        # 简单直答走快速档模型/端点（省钱提速）；未配 fast_model 时 _exec_* 即回退主 client/主模型
+        fast_client=_exec_client, fast_model=_exec_model,
+        # 每次 run 新建独立预算封顶时长/token（超限带现有成果收尾）；单例并发安全
+        budget_factory=lambda: BudgetTracker(config.max_tokens_budget, config.max_wall_seconds),
+        max_step_retry=config.orchestrator_max_step_retry,
+        max_replan=config.orchestrator_max_replan)
 
     traj = TrajectoryStore(config.persistence_db_path)
     return Harness(

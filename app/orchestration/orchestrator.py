@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 
@@ -30,7 +31,7 @@ from harness.tools.base import ToolRegistry
 from harness.types import Message, Role
 
 from .critic import Critic
-from .executor import Executor, StepArtifact
+from .executor import CLARIFY_GUIDE, Executor, HidingRegistry, StepArtifact
 from .planner import Planner, PlannerError
 from .plan import Artifact, Plan, has_pending, ready_steps
 from .usage_ctx import (
@@ -43,14 +44,35 @@ TRIAGE_SYSTEM = (
     "只回一个词：simple 或 complex。"
 )
 
+# 无需 LLM 判别的「明显简单」：整条消息就是纯寒暄/致谢/短应答。命中即跳过 triage 的那次模型调用，
+# 直接走简单直答（省一次调用/延迟）。只放高置信度社交短句，且要求整条消息就是这些词、无其它实质
+# 内容——带任务的消息（如「你好，帮我查资料」含"帮我"）不会命中，仍交 LLM triage。误判为简单的代价
+# 也低：simple_answer 本就是全工具 ReAct，只是少做一次规划。
+_GREETING_RE = re.compile(
+    r"^[\s，。,.!！?？~、]*"
+    r"(你好+|您好|哈喽|嗨|hi|hello|hey|在吗|在不在|早|早上?好|中午好|下午好|晚上好|晚安|"
+    r"谢谢+|多谢|感谢|thanks|thank\s*you|thx|ok|okay|好的?|好嘞|行|嗯+|哦+|噢+|收到|"
+    r"辛苦了?|不错|棒|赞|再见|拜拜|bye|goodbye)"
+    r"[\s，。,.!！?？~、]*$",
+    re.IGNORECASE)
+
+
+def _obvious_simple(message: str) -> bool:
+    """启发式短路：纯寒暄/致谢/短应答无需 LLM triage。高精度优先，宁可漏判（回退 LLM）不可误判。"""
+    m = (message or "").strip()
+    return bool(m) and len(m) <= 20 and _GREETING_RE.match(m) is not None
+
 SYNTH_SYSTEM = (
     "你是汇总员。根据用户目标和各步骤的产出，写出面向用户的最终答复。"
     "只使用已给出的产出，不要编造；条理清晰、直接作答。"
 )
 
 
-def _synth_user(goal: str, artifacts: dict[str, Artifact]) -> str:
-    lines = [f"用户目标：\n{goal}\n", "各步骤产出："]
+def _synth_user(goal: str, artifacts: dict[str, Artifact], recent_dialogue: str = "") -> str:
+    lines = []
+    if recent_dialogue:   # 带上最近对话，最终答复才有多轮上下文（指代/追问/延续先前话题）
+        lines.append(f"最近对话（供理解上下文与延续语气）：\n{recent_dialogue}\n")
+    lines += [f"用户目标：\n{goal}\n", "各步骤产出："]
     for sid, art in artifacts.items():
         lines.append(f"[{sid}] {art.summary}")
     lines.append("\n请综合以上，写出对用户的最终答复。")
@@ -72,7 +94,8 @@ def _plan_progress(plan: Plan) -> Progress:
 class Orchestrator:
     def __init__(self, *, client, registry: ToolRegistry, model: str,
                  planner: Planner, critic: Critic, executor: Executor,
-                 fast_complete, budget=None, budget_factory=None,
+                 fast_complete, fast_client=None, fast_model: str | None = None,
+                 budget=None, budget_factory=None,
                  max_step_retry: int = 2, max_replan: int = 2) -> None:
         self._client = client
         self._registry = registry
@@ -81,6 +104,10 @@ class Orchestrator:
         self._critic = critic
         self._executor = executor
         self._fast_complete = fast_complete
+        # 简单直答走快速档模型（省钱/提速）：未配 fast_model 时 build_fast_client 回退主 client/主模型，
+        # 故这里回退 self._client/self._model —— 没配快速模型即零行为变更。
+        self._fast_client = fast_client if fast_client is not None else client
+        self._fast_model = fast_model or model
         self._budget = budget                # 直接注入的预算实例（主要供测试）
         # 每次 run() 新建预算的工厂：编排器是单例，用工厂产出每轮独立的 BudgetTracker，
         # 避免跨轮累加、且并发安全（预算以局部变量贯穿一次 run，绝不写回 self）。
@@ -135,26 +162,34 @@ class Orchestrator:
         except Exception:
             return False   # 判不了就走完整编排（宁可多做不可少做）
 
-    async def _simple_answer(self, message: str, budget=None):
-        """简单问答短路：单个全能力 AgentLoop 直答，透传其事件（跳过其 RunStarted，避免重复）。"""
-        loop = AgentLoop(client=self._client, registry=self._registry,
-                         context=ContextManager(SYNTH_SYSTEM),
-                         max_steps=10, budget=budget, model_name=self._model)
+    async def _simple_answer(self, message: str, budget=None, *, context=None, registry=None):
+        """简单问答短路：单个全能力 AgentLoop 直答，透传其事件（跳过其 RunStarted，避免重复）。
+
+        承载绝大多数流量（问答/追问/考试）。context 为本轮每请求上下文（系统提示+全部指引+会话
+        历史+记忆，由 chat 路由传入）——多轮对话、附件/考试/引用/日期/个性化全靠它；缺省回退到最小
+        SYNTH_SYSTEM+澄清指引（测试/back-compat）。registry 为本轮每请求工具表（含用户级工具）。"""
+        ctx = context if context is not None else ContextManager(SYNTH_SYSTEM + CLARIFY_GUIDE)
+        loop = AgentLoop(client=self._fast_client,
+                         registry=registry if registry is not None else self._registry,
+                         context=ctx, max_steps=10, budget=budget, model_name=self._fast_model)
         async for ev in loop.run(message):
             if isinstance(ev, RunStarted):
                 continue
             yield ev
 
     # ---- synthesize ----
-    async def _synthesize(self, goal: str, artifacts: dict[str, Artifact]):
+    async def _synthesize(self, goal: str, artifacts: dict[str, Artifact], recent_dialogue: str = ""):
         """流式汇总最终答复。yield TextDelta（run() 累加得最终文本）+ ReasoningDelta（开思考模式时
-        把最终答复的思考过程透传给前端——编排器路径唯一该展示思考的地方）。"""
+        把最终答复的思考过程透传给前端——编排器路径唯一该展示思考的地方）。
+
+        保持纯生成（空工具表、单步）以免在汇总阶段又去调工具；带上 recent_dialogue 让最终答复有
+        多轮上下文。"""
         loop = AgentLoop(
             client=self._client, registry=ToolRegistry(),
             context=ContextManager(SYNTH_SYSTEM), max_steps=1, model_name=self._model)
         final = ""
         streamed = False
-        async for ev in loop.run(_synth_user(goal, artifacts)):
+        async for ev in loop.run(_synth_user(goal, artifacts, recent_dialogue)):
             if isinstance(ev, TextDelta):
                 streamed = True
                 yield ev
@@ -169,11 +204,22 @@ class Orchestrator:
             yield TextDelta(text=final)
 
     # ---- 主入口 ----
-    async def run(self, user_message: str, verify: bool = True):
+    async def run(self, user_message: str, verify: bool = True, *,
+                  context=None, registry=None, recent_dialogue: str = ""):
         """verify：对应前端结果校验开关。开 → 终局 Critic 把关 + 可重规划；关 → 跑完一轮
-        直接汇总交付，不做终局 review/重规划（更快，但不把关）。"""
+        直接汇总交付，不做终局 review/重规划（更快，但不把关）。
+
+        每请求依赖（由 chat 路由传入，使编排器可作为唯一主流程而不丢失既有能力）：
+        - context：本轮上下文（系统提示+全部指引+会话历史+记忆）。用于简单直答与最终汇总——
+          多轮对话、附件/考试/引用/日期/个性化全靠它。
+        - registry：本轮每请求工具表（含用户级 save_download/知识库/考试/附件工具）。用于简单直答
+          与各执行子步；执行子步会先隐藏 update_plan 再用。
+        - recent_dialogue：最近对话文本，喂给 Planner（上下文相关的拆分）与最终汇总。
+        缺省全为空/回退，保持对既有测试透明。"""
         run_id = uuid.uuid4().hex
         yield RunStarted(run_id=run_id)
+        # 执行子步用的工具视图：每请求 registry 隐藏 update_plan（子步调它会覆盖总计划）；无则回退
+        exec_reg = HidingRegistry(registry, {"update_plan"}) if registry is not None else None
         # 每次 run 新建独立预算（工厂优先），以局部变量贯穿本轮——单例并发安全、不跨轮累加
         budget = self._budget_factory() if self._budget_factory else self._budget
         if budget:
@@ -184,16 +230,20 @@ class Orchestrator:
         acc = UsageAcc()
         acc_token = set_acc(acc)
         try:
-            if await self._is_simple(user_message):
-                async for ev in self._simple_answer(user_message, budget):
+            # 零成本短路优先：纯寒暄直接简单直答，省掉 triage 的模型调用；否则再让 LLM 判简单/复杂
+            if _obvious_simple(user_message) or await self._is_simple(user_message):
+                async for ev in self._simple_answer(user_message, budget,
+                                                    context=context, registry=registry):
                     yield ev
                 return
 
             out: dict = {}   # 边规划边流式发规划思考（顶部"任务计划思考"块），先于计划
-            async for ev in self._plan_streaming(self._planner.plan(user_message), out):
+            async for ev in self._plan_streaming(
+                    self._planner.plan(user_message, recent_dialogue), out):
                 yield ev
             if "error" in out:
-                async for ev in self._simple_answer(user_message, budget):   # 降级
+                async for ev in self._simple_answer(user_message, budget,   # 降级
+                                                    context=context, registry=registry):
                     yield ev
                 return
             plan = out["plan"]
@@ -205,7 +255,7 @@ class Orchestrator:
             # 否则终局 synthesize/review 只剩最后一轮的产物 —— 违反 spec §4「保留成果」并使闭环残废。
             all_artifacts: dict[str, Artifact] = {}
             while True:
-                async for ev in self._schedule_rounds(plan, retry_hints, budget):
+                async for ev in self._schedule_rounds(plan, retry_hints, budget, exec_reg):
                     yield ev
                 for s in plan.steps:      # 收走本轮 done 产物（replan 换 plan 也不丢）
                     if s.status == "done" and s.result:
@@ -248,7 +298,7 @@ class Orchestrator:
             # 无论产物多寡都尽力 synthesize：spec §5「其余一律尽量给用户一个（可能残缺但有说明的）
             # 答复」——零产物时 synthesize 也会据空产物说明未能完成，胜过硬判 RunError。
             final_parts: list[str] = []
-            async for ev in self._synthesize(user_message, all_artifacts):
+            async for ev in self._synthesize(user_message, all_artifacts, recent_dialogue):
                 if isinstance(ev, TextDelta):
                     final_parts.append(ev.text)
                 yield ev
@@ -260,7 +310,8 @@ class Orchestrator:
             reset_acc(acc_token)
 
     # ---- 调度：一轮轮跑就绪集，直到无 pending、预算超限或无法推进（后两者带现有成果收尾）----
-    async def _schedule_rounds(self, plan: Plan, retry_hints: dict[str, str], budget=None):
+    async def _schedule_rounds(self, plan: Plan, retry_hints: dict[str, str], budget=None,
+                               exec_reg=None):
         while has_pending(plan):
             if budget:
                 try:
@@ -291,7 +342,8 @@ class Orchestrator:
                 art = None
                 err = None
                 try:
-                    async for ev in self._executor.execute(step, deps, retry_hints.get(step.id, "")):
+                    async for ev in self._executor.execute(
+                            step, deps, retry_hints.get(step.id, ""), registry=exec_reg):
                         if isinstance(ev, StepArtifact):
                             art, err = ev.artifact, ev.error
                         else:

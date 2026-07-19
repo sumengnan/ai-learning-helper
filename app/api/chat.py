@@ -36,6 +36,7 @@ from ..auth import current_user
 from ..completion import build_fast_completer
 from ..context_assembly import ContextAssembler
 from ..conversation_memory import ConversationMemoryService
+from ..orchestration.executor import CLARIFY_GUIDE
 from ..profile import render_profile_block
 from ..sandbox_manager import reset_sandbox_conv, sandbox_guide, set_sandbox_conv
 from ..summaries import SummaryStore
@@ -160,14 +161,7 @@ ATTACHMENT_GUIDE = (
     "- 所有附件也已放入沙箱 /workspace/uploads/，可用 run_python/run_shell 直接读取或执行。\n"
     "- 只在确有需要时才读取附件，不要无谓地逐个打开。\n")
 
-# 信息不足先问、不要猜：常驻注入。与 verify.py 的立场一致（请求澄清/合理追问属恰当推进、不扣分）。
-CLARIFY_GUIDE = (
-    "\n\n【信息不足先问，不要猜】当用户的需求缺少完成任务所必需的关键信息（如目标、对象、范围、"
-    "格式、版本、时间、约束等），且无法从对话上下文合理推断时，先用一两句话向用户澄清或确认，"
-    "再动手——不要凭空假设或替用户拿主意，猜错会浪费一整轮、给出跑偏的结果。"
-    "但也不要为无关紧要的细节反复追问：信息已足够、或缺的只是不影响结果的小事时，"
-    "按合理默认直接推进，并在答复里说明你采用的假设，让用户能纠正。")
-
+# CLARIFY_GUIDE（信息不足先问、不要猜）现集中定义在 orchestration.executor，供主聊天与编排器共用。
 # 北京时间（东八区）：本应用面向中文用户，用它作为「今天」的基准
 _CN_TZ = timezone(timedelta(hours=8))
 
@@ -882,11 +876,16 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 return Progress("sources", json.dumps(items, ensure_ascii=False))
 
             try:
-                if config.enable_orchestrator and getattr(harness, "orchestrator", None) is not None:
-                    # 编排器路径：单次流式，把 harness.orchestrator 当作 loop_obj 交给 _drain（其
-                    # run(message) 只 yield 既有 Event 类型），复用同一套事件处理与 SSE 下发。
-                    # 前端"结果校验"开关(req.verify)映射到编排器的终局 Critic：开→把关+可重规划，
-                    # 关→跑完一轮直接汇总交付。用 SimpleNamespace 把 verify 绑进 .run(message)。
+                if getattr(harness, "orchestrator", None) is not None:
+                    # 编排器路径（唯一主流程：装配层恒建 orchestrator，故本轮总走这里）。
+                    # 把 harness.orchestrator 当作 loop_obj 交给 _drain（其 run(message) 只 yield 既有
+                    # Event 类型），复用同一套事件处理与 SSE 下发。前端"结果校验"开关(req.verify)映射到
+                    # 编排器的终局 Critic：开→把关+可重规划，关→跑完一轮直接汇总交付。
+                    # 关键：把每请求上下文（base_ctx，含会话历史+全部指引+记忆）、每请求工具表
+                    # （registry，含用户级工具）、最近对话注入 run()——否则多轮对话/附件/考试/引用/
+                    # 个性化/用户工具全丢。context 只喂给编排器的简单直答（与 ReAct 主路径同源，故也
+                    # 同样包一层技能上下文）；registry 喂给简单直答与各执行子步。
+                    # 下方 ReAct/交付门两分支仅在 orchestrator 缺失时作惰性兜底（如精简测试注入 None）。
                     used_orchestrator = True
                     collect = {"final": None, "error": None, "steps": steps,
                                "grounding": [], "progress": progress, "usage": None,
@@ -894,8 +893,14 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     run_id_a = uuid4().hex
                     store.add_run(req.conversation_id, run_id_a)
                     source_sink.reset()
+                    _octx = base_ctx
+                    if getattr(harness, "skill_registry", None) is not None:
+                        from harness.skills.context import SkillContextManager
+                        _octx = SkillContextManager(_octx, harness.skill_registry)
                     _orch_src = SimpleNamespace(
-                        run=lambda m: harness.orchestrator.run(m, verify=req.verify))
+                        run=lambda m: harness.orchestrator.run(
+                            m, verify=req.verify, context=_octx, registry=registry,
+                            recent_dialogue=recent_dialogue))
                     async for s in _drain(_orch_src, run_id_a, model_message, True, collect):
                         yield _acc(s)
                     errored = collect["final"] is None

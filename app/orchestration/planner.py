@@ -34,8 +34,9 @@ PLANNER_SYSTEM = (
 )
 
 
-def _plan_user(goal: str) -> str:
-    return f"用户目标：\n{goal}\n\n请拆成 DAG 计划。"
+def _plan_user(goal: str, recent_dialogue: str = "") -> str:
+    ctx = f"最近对话（供理解上下文相关的请求，如指代/追问）：\n{recent_dialogue}\n\n" if recent_dialogue else ""
+    return f"{ctx}用户目标：\n{goal}\n\n请拆成 DAG 计划。"
 
 
 def _replan_user(goal: str, done: list[PlanStep], feedback: str) -> str:
@@ -60,8 +61,8 @@ class Planner:
         self._complete = complete
         self._max_retries = max_retries
 
-    async def plan(self, goal: str) -> Plan:
-        steps = await self._generate(PLANNER_SYSTEM, _plan_user(goal))
+    async def plan(self, goal: str, recent_dialogue: str = "") -> Plan:
+        steps = await self._generate(PLANNER_SYSTEM, _plan_user(goal, recent_dialogue))
         return Plan(goal=goal, steps=steps, version=1)
 
     async def replan(self, goal: str, plan: Plan, feedback: str) -> Plan:

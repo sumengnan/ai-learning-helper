@@ -9,7 +9,7 @@ class FakePlanner:
     def __init__(self, plans, raise_on_plan=False):
         self._plans = list(plans); self._i = 0
         self._raise_on_plan = raise_on_plan
-    async def plan(self, goal):
+    async def plan(self, goal, recent_dialogue=""):
         if self._raise_on_plan:
             raise PlannerError("boom")
         p = self._plans[0]; return p
@@ -33,7 +33,7 @@ class FakeExecutor:
     """每步产出 summary=step.id 的 Artifact；记录执行顺序供并行断言。"""
     def __init__(self, order):
         self._order = order
-    async def execute(self, step, deps, hint=""):
+    async def execute(self, step, deps, hint="", *, registry=None):
         from app.orchestration.executor import StepArtifact
         self._order.append(step.id)
         yield Progress(f"subagent:executor:{step.id}", "开始")
@@ -43,10 +43,10 @@ class FakeExecutor:
 def _mk(planner, critic, order, triage_simple=False, synth="最终答复", max_replan=2):
     async def fake_triage(msg):
         return triage_simple
-    async def fake_synth(goal, artifacts):
+    async def fake_synth(goal, artifacts, recent_dialogue=""):
         from harness.events import TextDelta
         yield TextDelta(text=synth)
-    async def fake_simple(msg, budget=None):
+    async def fake_simple(msg, budget=None, *, context=None, registry=None):
         yield RunFinished(message=__import__("harness.types", fromlist=["Message"]).Message(
             role=__import__("harness.types", fromlist=["Role"]).Role.ASSISTANT, content="简单答复"))
     orch = Orchestrator.__new__(Orchestrator)
@@ -124,7 +124,7 @@ async def test_failed_step_blocking_dependent_degrades_gracefully():
         async def review(self, goal, plan, artifacts):
             return Review(accept=True, feedback="")
     got = {}
-    async def capture_synth(goal, artifacts):
+    async def capture_synth(goal, artifacts, recent_dialogue=""):
         got.update(artifacts)
         yield TextDelta(text="定稿")
     orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2", deps=["s1"]), _s("s3"))]),
@@ -140,7 +140,7 @@ async def test_replan_preserves_prior_done_artifacts():
     """重规划后，上一轮已完成步的产物必须仍进入终局 synthesize（spec §4「保留成果」）。"""
     order = []
     got = {}
-    async def capture_synth(goal, artifacts):
+    async def capture_synth(goal, artifacts, recent_dialogue=""):
         got.update(artifacts)
         yield TextDelta(text="定稿")
     # round1 计划 {s1}→done；review 先拒后受；replan → {s2}→done。终局须同时拿到 s1、s2。
@@ -195,7 +195,7 @@ async def test_planner_reasoning_emitted_before_plan():
     from app.orchestration.usage_ctx import record_reasoning
 
     class RPlanner:
-        async def plan(self, goal):
+        async def plan(self, goal, recent_dialogue=""):
             record_reasoning("先分析怎么拆")
             return _plan(_s("s1"))
         async def replan(self, g, p, f):
@@ -226,7 +226,7 @@ async def test_run_aggregates_all_usage_incl_planner_critic():
     from app.orchestration.plan import Artifact
 
     class UExec:
-        async def execute(self, step, deps, hint=""):
+        async def execute(self, step, deps, hint="", *, registry=None):
             record_usage(Usage(0, 0, 100), 0.01)
             yield StepArtifact(Artifact(summary=f"done-{step.id}"))
 
@@ -237,12 +237,12 @@ async def test_run_aggregates_all_usage_incl_planner_critic():
             record_usage(Usage(0, 0, 20), 0.002); return Review(accept=True, feedback="")
 
     class UPlanner:
-        async def plan(self, goal):
+        async def plan(self, goal, recent_dialogue=""):
             record_usage(Usage(0, 0, 30), 0.003); return _plan(_s("s1"), _s("s2"))
         async def replan(self, g, p, f):
             return _plan(_s("s1"))
 
-    async def usynth(goal, arts):
+    async def usynth(goal, arts, recent_dialogue=""):
         record_usage(Usage(0, 0, 50), 0.005); yield TextDelta(text="答复")
 
     orch = _mk(UPlanner(), UCritic(), [])
@@ -425,7 +425,7 @@ async def test_budget_exceeded_degrades_to_synthesize():
                 raise BudgetExceeded("超预算")
     order = []
     got = {}
-    async def capture_synth(goal, artifacts):
+    async def capture_synth(goal, artifacts, recent_dialogue=""):
         got.update(artifacts)
         yield TextDelta(text="定稿")
     orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2", deps=["s1"]))]),
@@ -447,7 +447,7 @@ async def test_parallel_steps_actually_concurrent():
     class ProbeExecutor:
         def __init__(self):
             self.now = 0; self.peak = 0
-        async def execute(self, step, deps, hint=""):
+        async def execute(self, step, deps, hint="", *, registry=None):
             self.now += 1; self.peak = max(self.peak, self.now)
             await asyncio.sleep(0)
             self.now -= 1
@@ -469,7 +469,7 @@ async def test_early_abort_cancels_pending_workers():
 
     class MixedExecutor:
         """s_fast 立刻产出一个事件；s_slow 阻塞，被取消时记录自己。"""
-        async def execute(self, step, deps, hint=""):
+        async def execute(self, step, deps, hint="", *, registry=None):
             if step.id == "s_slow":
                 try:
                     await asyncio.sleep(100)
@@ -493,3 +493,118 @@ async def test_early_abort_cancels_pending_workers():
     await agen.aclose()                      # 模拟提前放弃 → 应取消未完成 worker
     await asyncio.sleep(0)                    # 放行取消回调
     assert "s_slow" in cancelled             # 悬挂 worker 被取消（未取消时此断言失败）
+
+
+async def test_run_threads_context_and_registry_to_simple_answer():
+    """每请求 context/registry 应透传给简单直答（多轮/用户工具靠它）。"""
+    seen = {}
+    async def cap_simple(msg, budget=None, *, context=None, registry=None):
+        seen["ctx"], seen["reg"] = context, registry
+        yield RunFinished(message=__import__("harness.types", fromlist=["Message"]).Message(
+            role=__import__("harness.types", fromlist=["Role"]).Role.ASSISTANT, content="简单答复"))
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [], triage_simple=True)
+    orch._simple_answer = cap_simple
+    CTX, REG = object(), object()
+    _ = [ev async for ev in orch.run("你好", context=CTX, registry=REG)]
+    assert seen["ctx"] is CTX and seen["reg"] is REG
+
+
+async def test_run_wraps_registry_as_hiding_view_for_executor():
+    """执行子步拿到的是每请求 registry 的隐藏视图（隐藏 update_plan），非裸 registry。"""
+    from harness.tools.base import ToolRegistry
+    from app.orchestration.executor import HidingRegistry
+    seen = {}
+    class CapExec:
+        async def execute(self, step, deps, hint="", *, registry=None):
+            from app.orchestration.executor import StepArtifact
+            seen["reg"] = registry
+            yield StepArtifact(Artifact(summary="x"))
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(reviews=(True,)), [])
+    orch._executor = CapExec()
+    reg = ToolRegistry()
+    _ = [ev async for ev in orch.run("复杂", registry=reg)]
+    assert isinstance(seen["reg"], HidingRegistry)
+    assert seen["reg"].get("update_plan") is None      # 隐藏了 update_plan
+
+
+async def test_run_passes_recent_dialogue_to_planner_and_synth():
+    """最近对话应喂给 Planner（上下文相关拆分）与最终汇总。"""
+    seen = {}
+    class CapPlanner:
+        async def plan(self, goal, recent_dialogue=""):
+            seen["plan_rd"] = recent_dialogue
+            return _plan(_s("s1"))
+        async def replan(self, g, p, f):
+            return _plan(_s("s1"))
+    async def cap_synth(goal, artifacts, recent_dialogue=""):
+        seen["synth_rd"] = recent_dialogue
+        yield TextDelta(text="定稿")
+    orch = _mk(CapPlanner(), FakeCritic(reviews=(True,)), [])
+    orch._synthesize = cap_synth
+    _ = [ev async for ev in orch.run("复杂", recent_dialogue="最近对话X")]
+    assert seen["plan_rd"] == "最近对话X" and seen["synth_rd"] == "最近对话X"
+
+
+async def test_run_backcompat_no_per_request_deps():
+    """不传每请求依赖时仍正常跑（对既有测试/调用透明）。"""
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(reviews=(True,)), [])
+    events = await _run(orch)
+    assert isinstance(events[-1], RunFinished)
+
+
+def test_obvious_simple_heuristic():
+    from app.orchestration.orchestrator import _obvious_simple
+    assert _obvious_simple("你好") and _obvious_simple("谢谢！") and _obvious_simple("  ok ")
+    assert _obvious_simple("thanks") and _obvious_simple("嗯嗯") and _obvious_simple("晚上好~")
+    assert not _obvious_simple("你好，帮我查资料")   # 带任务，不短路
+    assert not _obvious_simple("解释一下光合作用")
+    assert not _obvious_simple("考我5道题")
+    assert not _obvious_simple("")
+
+
+async def test_greeting_short_circuits_without_llm_triage():
+    """纯寒暄应零成本短路：不调 LLM triage，直接简单直答。"""
+    from harness.types import Message, Role
+    calls = {"triage": 0}
+    async def counting_triage(msg):
+        calls["triage"] += 1
+        return False
+    hit = {"simple": 0}
+    async def cap_simple(msg, budget=None, *, context=None, registry=None):
+        hit["simple"] += 1
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content="hi"))
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [])
+    orch._is_simple = counting_triage
+    orch._simple_answer = cap_simple
+    events = [ev async for ev in orch.run("你好")]
+    assert calls["triage"] == 0, "寒暄不应调 LLM triage"
+    assert hit["simple"] == 1 and isinstance(events[-1], RunFinished)
+
+
+async def test_non_greeting_still_uses_llm_triage():
+    """非寒暄消息仍交 LLM triage 判简单/复杂。"""
+    calls = {"triage": 0}
+    async def counting_triage(msg):
+        calls["triage"] += 1
+        return True
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [])
+    orch._is_simple = counting_triage
+    _ = [ev async for ev in orch.run("帮我分析这段代码的时间复杂度")]
+    assert calls["triage"] == 1
+
+
+def test_orchestrator_uses_fast_model_for_simple_answer():
+    """简单直答走快速档 client/model（省钱提速）。"""
+    orch = Orchestrator.__new__(Orchestrator)
+    orch.__init__(client="MAIN", registry=None, model="main-model",
+                  planner=None, critic=None, executor=None, fast_complete=None,
+                  fast_client="FAST", fast_model="fast-model")
+    assert orch._fast_client == "FAST" and orch._fast_model == "fast-model"
+
+
+def test_orchestrator_fast_falls_back_to_main_when_unset():
+    """未配快速模型 → 回退主 client/主模型（零行为变更）。"""
+    orch = Orchestrator.__new__(Orchestrator)
+    orch.__init__(client="MAIN", registry=None, model="main-model",
+                  planner=None, critic=None, executor=None, fast_complete=None)
+    assert orch._fast_client == "MAIN" and orch._fast_model == "main-model"
