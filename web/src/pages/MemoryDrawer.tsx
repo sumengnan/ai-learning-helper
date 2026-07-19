@@ -11,17 +11,8 @@ import PsychologyIcon from "@mui/icons-material/Psychology";
 import ChecklistIcon from "@mui/icons-material/Checklist";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import { statsApi, type MemoryItem } from "../api/stats";
+import { fromNow } from "./statsShared";
 import { Markdown } from "../components/Markdown";
-
-function fromNow(iso?: string): string {
-  if (!iso) return "";
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return "";
-  const s = Math.max(0, (Date.now() - t) / 1000);
-  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
-  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
-  return `${Math.floor(s / 86400)} 天前`;
-}
 
 // 时间远近上色：越新越「暖绿」，越旧越淡，一眼看出记忆新鲜度
 function recencyColor(iso?: string): string {
