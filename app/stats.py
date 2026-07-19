@@ -124,6 +124,7 @@ class StatsService:
                  app_conn: sqlite3.Connection,
                  memory_conn: sqlite3.Connection | None = None,
                  memory_store=None,
+                 maintainer=None,
                  price_tiers: list | None = None,
                  currency: str = "$",
                  now=None) -> None:
@@ -133,6 +134,8 @@ class StatsService:
         # 记忆的写侧后端（SqliteVecBackend）：删除要同步清 records/vec/fts 三表，
         # 走它才安全；只读统计仍用 _mem 连接。缺省 None 时删除不可用（优雅降级）。
         self._mem_store = memory_store
+        # 记忆维护器（MemoryMaintainer）：手动「整理相似偏好」用；缺省 None 时该功能优雅降级。
+        self._maintainer = maintainer
         # 分层单价表（按输入长度分档）；配置后由 token 数现算成本，可回溯历史事件。
         # 为空则回退累加事件里已存的 cost_usd（旧口径）。
         self._price_tiers = price_tiers or []
@@ -625,17 +628,18 @@ class StatsService:
         conv_ids = self._user_conv_ids(user_id)
         if self._mem is None or not conv_ids:
             return []
-        limit = max(1, min(limit, 200))
+        limit = max(1, min(limit, 1000))
         ph = ",".join("?" * len(conv_ids))
         try:
             rows = self._mem.execute(
-                f"SELECT id, text, kind, created_at FROM memory_records "
+                f"SELECT id, text, kind, mem_type, created_at FROM memory_records "
                 f"WHERE kind='conversation' AND superseded=0 AND owner_id IN ({ph}) "
                 f"ORDER BY created_at DESC LIMIT ?",
                 (*conv_ids, limit)).fetchall()
         except sqlite3.Error:
             return []
-        return [{"id": r[0], "text": r[1], "collection": r[2], "created_at": r[3]} for r in rows]
+        return [{"id": r[0], "text": r[1], "collection": r[2], "mem_type": r[3],
+                 "created_at": r[4]} for r in rows]
 
     def delete_memory(self, user_id: str | None, mem_id: str) -> bool:
         """删除当前用户的一条对话记忆（按会话归属校验）。找不到/非本人/无写后端返回 False。"""
@@ -649,6 +653,33 @@ class StatsService:
             return False
         self._mem_store.delete([mem_id])
         return True
+
+    def delete_memories(self, user_id: str | None, ids: list[str]) -> list[str]:
+        """批量删除当前用户的对话记忆（逐条按会话归属校验）。返回实际删除的 id 列表；
+        非本人/不存在的跳过。无写后端或空入参返回空。"""
+        if self._mem_store is None or not ids:
+            return []
+        owned = set(self._user_conv_ids(user_id))
+        recs = self._mem_store.get(list(ids))
+        deletable = [r.id for r in recs if r.owner_id in owned]
+        if deletable:
+            self._mem_store.delete(deletable)
+        return deletable
+
+    async def consolidate_memories(self, user_id: str | None) -> dict:
+        """手动「整理相似偏好」：把用户各会话里同主题的多条 semantic 偏好合并成一条。
+        返回合并统计 {clusters, merged, created}。无维护器时优雅降级为全 0。"""
+        total = {"clusters": 0, "merged": 0, "created": 0}
+        if self._maintainer is None:
+            return total
+        for conv_id in self._user_conv_ids(user_id):
+            try:
+                r = await self._maintainer.consolidate_semantic(conv_id, "conversation")
+            except Exception:                       # 单会话失败不影响其余（best-effort）
+                continue
+            for k in total:
+                total[k] += r.get(k, 0)
+        return total
 
     def _last_conversation(self, user_id: str | None) -> dict | None:
         if self._app is None:
