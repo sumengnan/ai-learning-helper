@@ -123,6 +123,10 @@ class HarnessConfig(BaseSettings):
     # 会话级沙箱空闲驱逐（秒）：某会话超过此时长无沙箱操作则销毁其容器（安全阀，防泄漏）。
     # 与「删除会话即销毁」的主路径无关；<=0 关闭空闲驱逐。默认 30 分钟。
     sandbox_idle_timeout: float = 1800.0
+    # 语言子沙箱空闲驱逐（秒）：各语言/版本子沙箱用完不再即时销毁，而是按 (会话, 语言) 缓存复用，
+    # 超过此时长无该子沙箱操作才销毁——避免每次执行都重建镜像容器。<=0 则用完即销毁（旧行为）。
+    # 默认 1 小时。会话销毁/关停/空闲驱逐其基础容器时，其子沙箱一并销毁。
+    sandbox_sub_idle_timeout: float = 3600.0
     # 外部 API/HTTP
     http_allowed_domains: list = []         # 空=放行公网；非空=仅白名单
     http_block_private: bool = True         # SSRF：拦截内网/元数据

@@ -78,17 +78,78 @@ def _stub_docker(monkeypatch):
     return captured
 
 
-async def test_run_code_routes_version_to_ephemeral_sub(_conv, _stub_docker):
+async def test_run_code_routes_version_to_cached_sub(_conv, _stub_docker):
     proxy = SandboxProxy(SandboxManager(_cfg()))
     res = await proxy.run_code("java", "8", "Main.java", "class Main{}",
                                None, "javac Main.java && java Main", timeout=5)
     assert res.exit_code == 0
     assert _stub_docker["image"] == "eclipse-temurin:8-jdk"     # version=8 → java8 镜像
     assert _stub_docker["network"] == "none"                    # 子沙箱默认禁网
-    assert _stub_docker["labels"]["role"] == "ephemeral"        # 打了一次性标签
+    assert _stub_docker["labels"]["role"] == "lang"             # 缓存复用（非一次性）
     sub = _StubSub.made[0]
-    assert sub.started == 1 and sub.closed == 1                 # 用完即销毁
+    assert sub.started == 1 and sub.closed == 0                 # 用完不销毁（缓存复用）
     assert sub.execs == [["sh", "-c", "javac Main.java && java Main"]]
+
+
+async def test_cached_sub_reused_across_runs_not_rebuilt(_conv, _stub_docker):
+    """同会话同语言连续执行：复用同一子沙箱，不重建、不销毁（避免反复重建镜像容器）。"""
+    proxy = SandboxProxy(SandboxManager(_cfg()))
+    await proxy.run_code("python", None, "a.py", "print(1)", ["python3", "a.py"], None, timeout=5)
+    await proxy.run_code("python", None, "b.py", "print(2)", ["python3", "b.py"], None, timeout=5)
+    assert len(_StubSub.made) == 1                              # 只建了一个容器
+    assert _StubSub.made[0].closed == 0                         # 期间从未销毁
+    assert len(_StubSub.made[0].execs) == 2                     # 两次执行落在同一容器
+
+
+async def test_different_langs_get_separate_cached_subs(_conv, _stub_docker):
+    proxy = SandboxProxy(SandboxManager(_cfg()))
+    await proxy.run_code("python", None, "a.py", "print(1)", ["python3", "a.py"], None, timeout=5)
+    await proxy.run_code("java", "21", "Main.java", "class Main{}", None, "true", timeout=5)
+    assert len(_StubSub.made) == 2                              # 不同语言各自一个子沙箱
+    assert {s.image for s in _StubSub.made} == {"python:3.12-slim", "eclipse-temurin:21-jdk"}
+
+
+async def test_destroy_conv_also_closes_its_cached_subs(_conv, _stub_docker):
+    mgr = SandboxManager(_cfg())
+    proxy = SandboxProxy(mgr)
+    await proxy.run_code("python", None, "a.py", "print(1)", ["python3", "a.py"], None, timeout=5)
+    sub = _StubSub.made[0]
+    assert sub.closed == 0
+    await mgr.destroy("conv-x")                                 # 删除会话 → 连同子沙箱一并销毁
+    assert sub.closed == 1
+    assert mgr._subs == {}
+
+
+async def test_idle_cached_sub_evicted_after_timeout(_conv, _stub_docker):
+    mgr = SandboxManager(_cfg())
+    proxy = SandboxProxy(mgr)
+    await proxy.run_code("python", None, "a.py", "print(1)", ["python3", "a.py"], None, timeout=5)
+    sub = _StubSub.made[0]
+    mgr._subs[("conv-x", "python")].last_used = 0.0            # 假装该子沙箱早已空闲超时
+    await mgr.get("other-conv")                                 # 别的会话活动触发惰性驱逐
+    assert sub.closed == 1                                      # 空闲超时 → 自动销毁
+    assert ("conv-x", "python") not in mgr._subs
+
+
+async def test_close_all_closes_cached_subs(_conv, _stub_docker):
+    mgr = SandboxManager(_cfg())
+    proxy = SandboxProxy(mgr)
+    await proxy.run_code("python", None, "a.py", "print(1)", ["python3", "a.py"], None, timeout=5)
+    sub = _StubSub.made[0]
+    await mgr.close_all()
+    assert sub.closed == 1 and mgr._subs == {}
+
+
+async def test_caching_off_restores_ephemeral_behavior(_conv, _stub_docker):
+    """sandbox_sub_idle_timeout<=0：退回「用完即销毁」旧语义（role=ephemeral、closed=1）。"""
+    proxy = SandboxProxy(SandboxManager(_cfg(sandbox_sub_idle_timeout=0)))
+    await proxy.run_code("python", None, "a.py", "print(1)", ["python3", "a.py"], None, timeout=5)
+    assert _stub_docker["labels"]["role"] == "ephemeral"
+    sub = _StubSub.made[0]
+    assert sub.closed == 1                                      # 关缓存：用完即销毁
+    # 再跑一次应新建一个（不复用）
+    await proxy.run_code("python", None, "b.py", "print(2)", ["python3", "b.py"], None, timeout=5)
+    assert len(_StubSub.made) == 2
 
 
 async def test_run_code_copies_artifacts_back_to_base(_conv, _stub_docker):
