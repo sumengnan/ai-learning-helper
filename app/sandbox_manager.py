@@ -28,6 +28,18 @@ from harness.sandbox.factory import _docker_for, build_sandbox
 
 _log = logging.getLogger("app.sandbox")
 
+
+def sandbox_guide(workspace: str = "/workspace") -> str:
+    """提醒模型沙箱的工作目录位置，避免它用宿主机路径或臆想目录读写文件、生成产物。
+
+    主聊天路径（chat.py）与编排器执行子步（executor.py）共用同一段文案，DRY。
+    """
+    return (
+        f"\n\n【沙箱工作目录】run_python / run_shell / run_node 等沙箱工具的当前工作目录（cwd）"
+        f"就是 {workspace}。读写文件用相对路径（相对 {workspace}），或以 {workspace}/ 开头的绝对路径；"
+        f"生成的文件也放在这里。用户上传的附件在 {workspace}/uploads/ 下。"
+        f"不要使用宿主机路径（如 /Users、/home、/tmp）或其它臆想的目录——那些在沙箱里并不存在。")
+
 # 当前请求所属会话；由 chat 处理器在 pump() 内 set，工具执行都在此上下文内。
 _current_conv: ContextVar[str | None] = ContextVar("sandbox_conv", default=None)
 

@@ -171,3 +171,21 @@ async def test_executor_runerror_sets_error_and_empty_summary(make_mock):
     events, artifact = await _collect(ex.execute(_step(), {}))
     assert artifact.error is not None
     assert artifact.summary == ""
+
+
+def test_system_with_guide_includes_sandbox_workdir_when_workspace_given():
+    """有沙箱工作目录时，执行子步的系统提示词应提醒 cwd 与附件目录；无则不提。"""
+    from app.orchestration.executor import _system_with_guide
+    with_ws = _system_with_guide("基座提示", "/workspace")
+    assert "/workspace" in with_ws and "工作目录" in with_ws
+    assert "/workspace/uploads/" in with_ws
+    without = _system_with_guide("基座提示", None)
+    assert "工作目录" not in without   # 无沙箱不提工作目录，避免误导
+
+
+def test_sandbox_guide_text_mentions_workspace_and_forbids_host_paths():
+    from app.sandbox_manager import sandbox_guide
+    g = sandbox_guide("/workspace")
+    assert "/workspace" in g
+    assert "uploads" in g
+    assert "宿主机" in g   # 明确禁止用宿主机路径

@@ -294,7 +294,10 @@ def build_harness(config) -> Harness:
             executor=Executor(_exec_client, _exec_reg, config.app_system_prompt, _exec_model,
                               max_steps=config.orchestrator_step_max_steps,
                               loop_detect_window=config.loop_detect_window,
-                              disable_thinking=config.orchestrator_step_disable_thinking),
+                              disable_thinking=config.orchestrator_step_disable_thinking,
+                              # 有沙箱才提醒工作目录（无沙箱这些工具没注册，提了反误导）
+                              sandbox_workspace=(config.sandbox_workspace
+                                                 if sandbox is not None else None)),
             fast_complete=_fast_complete,
             # 每次 run 新建独立预算封顶时长/token（超限带现有成果收尾）；单例并发安全
             budget_factory=lambda: BudgetTracker(config.max_tokens_budget, config.max_wall_seconds),
