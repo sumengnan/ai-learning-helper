@@ -30,7 +30,7 @@ export function QuestionDetailDrawer({ question, onClose }: {
   question: Question | null; onClose: () => void;
 }) {
   return (
-    <Dialog open={question !== null} onClose={onClose} maxWidth="sm" fullWidth
+    <Dialog open={question !== null} onClose={onClose} maxWidth="md" fullWidth
       slotProps={{ paper: { sx: { maxHeight: "85vh" } } }}>
       {question && (
         <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 1.5, maxHeight: "85vh" }}>

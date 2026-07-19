@@ -37,7 +37,7 @@ export function KnowledgeDetailDrawer({ id, onClose }: {
   const isMarkdown = frag?.category === "Markdown";
 
   return (
-    <Dialog open={id !== null} onClose={onClose} maxWidth="sm" fullWidth
+    <Dialog open={id !== null} onClose={onClose} maxWidth="md" fullWidth
       slotProps={{ paper: { sx: { maxHeight: "85vh" } } }}>
       <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 1.5, maxHeight: "85vh" }}>
         <Stack direction="row" spacing={1}

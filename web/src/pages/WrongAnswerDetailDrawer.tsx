@@ -68,7 +68,7 @@ export function WrongAnswerDetailDrawer({ item, onClose }: {
   item: WrongItem | null; onClose: () => void;
 }) {
   return (
-    <Dialog open={item !== null} onClose={onClose} maxWidth="sm" fullWidth
+    <Dialog open={item !== null} onClose={onClose} maxWidth="md" fullWidth
       slotProps={{ paper: { sx: { maxHeight: "85vh" } } }}>
       {item && (() => {
         const { type, stem, options, answer, explanation } = item.snapshot;

@@ -76,7 +76,7 @@ function ProfileDrawer({ open, onClose, onSaved }: {
 
   return (
     <>
-      <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth
+      <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth
         slotProps={{ paper: { sx: { maxHeight: "85vh" } } }}>
         <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2, maxHeight: "85vh" }}>
           <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
