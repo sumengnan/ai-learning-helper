@@ -54,3 +54,23 @@ async def test_openai_embedding_client_sorts_by_index(monkeypatch):
     monkeypatch.setattr(client._client.embeddings, "create", fake_create)
     out = await client.embed(["a", "b"])
     assert out == [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]   # 按 index 归位
+
+
+def test_emit_embedding_usage_reports_per_model():
+    from types import SimpleNamespace
+    from harness.progress import set_emitter, reset_emitter
+    from harness.events import ModelUsage
+    from harness.memory.embeddings import _emit_embedding_usage
+    seen = []
+    tok = set_emitter(seen.append)
+    try:
+        _emit_embedding_usage(SimpleNamespace(prompt_tokens=120, total_tokens=120), "emb-model")
+    finally:
+        reset_emitter(tok)
+    mu = [e for e in seen if isinstance(e, ModelUsage)]
+    assert len(mu) == 1 and mu[0].model == "emb-model" and mu[0].usage.total_tokens == 120
+
+
+def test_emit_embedding_usage_none_is_noop():
+    from harness.memory.embeddings import _emit_embedding_usage
+    _emit_embedding_usage(None, "m")   # 无 usage/无 emitter：不抛、不发
