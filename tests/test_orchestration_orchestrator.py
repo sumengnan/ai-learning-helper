@@ -9,7 +9,7 @@ class FakePlanner:
     def __init__(self, plans, raise_on_plan=False):
         self._plans = list(plans); self._i = 0
         self._raise_on_plan = raise_on_plan
-    async def plan(self, goal, recent_dialogue=""):
+    async def plan(self, goal, recent_dialogue="", skill_hint=""):
         if self._raise_on_plan:
             raise PlannerError("boom")
         p = self._plans[0]; return p
@@ -46,7 +46,7 @@ def _mk(planner, critic, order, triage_simple=False, synth="最终答复", max_r
     async def fake_synth(goal, artifacts, recent_dialogue=""):
         from harness.events import TextDelta
         yield TextDelta(text=synth)
-    async def fake_simple(msg, budget=None, *, context=None, registry=None, prefer_main=False):
+    async def fake_simple(msg, budget=None, *, context=None, registry=None, prefer_main=False, skill_hint=""):
         yield RunFinished(message=__import__("harness.types", fromlist=["Message"]).Message(
             role=__import__("harness.types", fromlist=["Role"]).Role.ASSISTANT, content="简单答复"))
     orch = Orchestrator.__new__(Orchestrator)
@@ -195,7 +195,7 @@ async def test_planner_reasoning_emitted_before_plan():
     from app.orchestration.usage_ctx import record_reasoning
 
     class RPlanner:
-        async def plan(self, goal, recent_dialogue=""):
+        async def plan(self, goal, recent_dialogue="", skill_hint=""):
             record_reasoning("先分析怎么拆")
             return _plan(_s("s1"))
         async def replan(self, g, p, f):
@@ -237,7 +237,7 @@ async def test_run_aggregates_all_usage_incl_planner_critic():
             record_usage(Usage(0, 0, 20), 0.002); return Review(accept=True, feedback="")
 
     class UPlanner:
-        async def plan(self, goal, recent_dialogue=""):
+        async def plan(self, goal, recent_dialogue="", skill_hint=""):
             record_usage(Usage(0, 0, 30), 0.003); return _plan(_s("s1"), _s("s2"))
         async def replan(self, g, p, f):
             return _plan(_s("s1"))
@@ -506,7 +506,7 @@ async def test_early_abort_cancels_pending_workers():
 async def test_run_threads_context_and_registry_to_simple_answer():
     """每请求 context/registry 应透传给简单直答（多轮/用户工具靠它）。"""
     seen = {}
-    async def cap_simple(msg, budget=None, *, context=None, registry=None, prefer_main=False):
+    async def cap_simple(msg, budget=None, *, context=None, registry=None, prefer_main=False, skill_hint=""):
         seen["ctx"], seen["reg"] = context, registry
         yield RunFinished(message=__import__("harness.types", fromlist=["Message"]).Message(
             role=__import__("harness.types", fromlist=["Role"]).Role.ASSISTANT, content="简单答复"))
@@ -539,7 +539,7 @@ async def test_run_passes_recent_dialogue_to_planner_and_synth():
     """最近对话应喂给 Planner（上下文相关拆分）与最终汇总。"""
     seen = {}
     class CapPlanner:
-        async def plan(self, goal, recent_dialogue=""):
+        async def plan(self, goal, recent_dialogue="", skill_hint=""):
             seen["plan_rd"] = recent_dialogue
             return _plan(_s("s1"))
         async def replan(self, g, p, f):
@@ -588,7 +588,7 @@ async def test_greeting_short_circuits_without_llm_triage():
         calls["triage"] += 1
         return False
     hit = {"simple": 0}
-    async def cap_simple(msg, budget=None, *, context=None, registry=None, prefer_main=False):
+    async def cap_simple(msg, budget=None, *, context=None, registry=None, prefer_main=False, skill_hint=""):
         hit["simple"] += 1
         yield RunFinished(message=Message(role=Role.ASSISTANT, content="hi"))
     orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [])
@@ -621,7 +621,7 @@ async def test_force_simple_bypasses_triage_and_planning():
     order = []
 
     class SpyPlanner:
-        async def plan(self, goal, recent_dialogue=""):
+        async def plan(self, goal, recent_dialogue="", skill_hint=""):
             calls["plan"] += 1
             return _plan(_s("s1"))
         async def replan(self, goal, plan, feedback):
@@ -632,7 +632,7 @@ async def test_force_simple_bypasses_triage_and_planning():
         return False   # 判复杂：只有真正短路才不会走到规划
 
     seen = {}
-    async def cap_simple(msg, budget=None, *, context=None, registry=None, prefer_main=False):
+    async def cap_simple(msg, budget=None, *, context=None, registry=None, prefer_main=False, skill_hint=""):
         seen["prefer_main"] = prefer_main
         yield RunFinished(message=Message(role=Role.ASSISTANT, content="简单答复"))
 
@@ -717,7 +717,7 @@ async def test_run_emits_per_model_usage():
             record_usage(Usage(0, 0, 20), 0.002, "main-model"); return Review(accept=True, feedback="")
 
     class MPlanner:
-        async def plan(self, goal, recent_dialogue=""):
+        async def plan(self, goal, recent_dialogue="", skill_hint=""):
             record_usage(Usage(0, 0, 30), 0.003, "main-model"); return _plan(_s("s1"))
         async def replan(self, g, p, f):
             return _plan(_s("s1"))

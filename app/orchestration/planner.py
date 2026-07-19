@@ -25,7 +25,7 @@ class _PlannerOutput(BaseModel):
 
 
 PLANNER_SYSTEM = (
-    "你是任务规划器。把用户目标拆成 3-6 个高层子任务，输出一个有向无环图（DAG）。\n"
+    "你是任务规划器。把用户目标拆成 2-10 个高层子任务，输出一个有向无环图（DAG）。\n"
     "每个子任务含：id（如 s1，全局唯一）、description（要做什么）、expected（应产出什么，"
     "供质检比对）、depends_on（依赖的子任务 id 列表，无依赖填 []）。\n"
     "能并行的子任务不要人为串联（depends_on 留空）；只有真正需要前一步产出时才建立依赖。\n"
@@ -34,9 +34,12 @@ PLANNER_SYSTEM = (
 )
 
 
-def _plan_user(goal: str, recent_dialogue: str = "") -> str:
+def _plan_user(goal: str, recent_dialogue: str = "", skill_hint: str = "") -> str:
     ctx = f"最近对话（供理解上下文相关的请求，如指代/追问）：\n{recent_dialogue}\n\n" if recent_dialogue else ""
-    return f"{ctx}用户目标：\n{goal}\n\n请拆成 DAG 计划。"
+    # 路由命中的技能剧本：作为拆解蓝本注入（方向2），让 planner 按其步骤确定子任务与顺序
+    hint = (f"参考以下技能流程来拆解计划（据此确定子任务与顺序，仍要贴合用户目标）：\n{skill_hint}\n\n"
+            if skill_hint else "")
+    return f"{ctx}{hint}用户目标：\n{goal}\n\n请拆成 DAG 计划。"
 
 
 def _replan_user(goal: str, done: list[PlanStep], feedback: str) -> str:
@@ -61,8 +64,8 @@ class Planner:
         self._complete = complete
         self._max_retries = max_retries
 
-    async def plan(self, goal: str, recent_dialogue: str = "") -> Plan:
-        steps = await self._generate(PLANNER_SYSTEM, _plan_user(goal, recent_dialogue))
+    async def plan(self, goal: str, recent_dialogue: str = "", skill_hint: str = "") -> Plan:
+        steps = await self._generate(PLANNER_SYSTEM, _plan_user(goal, recent_dialogue, skill_hint))
         return Plan(goal=goal, steps=steps, version=1)
 
     async def replan(self, goal: str, plan: Plan, feedback: str) -> Plan:

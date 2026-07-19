@@ -12,6 +12,7 @@ class Skill:
     description: str   # 给主 agent 看的一句话能力说明（进元数据索引）
     body: str          # SKILL.md 正文（load 后注入上下文）
     dir: str           # 技能目录绝对路径（read_skill_resource 的沙盒根）
+    triggers: tuple[str, ...] = ()   # 触发关键词（frontmatter 逗号分隔）；供路由层确定性匹配挂载
 
 
 def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
@@ -78,8 +79,11 @@ class SkillRegistry:
             if sname in self._skills:
                 self._warnings.append(f"跳过 {sub}：技能名重复 {sname}")
                 continue
+            triggers = tuple(
+                t.strip() for t in meta.get("triggers", "").split(",") if t.strip())
             self._skills[sname] = Skill(
-                name=sname, description=desc, body=body.strip(), dir=os.path.abspath(sub))
+                name=sname, description=desc, body=body.strip(),
+                dir=os.path.abspath(sub), triggers=triggers)
 
     # --- 查询 ---
     def names(self) -> list[str]:
