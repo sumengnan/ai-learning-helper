@@ -95,6 +95,7 @@ class Orchestrator:
     def __init__(self, *, client, registry: ToolRegistry, model: str,
                  planner: Planner, critic: Critic, executor: Executor,
                  fast_complete, fast_client=None, fast_model: str | None = None,
+                 fast_max_prompt_tokens: int = 0,
                  budget=None, budget_factory=None,
                  max_step_retry: int = 2, max_replan: int = 2) -> None:
         self._client = client
@@ -108,6 +109,9 @@ class Orchestrator:
         # 故这里回退 self._client/self._model —— 没配快速模型即零行为变更。
         self._fast_client = fast_client if fast_client is not None else client
         self._fast_model = fast_model or model
+        # 简单直答的上下文按快速模型口径再收一道（>0 时启用）：base_ctx 是按主模型预算裁的，
+        # 快速模型窗口更小时据此确定性重裁，防溢出。0=不裁（默认）。
+        self._fast_max_prompt_tokens = int(fast_max_prompt_tokens or 0)
         self._budget = budget                # 直接注入的预算实例（主要供测试）
         # 每次 run() 新建预算的工厂：编排器是单例，用工厂产出每轮独立的 BudgetTracker，
         # 避免跨轮累加、且并发安全（预算以局部变量贯穿一次 run，绝不写回 self）。
@@ -169,6 +173,10 @@ class Orchestrator:
         历史+记忆，由 chat 路由传入）——多轮对话、附件/考试/引用/日期/个性化全靠它；缺省回退到最小
         SYNTH_SYSTEM+澄清指引（测试/back-compat）。registry 为本轮每请求工具表（含用户级工具）。"""
         ctx = context if context is not None else ContextManager(SYNTH_SYSTEM + CLARIFY_GUIDE)
+        # 按快速模型口径重裁（>0 时）：base_ctx 是按主模型裁的，快速模型窗口更小时防溢出
+        if context is not None and self._fast_max_prompt_tokens > 0:
+            from harness.context.clamp import ClampedContextManager
+            ctx = ClampedContextManager(ctx, self._fast_model, self._fast_max_prompt_tokens)
         loop = AgentLoop(client=self._fast_client,
                          registry=registry if registry is not None else self._registry,
                          context=ctx, max_steps=10, budget=budget, model_name=self._fast_model)

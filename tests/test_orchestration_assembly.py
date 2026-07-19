@@ -50,6 +50,15 @@ def test_orchestrator_speed_wiring(monkeypatch):
     # 简单直答走快速档 client/model（与执行子步同源）；未配 fast_model 时回退主 client/主模型
     assert o._fast_client is o._executor._client
     assert o._fast_model == o._executor._model
+    assert o._fast_max_prompt_tokens == 0                        # 快速上下文上限默认关（0）
+
+
+def test_orchestrator_fast_prompt_cap_wired(monkeypatch):
+    """配了 context_max_prompt_tokens_fast → 传进编排器，供简单直答按快速模型口径重裁。"""
+    monkeypatch.setenv("HARNESS_API_KEY", "sk-test")
+    monkeypatch.setenv("HARNESS_CONTEXT_MAX_PROMPT_TOKENS_FAST", "32000")
+    o = build_harness(AppConfig()).orchestrator
+    assert o._fast_max_prompt_tokens == 32000
     assert o._budget_factory is not None                         # 预算工厂已挂
     b = o._budget_factory()
     from harness.reliability.budget import BudgetTracker
