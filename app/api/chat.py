@@ -36,6 +36,7 @@ from ..auth import current_user
 from ..completion import build_fast_completer
 from ..context_assembly import ContextAssembler
 from ..conversation_memory import ConversationMemoryService
+from ..orchestration.executor import CLARIFY_GUIDE
 from ..profile import render_profile_block
 from ..sandbox_manager import reset_sandbox_conv, sandbox_guide, set_sandbox_conv
 from ..summaries import SummaryStore
@@ -160,14 +161,7 @@ ATTACHMENT_GUIDE = (
     "- 所有附件也已放入沙箱 /workspace/uploads/，可用 run_python/run_shell 直接读取或执行。\n"
     "- 只在确有需要时才读取附件，不要无谓地逐个打开。\n")
 
-# 信息不足先问、不要猜：常驻注入。与 verify.py 的立场一致（请求澄清/合理追问属恰当推进、不扣分）。
-CLARIFY_GUIDE = (
-    "\n\n【信息不足先问，不要猜】当用户的需求缺少完成任务所必需的关键信息（如目标、对象、范围、"
-    "格式、版本、时间、约束等），且无法从对话上下文合理推断时，先用一两句话向用户澄清或确认，"
-    "再动手——不要凭空假设或替用户拿主意，猜错会浪费一整轮、给出跑偏的结果。"
-    "但也不要为无关紧要的细节反复追问：信息已足够、或缺的只是不影响结果的小事时，"
-    "按合理默认直接推进，并在答复里说明你采用的假设，让用户能纠正。")
-
+# CLARIFY_GUIDE（信息不足先问、不要猜）现集中定义在 orchestration.executor，供主聊天与编排器共用。
 # 北京时间（东八区）：本应用面向中文用户，用它作为「今天」的基准
 _CN_TZ = timezone(timedelta(hours=8))
 

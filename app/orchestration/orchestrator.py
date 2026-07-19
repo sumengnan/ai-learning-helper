@@ -30,7 +30,7 @@ from harness.tools.base import ToolRegistry
 from harness.types import Message, Role
 
 from .critic import Critic
-from .executor import Executor, StepArtifact
+from .executor import CLARIFY_GUIDE, Executor, StepArtifact
 from .planner import Planner, PlannerError
 from .plan import Artifact, Plan, has_pending, ready_steps
 from .usage_ctx import (
@@ -136,9 +136,11 @@ class Orchestrator:
             return False   # 判不了就走完整编排（宁可多做不可少做）
 
     async def _simple_answer(self, message: str, budget=None):
-        """简单问答短路：单个全能力 AgentLoop 直答，透传其事件（跳过其 RunStarted，避免重复）。"""
+        """简单问答短路：单个全能力 AgentLoop 直答，透传其事件（跳过其 RunStarted，避免重复）。
+
+        全编排器模式下简单问答走这里，是面向用户的答复——故也带上「信息不足先问、不要猜」指引。"""
         loop = AgentLoop(client=self._client, registry=self._registry,
-                         context=ContextManager(SYNTH_SYSTEM),
+                         context=ContextManager(SYNTH_SYSTEM + CLARIFY_GUIDE),
                          max_steps=10, budget=budget, model_name=self._model)
         async for ev in loop.run(message):
             if isinstance(ev, RunStarted):

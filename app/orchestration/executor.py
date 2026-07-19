@@ -38,13 +38,23 @@ EXECUTOR_GUIDE = (
     "搜索工具更快、覆盖更全；http_request/浏览器只在需要读取某个具体已知网址时才用。"
 )
 
+# 信息不足先问、不要猜：主聊天路径（chat.py）与编排器（执行子步 + 简单直答）共用同一段文案，
+# DRY。定义放在最低层的 executor 模块，供 chat.py / orchestrator.py 上行 import，避免循环依赖。
+# 与 verify.py 立场一致（请求澄清/合理追问属恰当推进、不扣分）。
+CLARIFY_GUIDE = (
+    "\n\n【信息不足先问，不要猜】当完成任务缺少必需的关键信息（如目标、对象、范围、格式、版本、"
+    "时间、约束等），且无法从已给的上下文/前置产出合理推断时，不要凭空假设或编造——"
+    "宁可先向用户澄清确认，或在产出里明确标出「缺什么、需要用户确认什么」，也不要猜一个跑偏的结果。"
+    "但也不要为无关紧要的细节反复纠结：信息已足够、或缺的只是不影响结果的小事时，"
+    "按合理默认直接推进，并说明所采用的假设，让用户能纠正。")
+
 
 def _system_with_guide(base: str, sandbox_guide_text: str = "") -> str:
-    """给执行子步的系统提示词补上工具偏好引导 + 当前日期（时效/未来趋势类任务需要知道"现在"）。
+    """给执行子步的系统提示词补上工具偏好引导 + 信息不足先问 + 当前日期（时效/未来趋势类任务需知"现在"）。
 
     sandbox_guide_text 由装配层按配置预渲染（工作目录/镜像/联网，与主聊天路径共用 sandbox_guide，
     DRY），有沙箱时非空——让执行子步用对路径、并知道能否联网装包、该选哪个命令。"""
-    guide = (f"{base}{EXECUTOR_GUIDE}"
+    guide = (f"{base}{EXECUTOR_GUIDE}{CLARIFY_GUIDE}"
              f"\n\n今日日期：{date.today().isoformat()}（涉及时效或未来趋势时以此为基准）。")
     return guide + (sandbox_guide_text or "")
 
