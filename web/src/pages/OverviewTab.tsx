@@ -7,6 +7,7 @@ import {
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
+import AccessTimeIcon from "@mui/icons-material/AccessTime";
 import DownloadIcon from "@mui/icons-material/Download";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import type { StatsOverview } from "../api/stats";
@@ -109,7 +110,7 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
                   {learn.last_conversation.title}
                 </Typography>
                 <Typography sx={{ color: "text.secondary", fontSize: 13, mt: 0.3 }}>
-                  <Box component="span" sx={{ color: recencyColor(learn.last_conversation.updated_at) }}>{fromNow(learn.last_conversation.updated_at)}</Box> · {learn.last_conversation.message_count} 条消息
+                  <Box component="span" sx={{ color: recencyColor(learn.last_conversation.updated_at) }}><AccessTimeIcon sx={{ fontSize: "1em", verticalAlign: "-0.125em", mr: 0.25 }} />{fromNow(learn.last_conversation.updated_at)}</Box> · {learn.last_conversation.message_count} 条消息
                 </Typography>
                 <Button variant="contained" endIcon={<ArrowForwardIcon />} sx={{ mt: 1.5, textTransform: "none" }}
                   onClick={() => nav("/chat")}>继续对话</Button>
@@ -167,7 +168,7 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
                       <Box sx={{ flex: 1, minWidth: 0 }}>
                         <Typography noWrap sx={{ fontSize: 13, fontWeight: 550 }}>{d.filename}</Typography>
                         <Typography noWrap sx={{ fontSize: 11.5, color: "text.secondary" }}>
-                          {meta.label} · {formatBytes(d.size)} · <Box component="span" sx={{ color: recencyColor(d.created_at) }}>{fromNow(d.created_at)}</Box>
+                          {meta.label} · {formatBytes(d.size)} · <Box component="span" sx={{ color: recencyColor(d.created_at) }}><AccessTimeIcon sx={{ fontSize: "1em", verticalAlign: "-0.125em", mr: 0.25 }} />{fromNow(d.created_at)}</Box>
                         </Typography>
                       </Box>
                       {canPreview && (

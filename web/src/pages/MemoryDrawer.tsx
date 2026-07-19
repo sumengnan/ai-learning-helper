@@ -6,6 +6,7 @@ import {
 import type { ChipProps } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import CloseIcon from "@mui/icons-material/Close";
+import AccessTimeIcon from "@mui/icons-material/AccessTime";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
 import PsychologyIcon from "@mui/icons-material/Psychology";
 import ChecklistIcon from "@mui/icons-material/Checklist";
@@ -251,7 +252,7 @@ export function MemoryDrawer({ open, onClose, total, onCountDelta }: {
                           variant="outlined" sx={{ height: 20, fontSize: 11 }} />
                         <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
                           <Typography sx={{ fontSize: 11.5, fontWeight: 600, color: recencyColor(m.created_at) }}>
-                            {fromNow(m.created_at)}
+                            <AccessTimeIcon sx={{ fontSize: "1em", verticalAlign: "-0.125em", mr: 0.25 }} />{fromNow(m.created_at)}
                           </Typography>
                           <IconButton size="small" aria-label="删除这条记忆" disabled={deleting === m.id || !!busy}
                             onClick={() => remove(m.id)}

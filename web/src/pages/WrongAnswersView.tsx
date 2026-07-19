@@ -5,6 +5,7 @@ import {
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import DeleteIcon from "@mui/icons-material/Delete";
+import AccessTimeIcon from "@mui/icons-material/AccessTime";
 import SearchIcon from "@mui/icons-material/Search";
 import SentimentSatisfiedAltOutlinedIcon from "@mui/icons-material/SentimentSatisfiedAltOutlined";
 import { AnimatePresence, motion } from "framer-motion";
@@ -154,7 +155,7 @@ export default function WrongAnswersView() {
                           label={typeLabel(w.snapshot.type)} color={typeColor(w.snapshot.type)} />
                         {/* 相对时间：复习场景下「多久以前错的」比具体日期更有用 */}
                         <Typography variant="caption" sx={{ color: recencyColor(w.created_at) }}>
-                          {fromNow(w.created_at)}
+                          <AccessTimeIcon sx={{ fontSize: "1em", verticalAlign: "-0.125em", mr: 0.25 }} />{fromNow(w.created_at)}
                         </Typography>
                       </Stack>
                     </Box>

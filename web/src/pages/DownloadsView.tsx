@@ -4,6 +4,7 @@ import {
   IconButton, Tooltip, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions,
 } from "@mui/material";
 import DownloadIcon from "@mui/icons-material/Download";
+import AccessTimeIcon from "@mui/icons-material/AccessTime";
 import DeleteIcon from "@mui/icons-material/Delete";
 import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
 import VisibilityIcon from "@mui/icons-material/Visibility";
@@ -139,7 +140,7 @@ export default function DownloadsView() {
                       <Typography variant="caption" color="text.secondary">{formatBytes(d.size)}</Typography>
                       <Typography variant="caption" color="text.disabled">·</Typography>
                       <Typography variant="caption" sx={{ color: recencyColor(d.created_at) }}
-                        title={new Date(d.created_at).toLocaleString()}>{fromNow(d.created_at)}</Typography>
+                        title={new Date(d.created_at).toLocaleString()}><AccessTimeIcon sx={{ fontSize: "1em", verticalAlign: "-0.125em", mr: 0.25 }} />{fromNow(d.created_at)}</Typography>
                     </Stack>
                   </Box>
                   {canPreview && (
