@@ -171,7 +171,14 @@ export async function sendDecision(
   if (!r.ok) throw new Error(`decision 失败：${r.status}`);
 }
 
+export type ModelsInfo = {
+  main: string; fast: string; judge: string;
+  embedding: string | null; rerank: string | null;
+};
+
 export const api = {
+  // 各角色当前模型名，供聊天区展示「当前模型」
+  models: (): Promise<ModelsInfo> => authFetch("/api/models").then((r) => r.json()),
   list: (): Promise<Conversation[]> => authFetch("/api/conversations").then((r) => r.json()),
   create: (title?: string): Promise<{ id: string }> =>
     authFetch("/api/conversations", { method: "POST", headers: { "Content-Type": "application/json" },

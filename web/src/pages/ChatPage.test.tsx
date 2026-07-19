@@ -10,6 +10,7 @@ vi.mock("../api/client", () => ({
     rename: vi.fn().mockResolvedValue(undefined),
     autotitle: vi.fn().mockResolvedValue({ title: null }),
     remove: vi.fn().mockResolvedValue(undefined),
+    models: vi.fn().mockResolvedValue({ main: "m", fast: "m", judge: "m", embedding: null, rerank: null }),
   },
   streamChat: vi.fn().mockResolvedValue(undefined),
 }));
