@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   Box, Paper, TextField, Button, Typography, FormControlLabel, Switch,
   Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions,
-  IconButton, Tooltip, Snackbar, Alert, CircularProgress,
+  IconButton, Tooltip, Snackbar, Alert, CircularProgress, Chip,
 } from "@mui/material";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import DownloadIcon from "@mui/icons-material/Download";
@@ -11,7 +11,7 @@ import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 import StopCircleIcon from "@mui/icons-material/StopCircle";
 import { motion } from "framer-motion";
 import type { ChatMessage } from "../types";
-import { streamChat, attachChat, stopRun, sendDecision, api } from "../api/client";
+import { streamChat, attachChat, stopRun, sendDecision, api, type ModelsInfo } from "../api/client";
 import { AgentProgress } from "./AgentProgress";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { SourceList } from "./SourceList";
@@ -28,6 +28,9 @@ import { AttachmentChips, type AttachmentItem } from "./Attachments";
 import { bubbleVariants } from "./motion";
 
 const MotionBox = motion(Box);
+
+// 当前模型信息缓存：全站不变，避免每次切换对话（ChatView 按 key 重挂载）重复请求
+let _modelsCache: ModelsInfo | null = null;
 
 const SHOW_TOOLS_KEY = "chat_show_tools";
 const SHOW_SOURCES_KEY = "chat_show_sources";
@@ -83,6 +86,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
   const [showTools, setShowTools] = useState(() => readBool(SHOW_TOOLS_KEY, true));
   const [showSources, setShowSources] = useState(() => readBool(SHOW_SOURCES_KEY, true));
   const [think, setThink] = useState(() => readBool(THINK_KEY, false));  // 思考模式默认关
+  const [models, setModels] = useState<ModelsInfo | null>(null);   // 各角色当前模型名（展示用）
   const [verify, setVerify] = useState(() => readBool(VERIFY_KEY, true));
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
@@ -191,6 +195,14 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
   useEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; abortRef.current?.abort(); };
+  }, []);
+
+  // 拉取当前模型名（带模块级缓存）；防御式：取不到就不显示，绝不因此崩溃
+  useEffect(() => {
+    if (_modelsCache) { setModels(_modelsCache); return; }
+    Promise.resolve(api.models?.())
+      .then((m) => { if (m) { _modelsCache = m; setModels(m); } })
+      .catch(() => {});
   }, []);
 
   // 跟随滚动：AI 回复流式更新时自动滚到底部；用户主动上滑离开底部则暂停跟随
@@ -693,6 +705,22 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
             onChange={(e) => toggleShowSources(e.target.checked)} />}
           label={<Typography variant="caption">展示数据来源和引用</Typography>}
         />
+        {/* 当前模型：主模型常驻显示，hover 看各角色（快速/judge/向量/重排）用的哪个模型 */}
+        {models && (
+          <Tooltip placement="top" title={
+            <Box sx={{ whiteSpace: "pre-line", fontSize: 12 }}>
+              {[`主模型：${models.main}`,
+                `快速模型：${models.fast}`,
+                `校验(judge)：${models.judge}`,
+                models.embedding ? `向量(embedding)：${models.embedding}` : "",
+                models.rerank ? `重排(rerank)：${models.rerank}` : ""].filter(Boolean).join("\n")}
+            </Box>
+          }>
+            <Chip size="small" variant="outlined" label={`模型：${models.main}`}
+              sx={{ ml: "auto", alignSelf: "center", maxWidth: 240,
+                    "& .MuiChip-label": { fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis" } }} />
+          </Tooltip>
+        )}
       </Box>
       <Box
         onDragOver={(e) => { e.preventDefault(); if (!busy && !dragOver) setDragOver(true); }}

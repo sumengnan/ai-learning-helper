@@ -20,6 +20,7 @@ vi.mock("../api/client", () => ({
     messages: vi.fn(async () => []),
     autotitle: vi.fn(async () => ({ title: null })),
     downloads: { save: vi.fn(async () => undefined) },
+    models: vi.fn(async () => ({ main: "m", fast: "m", judge: "m", embedding: null, rerank: null })),
   },
 }));
 
