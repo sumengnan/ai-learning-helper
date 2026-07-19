@@ -607,7 +607,10 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                   </>
                 );
               })()}
-              {showTools && m.role === "assistant" && m.steps && m.steps.length > 0 && (
+              {/* 扁平工具步骤列表：仅在「无计划」（ReAct/简单直答）时展示；编排器复杂路径有计划时，
+                  工具已在上方计划树的执行明细里，故隐藏此列表避免重复（原始 ToolStarted 仍会到达用于统计）。*/}
+              {showTools && m.role === "assistant" && m.steps && m.steps.length > 0
+                && !m.progress?.some((p) => p.scope === "plan") && (
                 <AgentProgress steps={m.steps}
                   live={busy && i === messages.length - 1 && m.status === "streaming"}
                   stopped={m.status === "stopped"} />
