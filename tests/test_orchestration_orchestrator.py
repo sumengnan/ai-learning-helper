@@ -601,6 +601,39 @@ async def test_non_greeting_still_uses_llm_triage():
     assert calls["triage"] == 1
 
 
+async def test_force_simple_bypasses_triage_and_planning():
+    """force_simple=True（考试等有状态交互）应绕过 triage 与 plan-execute-synthesize，直走简单直答。
+
+    覆盖 Bug：考试请求被 triage 判成复杂 → 走多步规划+二次汇总，会吞掉 start_exam 原样呈现的
+    第一题、且重试会重置考试。force_simple 应在 triage 之前短路，不 triage、不规划、不执行任何步。"""
+    from harness.types import Message, Role
+    calls = {"triage": 0, "plan": 0}
+    order = []
+
+    class SpyPlanner:
+        async def plan(self, goal, recent_dialogue=""):
+            calls["plan"] += 1
+            return _plan(_s("s1"))
+        async def replan(self, goal, plan, feedback):
+            return _plan(_s("s1"))
+
+    async def counting_triage(msg):
+        calls["triage"] += 1
+        return False   # 判复杂：只有真正短路才不会走到规划
+
+    async def cap_simple(msg, budget=None, *, context=None, registry=None):
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content="简单答复"))
+
+    orch = _mk(SpyPlanner(), FakeCritic(), order, triage_simple=False)
+    orch._is_simple = counting_triage
+    orch._simple_answer = cap_simple
+    events = [ev async for ev in orch.run("从题库抽5道题考考我", force_simple=True)]
+    assert isinstance(events[0], RunStarted) and isinstance(events[-1], RunFinished)
+    assert events[-1].message.content == "简单答复"   # 走了 _simple_answer
+    assert calls["triage"] == 0 and calls["plan"] == 0   # 未 triage、未规划
+    assert order == []                                    # 未执行任何计划步
+
+
 def test_orchestrator_uses_fast_model_for_simple_answer():
     """简单直答走快速档 client/model（省钱提速）。"""
     orch = Orchestrator.__new__(Orchestrator)

@@ -213,9 +213,17 @@ class Orchestrator:
 
     # ---- 主入口 ----
     async def run(self, user_message: str, verify: bool = True, *,
-                  context=None, registry=None, recent_dialogue: str = ""):
+                  context=None, registry=None, recent_dialogue: str = "",
+                  force_simple: bool = False):
         """verify：对应前端结果校验开关。开 → 终局 Critic 把关 + 可重规划；关 → 跑完一轮
         直接汇总交付，不做终局 review/重规划（更快，但不把关）。
+
+        force_simple：强制走简单直答（ReAct 单循环），跳过 triage 与 plan-execute-synthesize。
+        用于「有状态、多轮、模型驱动」的交互流程——典型是模拟考试：模型调 start_exam 拿到题、
+        同一轮原样呈现、下一轮由服务端 grade_exam_turn 拦截判分。这类流程只适合单循环：若被拆成
+        多步再汇总，start_exam 的原样呈现指令会被执行子步/终局汇总两层概括吞掉，且 Critic 判某步
+        不合格触发重试会再次 start_exam、把考试进度重置。chat 路由在命中考试语境（注入 EXAM_GUIDE）
+        时置真。
 
         每请求依赖（由 chat 路由传入，使编排器可作为唯一主流程而不丢失既有能力）：
         - context：本轮上下文（系统提示+全部指引+会话历史+记忆）。用于简单直答与最终汇总——
@@ -238,8 +246,8 @@ class Orchestrator:
         acc = UsageAcc()
         acc_token = set_acc(acc)
         try:
-            # 零成本短路优先：纯寒暄直接简单直答，省掉 triage 的模型调用；否则再让 LLM 判简单/复杂
-            if _obvious_simple(user_message) or await self._is_simple(user_message):
+            # 强制单循环（考试等有状态交互）优先，其次零成本短路（纯寒暄），最后才让 LLM 判简单/复杂
+            if force_simple or _obvious_simple(user_message) or await self._is_simple(user_message):
                 async for ev in self._simple_answer(user_message, budget,
                                                     context=context, registry=registry):
                     yield ev

@@ -28,8 +28,9 @@ def _sqlite_allow_cross_thread(monkeypatch):
 
 
 class FakeOrchestrator:
-    """签名与真 Orchestrator.run 一致（含每请求 context/registry/recent_dialogue），只 yield 既有 Event。"""
-    async def run(self, message, verify=True, *, context=None, registry=None, recent_dialogue=""):
+    """签名与真 Orchestrator.run 一致（含每请求 context/registry/recent_dialogue/force_simple），只 yield 既有 Event。"""
+    async def run(self, message, verify=True, *, context=None, registry=None,
+                  recent_dialogue="", force_simple=False):
         from harness.events import RunStarted, TextDelta, RunFinished
         from harness.types import Message, Role
         yield RunStarted(run_id="r1")
@@ -73,7 +74,8 @@ def _last_assistant(store, cid):
 
 class DetailOrchestrator:
     """发一条带 detail 的子代理工具进度 + 正常收尾。"""
-    async def run(self, message, verify=True, *, context=None, registry=None, recent_dialogue=""):
+    async def run(self, message, verify=True, *, context=None, registry=None,
+                  recent_dialogue="", force_simple=False):
         from harness.events import RunStarted, Progress, TextDelta, RunFinished
         from harness.types import Message, Role
         yield RunStarted(run_id="r1")
@@ -115,7 +117,8 @@ def test_orchestrator_stream_becomes_main_flow(make_mock, monkeypatch):
 
 class EmbeddingUsageOrchestrator:
     """模拟 run 期间有 embedding/子调用经 emit 上报逐模型用量（带模型名）。"""
-    async def run(self, message, verify=True, *, context=None, registry=None, recent_dialogue=""):
+    async def run(self, message, verify=True, *, context=None, registry=None,
+                  recent_dialogue="", force_simple=False):
         from harness.events import RunStarted, TextDelta, RunFinished, ModelUsage
         from harness.usage import Usage
         from harness.progress import emit
