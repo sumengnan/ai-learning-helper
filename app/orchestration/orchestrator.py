@@ -166,20 +166,28 @@ class Orchestrator:
         except Exception:
             return False   # 判不了就走完整编排（宁可多做不可少做）
 
-    async def _simple_answer(self, message: str, budget=None, *, context=None, registry=None):
+    async def _simple_answer(self, message: str, budget=None, *, context=None, registry=None,
+                             prefer_main: bool = False):
         """简单问答短路：单个全能力 AgentLoop 直答，透传其事件（跳过其 RunStarted，避免重复）。
 
         承载绝大多数流量（问答/追问/考试）。context 为本轮每请求上下文（系统提示+全部指引+会话
         历史+记忆，由 chat 路由传入）——多轮对话、附件/考试/引用/日期/个性化全靠它；缺省回退到最小
-        SYNTH_SYSTEM+澄清指引（测试/back-compat）。registry 为本轮每请求工具表（含用户级工具）。"""
+        SYNTH_SYSTEM+澄清指引（测试/back-compat）。registry 为本轮每请求工具表（含用户级工具）。
+
+        prefer_main：用主 client/model 而非快速档。用于有状态交互（考试）——这类流程指令繁杂，
+        需可靠地按系统注入的「[考试系统判定]…请呈现下一题」提示逐题推进；快速档小模型常漏掉
+        「呈现下一题」这一步（编排器化之前考试本就跑在主模型上，属回归修复）。且主档窗口更大，
+        无需按快速档再收窗口——否则携带下一题文本的最后一条消息可能被 Clamp 截断而丢题。"""
         ctx = context if context is not None else ContextManager(SYNTH_SYSTEM + CLARIFY_GUIDE)
-        # 按快速模型口径重裁（>0 时）：base_ctx 是按主模型裁的，快速模型窗口更小时防溢出
-        if context is not None and self._fast_max_prompt_tokens > 0:
+        client = self._client if prefer_main else self._fast_client
+        model = self._model if prefer_main else self._fast_model
+        # 按快速模型口径重裁（>0 时）：仅在真用快速档时才收——主档 base_ctx 已按主模型裁好
+        if context is not None and not prefer_main and self._fast_max_prompt_tokens > 0:
             from harness.context.clamp import ClampedContextManager
             ctx = ClampedContextManager(ctx, self._fast_model, self._fast_max_prompt_tokens)
-        loop = AgentLoop(client=self._fast_client,
+        loop = AgentLoop(client=client,
                          registry=registry if registry is not None else self._registry,
-                         context=ctx, max_steps=10, budget=budget, model_name=self._fast_model)
+                         context=ctx, max_steps=10, budget=budget, model_name=model)
         async for ev in loop.run(message):
             if isinstance(ev, RunStarted):
                 continue
@@ -246,10 +254,11 @@ class Orchestrator:
         acc = UsageAcc()
         acc_token = set_acc(acc)
         try:
-            # 强制单循环（考试等有状态交互）优先，其次零成本短路（纯寒暄），最后才让 LLM 判简单/复杂
+            # 强制单循环（考试等有状态交互）优先，其次零成本短路（纯寒暄），最后才让 LLM 判简单/复杂。
+            # force_simple 的场景（考试）走主模型（prefer_main）：需可靠逐题推进，快速档易漏「呈现下一题」。
             if force_simple or _obvious_simple(user_message) or await self._is_simple(user_message):
-                async for ev in self._simple_answer(user_message, budget,
-                                                    context=context, registry=registry):
+                async for ev in self._simple_answer(user_message, budget, context=context,
+                                                    registry=registry, prefer_main=force_simple):
                     yield ev
                 return
 

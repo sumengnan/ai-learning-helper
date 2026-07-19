@@ -10,10 +10,11 @@ import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 import StopCircleIcon from "@mui/icons-material/StopCircle";
 import SmartToyOutlinedIcon from "@mui/icons-material/SmartToyOutlined";
+import QuizOutlinedIcon from "@mui/icons-material/QuizOutlined";
 import { alpha } from "@mui/material/styles";
 import { motion } from "framer-motion";
 import type { ChatMessage } from "../types";
-import { streamChat, attachChat, stopRun, sendDecision, api, type ModelsInfo } from "../api/client";
+import { streamChat, attachChat, stopRun, sendDecision, api, type ModelsInfo, type ExamStatus } from "../api/client";
 import { AgentProgress } from "./AgentProgress";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { SourceList } from "./SourceList";
@@ -89,6 +90,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
   const [showSources, setShowSources] = useState(() => readBool(SHOW_SOURCES_KEY, true));
   const [think, setThink] = useState(() => readBool(THINK_KEY, false));  // 思考模式默认关
   const [models, setModels] = useState<ModelsInfo | null>(null);   // 各角色当前模型名（展示用）
+  const [exam, setExam] = useState<ExamStatus | null>(null);       // 考试状态：进行中时显示「考试中」标识
   const [verify, setVerify] = useState(() => readBool(VERIFY_KEY, true));
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
@@ -206,6 +208,17 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
       .then((m) => { if (m) { _modelsCache = m; setModels(m); } })
       .catch(() => {});
   }, []);
+
+  // 考试状态：进入/切换对话时拉一次（刷新可续考），每轮结束后再拉一次——开考/答题推进/结束
+  // 都会改变它。取不到就保持原状，绝不因此崩溃或误清标识。
+  async function refreshExam() {
+    try { setExam(await api.exam?.status(conversationId)); }
+    catch { /* 忽略：不影响聊天 */ }
+  }
+  useEffect(() => {
+    void refreshExam();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId]);
 
   // 跟随滚动：AI 回复流式更新时自动滚到底部；用户主动上滑离开底部则暂停跟随
   useEffect(() => {
@@ -389,6 +402,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
           if (base != null) a.reasoningMs = Date.now() - base;
         }
       });
+      void refreshExam();   // 本轮结束：可能刚开考/推进一题/答完结束，刷新「考试中」标识
     }
   }
 
@@ -468,6 +482,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
           if (base != null) a.reasoningMs = Date.now() - base;
         }
       });
+      void refreshExam();   // 本轮结束：可能刚开考/推进一题/答完结束，刷新「考试中」标识
     }
   }
 
@@ -733,6 +748,26 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
           </Tooltip>
         )}
       </Box>
+      {/* 考试中标识：告知用户当前处于考试状态、只应作答考试内容；显示进度与模式，及退出方式 */}
+      {exam?.active && (
+        <Box sx={{
+          mx: 1.5, mb: 1, px: 1.5, py: 0.75, borderRadius: 1.5,
+          display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap",
+          bgcolor: (t) => alpha(t.palette.warning.main, 0.12),
+          border: (t) => `1px solid ${alpha(t.palette.warning.main, 0.5)}`,
+        }}>
+          <QuizOutlinedIcon sx={{ fontSize: 18, color: "warning.main" }} />
+          <Typography variant="body2" sx={{ fontWeight: 700, color: "warning.main" }}>
+            考试进行中
+          </Typography>
+          <Chip size="small" variant="outlined" color="warning"
+            label={`第 ${(exam.cursor ?? 0) + 1}/${exam.total ?? "?"} 题 · ${exam.mode === "graded" ? "打分式" : "即时式"}`}
+            sx={{ height: 20, "& .MuiChip-label": { fontSize: 12, px: 0.75 } }} />
+          <Typography variant="caption" sx={{ color: "text.secondary" }}>
+            请作答本题，此时只回答考试相关内容；想退出请说「结束考试」。
+          </Typography>
+        </Box>
+      )}
       <Box
         onDragOver={(e) => { e.preventDefault(); if (!busy && !dragOver) setDragOver(true); }}
         onDragLeave={(e) => { e.preventDefault(); setDragOver(false); }}
@@ -768,7 +803,8 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
             }}
-            placeholder={busy ? "AI 正在回复…（可点停止）" : "问点什么…"}
+            placeholder={busy ? "AI 正在回复…（可点停止）"
+              : exam?.active ? "作答本题…（或说「结束考试」退出）" : "问点什么…"}
           />
           {busy ? (
             <Button variant="outlined" color="error" onClick={stop}
