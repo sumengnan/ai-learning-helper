@@ -30,7 +30,7 @@ def _sqlite_allow_cross_thread(monkeypatch):
 class FakeOrchestrator:
     """签名与真 Orchestrator.run 一致（含每请求 context/registry/recent_dialogue/force_simple），只 yield 既有 Event。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
-                  recent_dialogue="", force_simple=False):
+                  recent_dialogue="", force_simple=False, run_id=None):
         from harness.events import RunStarted, TextDelta, RunFinished
         from harness.types import Message, Role
         yield RunStarted(run_id="r1")
@@ -75,7 +75,7 @@ def _last_assistant(store, cid):
 class DetailOrchestrator:
     """发一条带 detail 的子代理工具进度 + 正常收尾。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
-                  recent_dialogue="", force_simple=False):
+                  recent_dialogue="", force_simple=False, run_id=None):
         from harness.events import RunStarted, Progress, TextDelta, RunFinished
         from harness.types import Message, Role
         yield RunStarted(run_id="r1")
@@ -115,10 +115,47 @@ def test_orchestrator_stream_becomes_main_flow(make_mock, monkeypatch):
     assert asst["content"] == "编排答复", "落库的本轮 assistant 内容应为编排器的最终答复"
 
 
+class RunIdToolOrchestrator:
+    """尊重 run_id 参数（真 Orchestrator 已如此），并发一个 ToolStarted/ToolFinished——
+    用于验证工具埋点落到 chat 登记进 conversation_runs 的 run_id 下（否则统计滤掉）。"""
+    async def run(self, message, verify=True, *, context=None, registry=None,
+                  recent_dialogue="", force_simple=False, run_id=None):
+        from harness.events import RunStarted, ToolStarted, ToolFinished, TextDelta, RunFinished
+        from harness.types import Message, Role, ToolCall, ToolResult
+        yield RunStarted(run_id=run_id or "internal")
+        yield ToolStarted(tool_call=ToolCall(id="t1", name="web_search", arguments={}))
+        yield ToolFinished(result=ToolResult(tool_call_id="t1", content="ok", is_error=False))
+        yield TextDelta(text="答复")
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content="答复"))
+
+
+def test_orchestrator_events_recorded_under_registered_run_id(make_mock, monkeypatch):
+    """编排器事件归到 chat 登记进 conversation_runs 的 run_id（修 run_id 错配）：否则
+    _user_run_ids 按 conversation_runs 过滤时会把工具/步数埋点全滤掉，运行统计为空。"""
+    traj = TrajectoryStore(":memory:")
+    harness = Harness(client=make_mock([]), registry=ToolRegistry(),
+                      checkpoint_store=CheckpointStore(":memory:"),
+                      trajectory_store=traj, sink=TrajectorySink(traj),
+                      system_prompt="你是助手", orchestrator=RunIdToolOrchestrator())
+    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None, enable_answer_gate=False)
+    store = ConversationStore(":memory:")
+    c = TestClient(create_app(config=cfg, harness=harness, store=store,
+                              doc_store=DocumentStore(":memory:")))
+    cid, _ = _chat(c, _auth(c))
+    # conversation_runs 里登记的 run_id 下应能查到 ToolStarted（证明事件归到了对的 id）。
+    # run_ids 带归属校验，需用会话真实 owner 的 user_id（非登录名字面量）。
+    uid = store._conn.execute("SELECT user_id FROM conversations WHERE id=?", (cid,)).fetchone()[0]
+    run_ids = store.run_ids(uid, cid)
+    recorded = [e for rid in run_ids for e in traj.load(rid)]
+    tools = [e for e in recorded
+             if e["type"] == "ToolStarted" and e["data"]["tool_call"]["name"] == "web_search"]
+    assert tools, "编排器的 ToolStarted 应落在 conversation_runs 登记的 run_id 下，统计才认得"
+
+
 class EmbeddingUsageOrchestrator:
     """模拟 run 期间有 embedding/子调用经 emit 上报逐模型用量（带模型名）。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
-                  recent_dialogue="", force_simple=False):
+                  recent_dialogue="", force_simple=False, run_id=None):
         from harness.events import RunStarted, TextDelta, RunFinished, ModelUsage
         from harness.usage import Usage
         from harness.progress import emit

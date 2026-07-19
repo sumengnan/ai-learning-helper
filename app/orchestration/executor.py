@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from datetime import date
 
 from harness.context.manager import ContextManager
-from harness.events import ModelUsage, Progress, RunError, RunFinished, ToolFinished, ToolStarted
+from harness.events import (
+    ModelUsage, Progress, RunError, RunFinished, StepStarted, ToolFinished, ToolStarted)
 from harness.loop.agent_loop import AgentLoop
 from harness.progress import reset_current_agent, set_current_agent
 from harness.tools.base import ToolRegistry
@@ -150,15 +151,23 @@ class Executor:
                     tc = ev.tool_call
                     tool_names[tc.id] = tc.name
                     tool_args[tc.id] = tc.arguments
+                    # 原始 ToolStarted/ToolFinished/StepStarted 一并透传（不止转成 Progress）：
+                    # 它们经 sink 落 trajectory，供「AI 运行统计」聚合能力/步数——旧写法只发 Progress，
+                    # 这些埋点在编排器复杂路径下全丢了。前端在有计划时不再另显扁平 steps（见 ChatView），
+                    # 故不会与计划树里的执行明细重复。
+                    yield ev
                     yield Progress(scope, f"调用工具 {tc.name}", status="running", key=tc.id,
                                    detail={"tool": tc.name, "args": tc.arguments})
                 elif isinstance(ev, ToolFinished):
                     r = ev.result
                     name = tool_names.get(r.tool_call_id, "工具")
+                    yield ev
                     yield Progress(scope, f"调用工具 {name}",
                                    status="error" if r.is_error else "ok", key=r.tool_call_id,
                                    detail={"tool": name, "args": tool_args.get(r.tool_call_id),
                                            "result": r.content, "is_error": r.is_error})
+                elif isinstance(ev, StepStarted):   # 透传：前端忽略，仅供 trajectory 统计步数
+                    yield ev
                 elif isinstance(ev, ModelUsage):   # 用量记进累加器，供 Orchestrator 末尾汇总
                     record_usage(ev.usage, ev.cost_usd, ev.model)
                 elif isinstance(ev, RunFinished):

@@ -36,13 +36,15 @@ async def test_executor_produces_artifact_from_final_text(make_mock):
 
 
 async def test_executor_emits_progress_not_textdelta(make_mock):
-    """执行者内部产出不得作为 TextDelta 泄露给用户；只出 Progress。"""
+    """执行者内部产出不得作为 TextDelta 泄露给用户。用户可见的只有 Progress；另透传原始
+    ToolStarted/ToolFinished/StepStarted 供「AI 运行统计」聚合（非用户可见文本，前端有计划时不渲染）。"""
     client = make_mock(_text_only_turns("中间产出"))
     ex = Executor(client=client, registry=ToolRegistry(), system_prompt="sp", model="m", max_steps=3)
     events, _ = await _collect(ex.execute(_step(), {}))
-    from harness.events import TextDelta
-    assert not any(isinstance(e, TextDelta) for e in events)
-    assert all(isinstance(e, Progress) for e in events)
+    from harness.events import TextDelta, StepStarted, ToolStarted, ToolFinished
+    assert not any(isinstance(e, TextDelta) for e in events)          # 绝不泄露正文
+    assert all(isinstance(e, (Progress, StepStarted, ToolStarted, ToolFinished))
+               for e in events)                                       # 仅 Progress + 统计埋点
 
 
 def test_build_prompt_includes_deps_and_hint():
@@ -133,6 +135,22 @@ async def test_executor_tool_call_emits_progress(make_mock):
     assert any(p.status == "running" for p in progs)
     assert any(p.status == "ok" for p in progs)
     assert "算完了" in artifact.summary
+
+
+async def test_executor_passes_through_raw_tool_events_for_stats(make_mock):
+    """执行子步透传原始 ToolStarted/ToolFinished/StepStarted（不止转 Progress）：供 sink 落
+    trajectory、再进「AI 运行统计」聚合能力/步数。此前只发 Progress，这些埋点在编排器复杂路径下全丢。"""
+    from harness.events import StepStarted, ToolFinished, ToolStarted
+    from harness.tools.builtins.calculator import CalculatorTool
+    reg = ToolRegistry(); reg.register(CalculatorTool())
+    client = make_mock(_tool_then_done_turns())
+    ex = Executor(client=client, registry=reg, system_prompt="sp", model="m", max_steps=3)
+    events, _ = await _collect(ex.execute(_step(), {}))
+    ts = [e for e in events if isinstance(e, ToolStarted)]
+    tf = [e for e in events if isinstance(e, ToolFinished)]
+    assert ts and ts[0].tool_call.name == "calculator"       # 原始 ToolStarted 透传
+    assert tf and tf[0].result.tool_call_id == "c1"           # 原始 ToolFinished 透传
+    assert any(isinstance(e, StepStarted) for e in events)    # StepStarted 透传（供步数统计）
 
 
 def _always_tool_turns():

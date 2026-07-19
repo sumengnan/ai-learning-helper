@@ -560,6 +560,16 @@ async def test_run_backcompat_no_per_request_deps():
     assert isinstance(events[-1], RunFinished)
 
 
+async def test_run_uses_passed_run_id_for_run_started():
+    """run(run_id=X) → RunStarted 带 X：使本轮所有事件经 sink 归到 chat 登记进 conversation_runs
+    的那个 run_id，否则按用户过滤的运行统计会把编排器事件全滤掉。缺省仍自造 uuid。"""
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [], triage_simple=True)
+    ev_fixed = [ev async for ev in orch.run("hi", run_id="fixed-id")]
+    assert isinstance(ev_fixed[0], RunStarted) and ev_fixed[0].run_id == "fixed-id"
+    ev_auto = [ev async for ev in orch.run("hi")]                    # 未传 → 自造
+    assert isinstance(ev_auto[0], RunStarted) and ev_auto[0].run_id != "fixed-id"
+
+
 def test_obvious_simple_heuristic():
     from app.orchestration.orchestrator import _obvious_simple
     assert _obvious_simple("你好") and _obvious_simple("谢谢！") and _obvious_simple("  ok ")

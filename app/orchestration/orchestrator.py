@@ -222,7 +222,7 @@ class Orchestrator:
     # ---- 主入口 ----
     async def run(self, user_message: str, verify: bool = True, *,
                   context=None, registry=None, recent_dialogue: str = "",
-                  force_simple: bool = False):
+                  force_simple: bool = False, run_id: str | None = None):
         """verify：对应前端结果校验开关。开 → 终局 Critic 把关 + 可重规划；关 → 跑完一轮
         直接汇总交付，不做终局 review/重规划（更快，但不把关）。
 
@@ -240,7 +240,10 @@ class Orchestrator:
           与各执行子步；执行子步会先隐藏 update_plan 再用。
         - recent_dialogue：最近对话文本，喂给 Planner（上下文相关的拆分）与最终汇总。
         缺省全为空/回退，保持对既有测试透明。"""
-        run_id = uuid.uuid4().hex
+        # run_id 由 chat 路由传入（= 登记进 conversation_runs 的那个），使本轮所有事件经 sink
+        # 落 trajectory 时都归到该 id 下——否则编排器自造 uuid、事件归了另一个 id，按用户过滤
+        # 的运行统计（AI 在为我做什么/回答质量）会把它们全滤掉。缺省自造，保持对既有测试透明。
+        run_id = run_id or uuid.uuid4().hex
         yield RunStarted(run_id=run_id)
         # 执行子步用的工具视图：每请求 registry 隐藏 update_plan（子步调它会覆盖总计划）；无则回退
         exec_reg = HidingRegistry(registry, {"update_plan"}) if registry is not None else None

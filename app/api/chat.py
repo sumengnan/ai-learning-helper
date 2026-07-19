@@ -929,7 +929,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     _orch_src = SimpleNamespace(
                         run=lambda m: harness.orchestrator.run(
                             m, verify=req.verify, context=_octx, registry=registry,
-                            recent_dialogue=recent_dialogue, force_simple=force_simple))
+                            recent_dialogue=recent_dialogue, force_simple=force_simple,
+                            run_id=run_id_a))   # 事件归到 conversation_runs 登记的 run_id，统计才认
                     async for s in _drain(_orch_src, run_id_a, model_message, True, collect):
                         yield _acc(s)
                     errored = collect["final"] is None
@@ -944,6 +945,20 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         delivered = f"[出错] {empty_text}"
                         yield RunError(error=empty_text)
                     delivered_sources = source_sink.snapshot()
+                    # 回答质量分（轨迹 judge）：编排器已有自己的终局 Critic 把关，这里仅额外打一次
+                    # 分层质量分，落 progress 列供「AI 运行统计 · 回答质量」展示，不据此驱动重答。
+                    # 仅多步任务（工具步 > 1）才评：单步/无工具无「拆分/多步」可评，跳过省 token
+                    # （与旧交付门口径一致）。轨迹 judge 默认关闭，需 enable_trajectory_judge 才生效。
+                    if (not errored and trajectory_judge is not None
+                            and config.enable_trajectory_judge and delivered
+                            and len(collect["steps"]) > 1):
+                        try:
+                            tscore = await trajectory_judge.score(
+                                question, _plan_text(progress),
+                                _tool_exec_summary(collect["steps"]), delivered)
+                            yield _emit_quality(tscore)
+                        except Exception as e:   # 质量分是附加统计，失败绝不影响正常交付
+                            log.warning("轨迹 judge 打分失败（不影响交付）：%s", e, exc_info=True)
                 elif not gate_on:
                     # 直通路径：单次尝试、逐字流式（与开门前行为一致）
                     collect = {"final": None, "error": None, "steps": steps,
