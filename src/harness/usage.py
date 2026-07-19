@@ -108,10 +108,15 @@ def cost_usd(usage: Usage, model: str, price_map: dict) -> float | None:
 # synthesize、planner/critic completer、dispatch 子循环——皆由 create_task 拷贝上下文）都能读到，
 # 无需把 tiers 逐个穿过构造函数。未 set 时为 None，effective_cost 退回「无价即 None」的旧语义。
 _price_tiers: contextvars.ContextVar = contextvars.ContextVar("price_tiers", default=None)
+# 按模型的分层计费表 {model_name: tiers} 与扁平价表 {model_name: [in,out]/1k}：让编排器各子调用
+# （executor/simple 走快速模型、synthesize/planner 走主模型…）按各自模型名精确计价，而不再共用一张表。
+# 与 _price_tiers 一样由 chat 路由的 pump() set，主循环及其派生子任务（create_task 拷贝上下文）都读得到。
+_price_tiers_by_model: contextvars.ContextVar = contextvars.ContextVar("price_tiers_by_model", default=None)
+_price_map_ctx: contextvars.ContextVar = contextvars.ContextVar("price_map_ctx", default=None)
 
 
 def set_price_tiers(tiers):
-    """设置实时成本回退用的分层计费表，返回 token 供 reset。"""
+    """设置实时成本回退用的（默认）分层计费表，返回 token 供 reset。"""
     return _price_tiers.set(tiers)
 
 
@@ -119,16 +124,34 @@ def reset_price_tiers(token) -> None:
     _price_tiers.reset(token)
 
 
-def effective_cost(usage: Usage, model: str, price_map: dict) -> float | None:
-    """实时成本：优先扁平 price_map（按模型精确定价）；该模型无价时回退上下文里的分层计费表。
+def set_pricing(*, price_map=None, tiers=None, tiers_by_model=None):
+    """一次性设三份计价上下文（扁平价表 / 默认分层表 / 按模型分层表），返回 tokens 元组供 reset_pricing。"""
+    return (_price_map_ctx.set(price_map),
+            _price_tiers.set(tiers),
+            _price_tiers_by_model.set(tiers_by_model))
 
-    解决「price_map 默认空 → 聊天气泡成本恒为 0」：真实计费走 model_price_tiers（¥），
-    此前只接进后台 stats，没接进实时 ModelUsage，于是前端花费一直显示 0。
+
+def reset_pricing(tokens) -> None:
+    m, t, bm = tokens
+    _price_map_ctx.reset(m)
+    _price_tiers.reset(t)
+    _price_tiers_by_model.reset(bm)
+
+
+def effective_cost(usage: Usage, model: str, price_map: dict) -> float | None:
+    """实时成本，**按模型**计价：
+    1) 扁平价表（优先入参 price_map，其次上下文里的 _price_map_ctx）按 model 精确取价；
+    2) 无扁平价 → 该模型的 per-model 分层表（_price_tiers_by_model[model]），
+    3) 再无 → 全局默认分层表（_price_tiers）。都没有则返回 None。
+
+    编排器各子调用不显式传 price_map，靠 pump() 设的上下文按各自 model 名精确计价。
     """
-    c = cost_usd(usage, model, price_map)
+    pm = price_map or _price_map_ctx.get() or {}
+    c = cost_usd(usage, model, pm)
     if c is not None:
         return c
-    tiers = _price_tiers.get()
+    by = _price_tiers_by_model.get() or {}
+    tiers = by.get(model) or _price_tiers.get()
     if tiers:
         return tiered_cost(usage.prompt_tokens, usage.completion_tokens, tiers)
     return None

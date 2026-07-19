@@ -608,3 +608,43 @@ def test_orchestrator_fast_falls_back_to_main_when_unset():
     orch.__init__(client="MAIN", registry=None, model="main-model",
                   planner=None, critic=None, executor=None, fast_complete=None)
     assert orch._fast_client == "MAIN" and orch._fast_model == "main-model"
+
+
+async def test_run_emits_per_model_usage():
+    """末尾按模型各发一条 ModelUsage（带 model 名），供 stats 分模型统计。"""
+    from harness.events import ModelUsage
+    from harness.usage import Usage
+    from app.orchestration.usage_ctx import record_usage
+    from app.orchestration.executor import StepArtifact
+    from app.orchestration.plan import Artifact
+
+    class MExec:
+        async def execute(self, step, deps, hint="", *, registry=None):
+            record_usage(Usage(0, 0, 100), 0.01, "fast-model")
+            yield StepArtifact(Artifact(summary=f"done-{step.id}"))
+
+    class MCritic:
+        async def validate(self, step, art):
+            record_usage(Usage(0, 0, 10), 0.001, "fast-model"); return Verdict(ok=True, reason="")
+        async def review(self, goal, plan, arts):
+            record_usage(Usage(0, 0, 20), 0.002, "main-model"); return Review(accept=True, feedback="")
+
+    class MPlanner:
+        async def plan(self, goal, recent_dialogue=""):
+            record_usage(Usage(0, 0, 30), 0.003, "main-model"); return _plan(_s("s1"))
+        async def replan(self, g, p, f):
+            return _plan(_s("s1"))
+
+    async def msynth(goal, arts, recent_dialogue=""):
+        record_usage(Usage(0, 0, 50), 0.005, "main-model"); yield TextDelta(text="答复")
+
+    orch = _mk(MPlanner(), MCritic(), [])
+    orch._executor = MExec()
+    orch._synthesize = msynth
+    events = [ev async for ev in orch.run("复杂")]
+    by = {e.model: e for e in events if isinstance(e, ModelUsage)}
+    assert set(by) == {"fast-model", "main-model"}
+    assert by["fast-model"].usage.total_tokens == 110      # exec 100 + validate 10
+    assert by["main-model"].usage.total_tokens == 100      # plan 30 + review 20 + synth 50
+    assert abs(by["fast-model"].cost_usd - 0.011) < 1e-9
+    assert abs(by["main-model"].cost_usd - 0.010) < 1e-9

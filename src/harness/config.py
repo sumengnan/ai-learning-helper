@@ -44,11 +44,15 @@ class HarnessConfig(BaseSettings):
     otel_enabled: bool = False
     otel_exporter: str = "console"      # console | otlp
     otel_endpoint: str = ""
-    price_map: dict = {}                 # {model: [in_per_1k, out_per_1k]}（旧版扁平计费，实时口径）
+    price_map: dict = {}                 # {model: [in_per_1k, out_per_1k]}（扁平计费，按模型 key，实时口径）
     # 当前模型分层计费：按「输入长度」分档，每档 [输入上限tokens, 输入价/百万token, 输出价/百万token]，
     # 升序排列，末档为封顶价；空=未知（成本显示 —）。默认 qwen-plus 档位（¥/百万 token）：
     # 输入≤256K=1.6、256K~1M=4.8；输出≤256K=6.4、256K~1M=19.2。
     model_price_tiers: list = [[256000, 1.6, 6.4], [1000000, 4.8, 19.2]]
+    # 按模型的分层计费覆盖：{模型名: tiers}。给主/快速/embedding/rerank/judge 各配一份，未命中的
+    # 模型回退上面的 model_price_tiers（默认档）。例：
+    #   {"qwen-plus":[[256000,1.6,6.4],[1000000,4.8,19.2]], "qwen-turbo":[[1000000,0.3,0.6]]}
+    model_price_tiers_by_model: dict = {}
     price_currency: str = "¥"            # 估算成本显示的货币符号
     embedding_base_url: str = "https://api.openai.com/v1"
     embedding_api_key: str = ""          # 空则回退用 api_key

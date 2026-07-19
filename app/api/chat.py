@@ -30,7 +30,7 @@ from harness.telemetry.tracer import get_tracer
 from harness.tools.base import ToolRegistry
 from harness.tools.builtins.memory_search import SearchMemoryTool
 from harness.types import Message, Role
-from harness.usage import reset_price_tiers, set_price_tiers
+from harness.usage import reset_pricing, set_pricing
 
 from ..auth import current_user
 from ..completion import build_fast_completer
@@ -690,10 +690,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 # 想那么久」，管的是回答用户的那些调用，而不是交付门校验、记忆调和、记忆整合
                 # 这些旁路。此前它设在 gen() 里且从不 reset，那些旁路全都悄悄继承了它。
                 btoken = set_extra_body_override({"enable_thinking": req.think})
-                # 分层计费回退：price_map 未配某模型价时，实时成本按 model_price_tiers 估算，
-                # 主循环与其派生的所有子任务（编排器 executor/synthesize/planner/critic 等）都读得到，
-                # 否则聊天气泡的花费会一直显示 0（真实 ¥ 计费此前只接进后台 stats）。
-                cttoken = set_price_tiers(config.model_price_tiers)
+                # 按模型计价上下文：扁平价表 price_map + 默认分层表 + 按模型分层表，主循环与其派生的所有
+                # 子任务（编排器 executor/synthesize/planner/critic 走各自模型）都据各自 model 名精确计价。
+                cttoken = set_pricing(
+                    price_map=config.price_map,
+                    tiers=config.model_price_tiers,
+                    tiers_by_model=config.model_price_tiers_by_model)
                 try:
                     # 本轮附件播种进会话沙箱 /workspace/uploads/，供模型直接执行（写盘≠给模型）
                     if attachment_metas and harness.sandbox is not None:
@@ -712,7 +714,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 except Exception as e:  # 兜底成 RunError，避免流卡死
                     queue.put_nowait(RunError(error=str(e)))
                 finally:
-                    reset_price_tiers(cttoken)
+                    reset_pricing(cttoken)
                     reset_extra_body_override(btoken)
                     reset_plan_clock(ptoken)
                     reset_sandbox_conv(stoken)
@@ -786,8 +788,19 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         reason_ms += (time.monotonic() - reason_t0) * 1000
                         reason_t0 = None
                     elif isinstance(ev, ModelUsage):
-                        # 记录用量供落库（与前端一致取最新一次的 total/cost），刷新后仍可展示
-                        collect["usage"] = {"tokens": ev.usage.total_tokens, "cost": ev.cost_usd}
+                        # 用量落库（与前端同规则）：model=None 是累计总额快照（编排器 record_usage 一路
+                        # emit，取其为权威总额）；带 model 的是分模型增量（末尾各发一条 / ReAct 每步一条），
+                        # 累加进 usage_by_model。总额优先用 model=None 快照，否则取分模型之和。
+                        ubm = collect.setdefault("usage_by_model", {})
+                        if not ev.model:
+                            collect["usage_total"] = {"tokens": ev.usage.total_tokens, "cost": ev.cost_usd}
+                        else:
+                            e = ubm.setdefault(ev.model, {"tokens": 0, "cost": 0.0})
+                            e["tokens"] += ev.usage.total_tokens
+                            e["cost"] += ev.cost_usd or 0.0
+                        collect["usage"] = collect.get("usage_total") or {
+                            "tokens": sum(e["tokens"] for e in ubm.values()),
+                            "cost": sum(e["cost"] for e in ubm.values())}
                     elif isinstance(ev, Progress):
                         collect["progress"].append({"scope": ev.scope, "text": ev.text,
                                                     "status": ev.status, "key": ev.key,

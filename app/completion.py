@@ -33,7 +33,7 @@ def build_completer(client, model_name: str, *, max_prompt_tokens: int = 0,
             if isinstance(ev, RunFinished):
                 final = ev.message.content or ""
             elif isinstance(ev, ModelUsage):   # 记进编排器用量累加器（非编排器路径 no-op）
-                record_usage(ev.usage, ev.cost_usd)
+                record_usage(ev.usage, ev.cost_usd, ev.model)
             elif isinstance(ev, ReasoningDelta):   # 思考记进 sink（仅 planner 调用期挂 sink；否则 no-op）
                 record_reasoning(ev.text)
             elif isinstance(ev, RunError):

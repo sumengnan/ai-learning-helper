@@ -204,7 +204,7 @@ class Orchestrator:
             elif isinstance(ev, ReasoningDelta):   # 思考过程透传（前端 ThinkingBlock 展示）
                 yield ev
             elif isinstance(ev, ModelUsage):       # 用量记进累加器，run() 末尾汇总
-                record_usage(ev.usage, ev.cost_usd)
+                record_usage(ev.usage, ev.cost_usd, ev.model)
             elif isinstance(ev, RunFinished):
                 final = ev.message.content or ""
         # 端点未流式（只在 RunFinished 给全量）时，补一个 TextDelta，保证 run() 能累加到文本
@@ -311,8 +311,14 @@ class Orchestrator:
                     final_parts.append(ev.text)
                 yield ev
             final = "".join(final_parts) or "（未能生成答复）"
-            if acc.usage.total_tokens or acc.cost:   # 汇总总用量，供前端显示总 tokens/成本
-                yield ModelUsage(usage=acc.usage, cost_usd=acc.cost, attempts=1, latency_ms=0.0)
+            # 末尾按**模型**各发一条 ModelUsage（带 model 名）：这些经生成器 → sink 落 trajectory，
+            # 供 stats 分模型统计；前端也收到，累加成分模型明细。前端的合计总额由 record_usage 一路
+            # emit 的 model=None 累计快照（live）提供，故这里不再单发一条聚合（避免与快照重复置显）。
+            for m, e in acc.by_model.items():
+                u = e["usage"]
+                if u.total_tokens or e["cost"]:
+                    yield ModelUsage(usage=u, cost_usd=e["cost"], attempts=1, latency_ms=0.0,
+                                     model=m or None)
             yield RunFinished(message=Message(role=Role.ASSISTANT, content=final))
         finally:
             reset_acc(acc_token)

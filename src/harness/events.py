@@ -97,3 +97,4 @@ class ModelUsage(Event):
     cost_usd: float | None
     attempts: int
     latency_ms: float
+    model: str | None = None   # 产生该用量的模型名；供按模型分组统计/计价。聚合快照可为 None

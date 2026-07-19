@@ -20,27 +20,43 @@ from harness.usage import Usage
 
 
 class UsageAcc:
-    def __init__(self) -> None:
-        self.usage = Usage()
-        self.cost = 0.0
+    """按模型累加本轮各子调用的用量与成本：{model_name: {"usage": Usage, "cost": float}}。
 
-    def add(self, usage: Usage, cost: float | None) -> None:
-        self.usage = self.usage + usage
-        self.cost += cost or 0.0
+    汇总属性 usage/cost 供前端显示"本轮所有模型合计"；by_model 供末尾按模型发 ModelUsage（→ 落
+    trajectory 供 stats 分模型统计）。"""
+
+    def __init__(self) -> None:
+        self.by_model: dict[str, dict] = {}
+
+    def add(self, usage: Usage, cost: float | None, model: str | None = None) -> None:
+        e = self.by_model.setdefault(model or "", {"usage": Usage(), "cost": 0.0})
+        e["usage"] = e["usage"] + usage
+        e["cost"] += cost or 0.0
+
+    @property
+    def usage(self) -> Usage:
+        total = Usage()
+        for e in self.by_model.values():
+            total = total + e["usage"]
+        return total
+
+    @property
+    def cost(self) -> float:
+        return sum(e["cost"] for e in self.by_model.values())
 
 
 _acc: contextvars.ContextVar = contextvars.ContextVar("orchestrator_usage_acc", default=None)
 
 
-def record_usage(usage: Usage, cost: float | None) -> None:
-    """把一次模型调用的用量记进当前累加器；无累加器（非编排器路径）时 no-op。
+def record_usage(usage: Usage, cost: float | None, model: str | None = None) -> None:
+    """把一次模型调用的用量按**模型**记进当前累加器；无累加器（非编排器路径）时 no-op。
 
-    累加后经 emit() 旁路发一条**累计**用量快照（ModelUsage），让前端底部 tokens/￥ 一边跑
-    一边涨，而不是等整轮结束才蹦出来。emit 未设 emitter（如单测、非编排器路径）时是 no-op，
-    故对既有行为透明；run() 末尾仍会发一条权威的总量，与最后一条快照同值。"""
+    累加后经 emit() 旁路发一条**累计总量**快照（ModelUsage，model=None），让前端底部 tokens/￥
+    一边跑一边涨（合计所有模型）；emit 未设 emitter（单测/非编排器）时 no-op，对既有行为透明。
+    run() 末尾另按模型各发一条 ModelUsage（带 model 名）→ 落 trajectory 供 stats 分模型统计。"""
     acc = _acc.get()
     if acc is not None:
-        acc.add(usage, cost)
+        acc.add(usage, cost, model)
         emit(ModelUsage(usage=acc.usage, cost_usd=acc.cost, attempts=1, latency_ms=0.0))
 
 

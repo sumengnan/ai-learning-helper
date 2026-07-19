@@ -185,7 +185,8 @@ class AgentLoop:
                         cost = effective_cost(usage, self._model_name, self._price_map)
                         if self._budget:
                             self._budget.add_usage(usage)
-                        yield ModelUsage(usage=usage, cost_usd=cost, attempts=attempts, latency_ms=latency_ms)
+                        yield ModelUsage(usage=usage, cost_usd=cost, attempts=attempts,
+                                         latency_ms=latency_ms, model=self._model_name)
 
                     finalized = _finalize(tool_acc)
                     tool_calls = [f.call for f in finalized]
