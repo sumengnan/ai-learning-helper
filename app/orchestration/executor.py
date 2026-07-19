@@ -39,17 +39,14 @@ EXECUTOR_GUIDE = (
 )
 
 
-def _system_with_guide(base: str, sandbox_workspace: str | None = None) -> str:
+def _system_with_guide(base: str, sandbox_guide_text: str = "") -> str:
     """给执行子步的系统提示词补上工具偏好引导 + 当前日期（时效/未来趋势类任务需要知道"现在"）。
 
-    有沙箱时再补一段沙箱工作目录提醒（与主聊天路径共用 sandbox_guide，DRY），
-    让执行子步用对的相对/绝对路径读写文件、放产物，而不是臆想宿主机目录。"""
+    sandbox_guide_text 由装配层按配置预渲染（工作目录/镜像/联网，与主聊天路径共用 sandbox_guide，
+    DRY），有沙箱时非空——让执行子步用对路径、并知道能否联网装包、该选哪个命令。"""
     guide = (f"{base}{EXECUTOR_GUIDE}"
              f"\n\n今日日期：{date.today().isoformat()}（涉及时效或未来趋势时以此为基准）。")
-    if sandbox_workspace:
-        from app.sandbox_manager import sandbox_guide
-        guide += sandbox_guide(sandbox_workspace)
-    return guide
+    return guide + (sandbox_guide_text or "")
 
 
 def _build_prompt(step: PlanStep, deps: dict[str, Artifact], hint: str = "") -> str:
@@ -70,7 +67,7 @@ class Executor:
     def __init__(self, client, registry: ToolRegistry, system_prompt: str,
                  model: str, *, max_steps: int = 10, budget=None,
                  loop_detect_window: int = 0, disable_thinking: bool = False,
-                 sandbox_workspace: str | None = None) -> None:
+                 sandbox_guide_text: str = "") -> None:
         self._client = client
         self._registry = registry
         self._system_prompt = system_prompt
@@ -78,8 +75,8 @@ class Executor:
         self._max_steps = max_steps
         self._budget = budget
         self._loop_detect_window = loop_detect_window
-        # 有沙箱时把工作目录路径带上，供 _system_with_guide 提醒模型；无沙箱为 None、不提
-        self._sandbox_workspace = sandbox_workspace
+        # 装配层按配置预渲染的沙箱指引（工作目录/镜像/联网）；无沙箱为空、不提
+        self._sandbox_guide_text = sandbox_guide_text
         # 子步是"带工具干活"的机械执行，思考链多为白烧延迟；开则本步强制关思考（与 fast/judge 档一致）
         self._disable_thinking = disable_thinking
 
@@ -89,7 +86,7 @@ class Executor:
         loop = AgentLoop(
             client=self._client, registry=self._registry,
             context=ContextManager(
-                _system_with_guide(self._system_prompt, self._sandbox_workspace)),
+                _system_with_guide(self._system_prompt, self._sandbox_guide_text)),
             max_steps=self._max_steps, budget=self._budget, model_name=self._model,
             loop_detect_window=self._loop_detect_window)
         scope = f"subagent:executor:{step.id}"

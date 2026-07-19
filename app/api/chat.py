@@ -635,8 +635,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         # read_attachment 根本没注册（见 _build_registry），此时还介绍它们的用法，等于
         # 告诉模型一批它没有的工具——比浪费 token 更糟。
         attachment_guide = ATTACHMENT_GUIDE if has_attachments else ""
-        # 有沙箱才提醒工作目录：无沙箱时这些工具根本没注册，介绍它的 cwd 只会误导模型
-        sandbox_dir_guide = (sandbox_guide(config.sandbox_workspace)
+        # 有沙箱才提醒环境：无沙箱时这些工具根本没注册，介绍其 cwd/镜像/联网只会误导模型
+        sandbox_dir_guide = (sandbox_guide(config)
                              if getattr(harness, "sandbox", None) is not None else "")
         # EXAM_GUIDE 命中考试语境才注入（约省 60% 常驻）。exam_active 已由上面的
         # grade_exam_turn 判定；history 用于识别模型自驱的多轮练习。工具本身仍常驻注册，

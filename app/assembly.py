@@ -279,6 +279,7 @@ def build_harness(config) -> Harness:
         from app.orchestration.planner import Planner
         from app.orchestration.critic import Critic
         from app.orchestration.executor import Executor
+        from app.sandbox_manager import sandbox_guide
         from harness.reliability.budget import BudgetTracker
         _plan_complete = build_completer(client, config.model)     # 规划 + 终局 review 用主模型（判断质量要求高）
         _fast_complete = build_fast_completer(client, config)      # triage + 单步 validate 用快速档（频繁，提速）
@@ -295,9 +296,9 @@ def build_harness(config) -> Harness:
                               max_steps=config.orchestrator_step_max_steps,
                               loop_detect_window=config.loop_detect_window,
                               disable_thinking=config.orchestrator_step_disable_thinking,
-                              # 有沙箱才提醒工作目录（无沙箱这些工具没注册，提了反误导）
-                              sandbox_workspace=(config.sandbox_workspace
-                                                 if sandbox is not None else None)),
+                              # 有沙箱才按配置预渲染指引（工作目录/镜像/联网）；无沙箱这些工具没注册，提了反误导
+                              sandbox_guide_text=(sandbox_guide(config)
+                                                  if sandbox is not None else "")),
             fast_complete=_fast_complete,
             # 每次 run 新建独立预算封顶时长/token（超限带现有成果收尾）；单例并发安全
             budget_factory=lambda: BudgetTracker(config.max_tokens_budget, config.max_wall_seconds),
