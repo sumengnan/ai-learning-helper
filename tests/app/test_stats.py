@@ -629,3 +629,33 @@ def test_learn_activity_series_is_user_scoped():
     mine = sum(d["runs"] for d in svc.overview("u")["learn"]["activity"])
     theirs = sum(d["runs"] for d in svc.overview("other")["learn"]["activity"])
     assert mine == 2 and theirs == 1
+
+
+def test_ops_by_model_breakdown_and_per_model_pricing():
+    """ModelUsage 按 model 分组：token/调用次数汇总，成本按各模型专属计价表回溯。"""
+    tc = _traj_conn()
+    _ev(tc, "r1", 0, "RunStarted", {"run_id": "r1"})
+    _ev(tc, "r1", 1, "ModelUsage", {"usage": {"prompt": 100, "completion": 50, "total": 150},
+                                    "cost_usd": None, "attempts": 1, "latency_ms": 10.0, "model": "main-m"})
+    _ev(tc, "r1", 2, "ModelUsage", {"usage": {"prompt": 200, "completion": 100, "total": 300},
+                                    "cost_usd": None, "attempts": 1, "latency_ms": 10.0, "model": "fast-m"})
+    _ev(tc, "r1", 3, "ModelUsage", {"usage": {"prompt": 40, "completion": 10, "total": 50},
+                                    "cost_usd": None, "attempts": 1, "latency_ms": 10.0, "model": "main-m"})
+    _ev(tc, "r1", 4, "RunFinished", {"message": {"role": "assistant", "content": "done"}})
+    tc.commit()
+    svc = StatsService(trajectory_conn=tc, app_conn=_app_conn(), memory_conn=None,
+                       price_tiers=[[1000000, 1.0, 2.0]],                    # 全局默认档
+                       price_tiers_by_model={"fast-m": [[1000000, 0.3, 0.6]]},  # fast 专属更便宜
+                       currency="¥")
+    ops = svc.overview(None, days=90)["ops"]
+    by = {r["model"]: r for r in ops["by_model"]}
+    assert set(by) == {"main-m", "fast-m"}
+    assert by["main-m"]["calls"] == 2 and by["main-m"]["total_tokens"] == 200      # 150+50
+    assert by["fast-m"]["calls"] == 1 and by["fast-m"]["total_tokens"] == 300
+    # main 用默认档：输入 140/百万×1.0 + 输出 60/百万×2.0
+    assert abs(by["main-m"]["cost_usd"] - round(140/1e6*1.0 + 60/1e6*2.0, 6)) < 1e-9
+    # fast 用专属档：200/百万×0.3 + 100/百万×0.6
+    assert abs(by["fast-m"]["cost_usd"] - round(200/1e6*0.3 + 100/1e6*0.6, 6)) < 1e-9
+    # 汇总 = 各模型之和
+    assert ops["totals"]["total_tokens"] == 500
+    assert abs(ops["totals"]["cost_usd"] - round(by["main-m"]["cost_usd"] + by["fast-m"]["cost_usd"], 4)) < 1e-9

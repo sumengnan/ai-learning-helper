@@ -60,6 +60,10 @@ export interface StatsOverview {
       cost_currency: string;
       conversations: number; messages: number;
     };
+    // 分模型明细：token/调用次数/成本按模型拆开（totals 是所有模型的汇总）。
+    // 注：embedding/rerank 目前只进实时聊天合计、尚未进历史统计，故这里主要是 LLM 各档模型。
+    by_model: { model: string; calls: number; prompt: number; completion: number;
+                total_tokens: number; cost_usd: number | null }[];
     daily: DailyPoint[];
     tools: ToolStat[];
     steps_histogram: StepBucket[];
