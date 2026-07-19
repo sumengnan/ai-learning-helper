@@ -876,11 +876,16 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 return Progress("sources", json.dumps(items, ensure_ascii=False))
 
             try:
-                if config.enable_orchestrator and getattr(harness, "orchestrator", None) is not None:
-                    # 编排器路径：单次流式，把 harness.orchestrator 当作 loop_obj 交给 _drain（其
-                    # run(message) 只 yield 既有 Event 类型），复用同一套事件处理与 SSE 下发。
-                    # 前端"结果校验"开关(req.verify)映射到编排器的终局 Critic：开→把关+可重规划，
-                    # 关→跑完一轮直接汇总交付。用 SimpleNamespace 把 verify 绑进 .run(message)。
+                if getattr(harness, "orchestrator", None) is not None:
+                    # 编排器路径（唯一主流程：装配层恒建 orchestrator，故本轮总走这里）。
+                    # 把 harness.orchestrator 当作 loop_obj 交给 _drain（其 run(message) 只 yield 既有
+                    # Event 类型），复用同一套事件处理与 SSE 下发。前端"结果校验"开关(req.verify)映射到
+                    # 编排器的终局 Critic：开→把关+可重规划，关→跑完一轮直接汇总交付。
+                    # 关键：把每请求上下文（base_ctx，含会话历史+全部指引+记忆）、每请求工具表
+                    # （registry，含用户级工具）、最近对话注入 run()——否则多轮对话/附件/考试/引用/
+                    # 个性化/用户工具全丢。context 只喂给编排器的简单直答（与 ReAct 主路径同源，故也
+                    # 同样包一层技能上下文）；registry 喂给简单直答与各执行子步。
+                    # 下方 ReAct/交付门两分支仅在 orchestrator 缺失时作惰性兜底（如精简测试注入 None）。
                     used_orchestrator = True
                     collect = {"final": None, "error": None, "steps": steps,
                                "grounding": [], "progress": progress, "usage": None,
@@ -888,8 +893,14 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     run_id_a = uuid4().hex
                     store.add_run(req.conversation_id, run_id_a)
                     source_sink.reset()
+                    _octx = base_ctx
+                    if getattr(harness, "skill_registry", None) is not None:
+                        from harness.skills.context import SkillContextManager
+                        _octx = SkillContextManager(_octx, harness.skill_registry)
                     _orch_src = SimpleNamespace(
-                        run=lambda m: harness.orchestrator.run(m, verify=req.verify))
+                        run=lambda m: harness.orchestrator.run(
+                            m, verify=req.verify, context=_octx, registry=registry,
+                            recent_dialogue=recent_dialogue))
                     async for s in _drain(_orch_src, run_id_a, model_message, True, collect):
                         yield _acc(s)
                     errored = collect["final"] is None

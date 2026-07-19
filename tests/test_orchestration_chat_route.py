@@ -28,8 +28,8 @@ def _sqlite_allow_cross_thread(monkeypatch):
 
 
 class FakeOrchestrator:
-    """签名与 AgentLoop.run(message) 相同，只 yield 既有 Event 类型。"""
-    async def run(self, message, verify=True):
+    """签名与真 Orchestrator.run 一致（含每请求 context/registry/recent_dialogue），只 yield 既有 Event。"""
+    async def run(self, message, verify=True, *, context=None, registry=None, recent_dialogue=""):
         from harness.events import RunStarted, TextDelta, RunFinished
         from harness.types import Message, Role
         yield RunStarted(run_id="r1")
@@ -37,15 +37,15 @@ class FakeOrchestrator:
         yield RunFinished(message=Message(role=Role.ASSISTANT, content="编排答复"))
 
 
-def _client(make_mock, monkeypatch, *, enable_orchestrator, orchestrator):
+def _client(make_mock, monkeypatch, *, orchestrator):
+    """路由现在只看 harness.orchestrator 是否存在（无 enable_orchestrator 开关）。"""
     traj = TrajectoryStore(":memory:")
-    # 模型这轮不会被消费（编排器接管主流程），仍给一份 turn 以防回退到 ReAct 时无输出
     harness = Harness(client=make_mock([]), registry=ToolRegistry(),
                       checkpoint_store=CheckpointStore(":memory:"),
                       trajectory_store=traj, sink=TrajectorySink(traj),
                       system_prompt="你是助手", orchestrator=orchestrator)
     cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,
-                    enable_answer_gate=False, enable_orchestrator=enable_orchestrator)
+                    enable_answer_gate=False)
     store = ConversationStore(":memory:")
     app = create_app(config=cfg, harness=harness, store=store,
                      doc_store=DocumentStore(":memory:"))
@@ -73,7 +73,7 @@ def _last_assistant(store, cid):
 
 class DetailOrchestrator:
     """发一条带 detail 的子代理工具进度 + 正常收尾。"""
-    async def run(self, message, verify=True):
+    async def run(self, message, verify=True, *, context=None, registry=None, recent_dialogue=""):
         from harness.events import RunStarted, Progress, TextDelta, RunFinished
         from harness.types import Message, Role
         yield RunStarted(run_id="r1")
@@ -86,7 +86,7 @@ class DetailOrchestrator:
 def test_orchestrator_progress_detail_streamed_and_persisted(make_mock, monkeypatch):
     """子代理工具进度的 detail 既随 SSE 下发，也随 progress 列落库（刷新后仍可展开）。"""
     c, store = _client(make_mock, monkeypatch,
-                       enable_orchestrator=True, orchestrator=DetailOrchestrator())
+                       orchestrator=DetailOrchestrator())
     cid, events = _chat(c, _auth(c))
     prog = [e for e in events if e["type"] == "Progress"
             and e["data"].get("scope") == "subagent:executor:s1"]
@@ -100,7 +100,7 @@ def test_orchestrator_progress_detail_streamed_and_persisted(make_mock, monkeypa
 def test_orchestrator_stream_becomes_main_flow(make_mock, monkeypatch):
     """开关开 + orchestrator 存在 → SSE 里流过编排器的 TextDelta，且该轮正常收尾。"""
     c, store = _client(make_mock, monkeypatch,
-                       enable_orchestrator=True, orchestrator=FakeOrchestrator())
+                       orchestrator=FakeOrchestrator())
     cid, events = _chat(c, _auth(c))
 
     deltas = [e for e in events if e["type"] == "TextDelta"]

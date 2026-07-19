@@ -19,6 +19,33 @@ from .plan import Artifact, PlanStep
 from .usage_ctx import record_usage
 
 
+class HidingRegistry(ToolRegistry):
+    """对底层 registry 的**活视图**，隐藏若干工具名。底层后续新增的工具（如 startup 时才
+    注册进 reg 的 MCP 远程工具）自动可见——故执行子步既拿得到 MCP 搜索工具、又看不到被隐藏的
+    update_plan（子步调它会发 scope=plan 覆盖编排器总计划）。不能用静态拷贝：那会错过 startup
+    才注册的工具。装配层与编排器（把每请求 registry 包成执行子步视图）共用。"""
+
+    def __init__(self, base: ToolRegistry, hidden: set[str]) -> None:
+        super().__init__()
+        self._base = base
+        self._hidden = set(hidden)
+
+    def get(self, name: str):
+        return None if name in self._hidden else self._base.get(name)
+
+    def tools(self) -> list:
+        return [t for t in self._base.tools() if t.name not in self._hidden]
+
+    def schemas(self) -> list[dict]:
+        return [t.schema() for t in self.tools()]
+
+    def register(self, tool) -> None:
+        self._base.register(tool)
+
+    def unregister(self, name: str) -> None:
+        self._base.unregister(name)
+
+
 @dataclass
 class StepArtifact:
     """内部信号：Executor 产出的最终产物。Orchestrator 消费、不外发（非 Event）。
@@ -90,11 +117,15 @@ class Executor:
         # 子步是"带工具干活"的机械执行，思考链多为白烧延迟；开则本步强制关思考（与 fast/judge 档一致）
         self._disable_thinking = disable_thinking
 
-    async def execute(self, step: PlanStep, deps: dict[str, Artifact], hint: str = ""):
-        """执行一步。yield Progress 事件，最后 yield 一个 StepArtifact。"""
+    async def execute(self, step: PlanStep, deps: dict[str, Artifact], hint: str = "",
+                      *, registry: ToolRegistry | None = None):
+        """执行一步。yield Progress 事件，最后 yield 一个 StepArtifact。
+
+        registry：本轮每请求工具表（含用户级 save_download/知识库/考试/附件工具）。编排器传入
+        （已隐藏 update_plan）；缺省回退装配期 registry（主要供测试）。"""
         prompt = _build_prompt(step, deps, hint)
         loop = AgentLoop(
-            client=self._client, registry=self._registry,
+            client=self._client, registry=registry if registry is not None else self._registry,
             context=ContextManager(
                 _system_with_guide(self._system_prompt, self._sandbox_guide_text)),
             max_steps=self._max_steps, budget=self._budget, model_name=self._model,
