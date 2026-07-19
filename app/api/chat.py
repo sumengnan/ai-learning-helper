@@ -30,6 +30,7 @@ from harness.telemetry.tracer import get_tracer
 from harness.tools.base import ToolRegistry
 from harness.tools.builtins.memory_search import SearchMemoryTool
 from harness.types import Message, Role
+from harness.usage import reset_price_tiers, set_price_tiers
 
 from ..auth import current_user
 from ..completion import build_fast_completer
@@ -687,6 +688,10 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 # 想那么久」，管的是回答用户的那些调用，而不是交付门校验、记忆调和、记忆整合
                 # 这些旁路。此前它设在 gen() 里且从不 reset，那些旁路全都悄悄继承了它。
                 btoken = set_extra_body_override({"enable_thinking": req.think})
+                # 分层计费回退：price_map 未配某模型价时，实时成本按 model_price_tiers 估算，
+                # 主循环与其派生的所有子任务（编排器 executor/synthesize/planner/critic 等）都读得到，
+                # 否则聊天气泡的花费会一直显示 0（真实 ¥ 计费此前只接进后台 stats）。
+                cttoken = set_price_tiers(config.model_price_tiers)
                 try:
                     # 本轮附件播种进会话沙箱 /workspace/uploads/，供模型直接执行（写盘≠给模型）
                     if attachment_metas and harness.sandbox is not None:
@@ -705,6 +710,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 except Exception as e:  # 兜底成 RunError，避免流卡死
                     queue.put_nowait(RunError(error=str(e)))
                 finally:
+                    reset_price_tiers(cttoken)
                     reset_extra_body_override(btoken)
                     reset_plan_clock(ptoken)
                     reset_sandbox_conv(stoken)
