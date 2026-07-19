@@ -29,15 +29,17 @@ class SandboxedBrowser:
 
     def __init__(self, sandbox, allowed_domains, block_private: bool = True,
                  user_agent: str = "", launch_args=None,
-                 timeout_margin: float = 10.0, sub_factory=None) -> None:
+                 timeout_margin: float = 10.0, sub_factory=None, sub_acquire=None) -> None:
         self._sandbox = sandbox
         self._allowed = list(allowed_domains)
         self._block_private = block_private
         self._user_agent = user_agent
         self._launch_args = list(launch_args) if launch_args else list(DEFAULT_LAUNCH_ARGS)
         self._timeout_margin = timeout_margin
-        # 提供则每次抓取起一次性「浏览器子沙箱」（专用 playwright 镜像），基础容器可保持轻量；
-        # 为 None 时复用基础容器（需基础镜像自带 playwright）。
+        # sub_acquire：async ()->(box, cached) 的缓存提供者（优先）。cached=True 表示该浏览器子沙箱
+        # 由属主（SandboxManager）按会话缓存复用、空闲回收——本类**不得**销毁它。
+        # sub_factory：无缓存时的旧式一次性子沙箱工厂（用完即销毁）。二者皆无则复用基础容器。
+        self._sub_acquire = sub_acquire
         self._sub_factory = sub_factory
         self._provisioned = False
 
@@ -73,6 +75,19 @@ class SandboxedBrowser:
 
     async def fetch(self, url: str, timeout: float, wait_until: str,
                     url_validator=None) -> PageResult:
+        # 优先用缓存提供者：同会话浏览器子沙箱按 1h 空闲复用，不随手销毁（避免每次重建 Chromium 容器）
+        if self._sub_acquire is not None:
+            box, cached = await self._sub_acquire()
+            await box.start()                  # 幂等；复用时不会重复启动
+            try:
+                await self._provision_into(box)   # 幂等地写入 runner（浏览器进程仍每次抓取新起）
+                return await self._fetch_in(box, url, timeout, wait_until)
+            finally:
+                if not cached:                 # 缓存关闭时才销毁；缓存复用的归属主管理
+                    try:
+                        await box.close()
+                    except Exception:
+                        pass
         if self._sub_factory is not None:
             box = self._sub_factory()          # 一次性浏览器子沙箱（专用 playwright 镜像）
             await box.start()

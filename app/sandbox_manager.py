@@ -103,9 +103,12 @@ class SandboxManager:
         # 语言子沙箱缓存：键 (conv_id, label)，label 形如 "python"/"java17"。用完不即销毁，
         # 复用同一容器，避免反复重建；按空闲超时/会话销毁/关停统一回收。
         self._subs: dict[tuple[str, str], _Entry] = {}
+        # 浏览器沙箱：全局共用一个（跨会话），懒加载创建/启动、复用，24h 空闲或关停时销毁。
+        self._browser: _Entry | None = None
         self._lock = asyncio.Lock()
         self._idle_timeout = float(getattr(config, "sandbox_idle_timeout", 0) or 0)
         self._sub_idle_timeout = float(getattr(config, "sandbox_sub_idle_timeout", 0) or 0)
+        self._browser_idle = float(getattr(config, "browser_sandbox_idle_timeout", 0) or 0)
 
     async def get(self, conv_id: str):
         """取（或惰性创建）该会话的 Sandbox，并刷新其空闲计时。"""
@@ -121,34 +124,55 @@ class SandboxManager:
             entry.last_used = time.monotonic()
             return entry.box
 
-    async def get_sub(self, conv_id: str, label: str, image: str) -> tuple[object, bool]:
-        """取该会话某语言/版本子沙箱，返回 (子沙箱, 是否缓存复用)。
+    async def _cached_or_new(self, key: tuple, box_factory) -> tuple[object, bool]:
+        """子沙箱缓存的通用取用（语言子沙箱、浏览器子沙箱共用）。
 
-        缓存开启（_sub_idle_timeout>0）时：复用已存在的、否则惰性创建并入缓存，刷新空闲计时，
+        缓存开启（_sub_idle_timeout>0）时：复用 key 对应的、否则惰性创建并入缓存，刷新空闲计时，
         返回 (box, True)——调用方**不要**销毁它，生命周期归 manager（空闲/会话销毁/关停回收）。
         缓存关闭时：新建一个临时子沙箱，返回 (box, False)——调用方 finally 里自行销毁（旧行为）。
-
-        与 get() 一致：只在锁内创建容器对象（不启动，start 惰性且幂等），启动交调用方。
-        """
-        labels = {_SANDBOX_LABEL: "true", "conv_id": conv_id, "role": "lang", "lang": label}
-        network = getattr(self._config, "sandbox_sub_network", "none")
-        display = f"{label} 子沙箱（{image}）"
+        box_factory(cached: bool)->box 由调用方按各自镜像/网络/内存/角色标签创建；只在锁内创建
+        容器对象（不启动，start 惰性且幂等），启动交调用方。"""
         if self._sub_idle_timeout <= 0:      # 不缓存：保持「用完即销毁」旧语义
-            labels["role"] = "ephemeral"
-            box = _docker_for(self._config, image, labels=labels,
-                              network=network, display_name=display)
-            return box, False
+            return box_factory(False), False
         async with self._lock:
-            await self._evict_idle(keep=conv_id)
-            key = (conv_id, label)
+            await self._evict_idle(keep=key[0])
             entry = self._subs.get(key)
             if entry is None:
-                box = _docker_for(self._config, image, labels=labels,
-                                  network=network, display_name=display)
-                entry = _Entry(box=box)
+                entry = _Entry(box=box_factory(True))
                 self._subs[key] = entry
             entry.last_used = time.monotonic()
             return entry.box, True
+
+    async def get_sub(self, conv_id: str, label: str, image: str) -> tuple[object, bool]:
+        """取该会话某语言/版本子沙箱，返回 (子沙箱, 是否缓存复用)。见 _cached_or_new。"""
+        net = getattr(self._config, "sandbox_sub_network", "none")
+        display = f"{label} 子沙箱（{image}）"
+
+        def mk(cached):
+            labels = {_SANDBOX_LABEL: "true", "conv_id": conv_id,
+                      "role": "lang" if cached else "ephemeral", "lang": label}
+            return _docker_for(self._config, image, labels=labels,
+                               network=net, display_name=display)
+        return await self._cached_or_new((conv_id, label), mk)
+
+    async def get_browser(self) -> tuple[object, bool]:
+        """取（或惰性创建）**全局共用**的浏览器沙箱（专用 playwright 镜像），返回 (box, True)。
+
+        全局一个、跨会话共用；懒加载创建容器对象（start 仍惰性且幂等），空闲超
+        browser_sandbox_idle_timeout（默认 24h）由 manager 回收、下次用再重建，关停时销毁。
+        返回 cached 恒为 True——调用方（浏览器）**不得**销毁它，生命周期归 manager。
+        浏览器需真实出网（用 sandbox_network）与更大内存（browser_sandbox_mem_limit，防 Chromium OOM）。"""
+        cfg = self._config
+        async with self._lock:
+            await self._evict_idle(keep="")   # 顺带回收空闲超时的容器（含 24h 全局浏览器）
+            if self._browser is None:
+                labels = {_SANDBOX_LABEL: "true", "role": "browser-global"}
+                box = _docker_for(cfg, cfg.browser_sandbox_image, labels=labels,
+                                  network=cfg.sandbox_network, display_name="浏览器沙箱",
+                                  mem_limit=getattr(cfg, "browser_sandbox_mem_limit", None))
+                self._browser = _Entry(box=box)
+            self._browser.last_used = time.monotonic()
+            return self._browser.box, True
 
     async def destroy(self, conv_id: str) -> None:
         """销毁某会话的容器（删除会话时调用）；连同其语言子沙箱一并销毁。不存在则静默。"""
@@ -160,15 +184,19 @@ class SandboxManager:
         await self._close_subs(subs)
 
     async def close_all(self) -> None:
-        """关停时销毁全部会话容器与子沙箱。"""
+        """关停时销毁全部会话容器、子沙箱与全局浏览器沙箱。"""
         async with self._lock:
             items = list(self._boxes.items())
             subs = list(self._subs.items())
+            browser = self._browser
             self._boxes.clear()
             self._subs.clear()
+            self._browser = None
         for conv_id, entry in items:
             await self._safe_close(entry.box, conv_id)
         await self._close_subs(subs)
+        if browser is not None:
+            await self._safe_close(browser.box, "浏览器")
 
     def _pop_subs_of(self, conv_id: str) -> list:
         """从缓存摘出某会话的全部子沙箱条目（在锁内调用），返回 [(key, entry)]。"""
@@ -200,7 +228,15 @@ class SandboxManager:
             stale_subs = [k for k, e in self._subs.items()
                           if k[0] != keep and now - e.last_used > self._sub_idle_timeout]
             dead_subs += [(k, self._subs.pop(k)) for k in stale_subs]
+        # 全局浏览器沙箱空闲超时（默认 24h）→ 销毁，下次抓取再懒加载重建
+        dead_browser = None
+        if self._browser is not None and self._browser_idle > 0 \
+                and now - self._browser.last_used > self._browser_idle:
+            dead_browser = self._browser.box
+            self._browser = None
         await self._close_subs(dead_subs)
+        if dead_browser is not None:
+            await self._safe_close(dead_browser, "浏览器")
 
     @staticmethod
     async def _safe_close(box, conv_id: str) -> None:
