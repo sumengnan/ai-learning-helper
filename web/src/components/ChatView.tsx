@@ -557,6 +557,11 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                   </>
                 );
               })()}
+              {/* 技能块：置于任务步骤块之上，让「用了什么技能」最先可见 */}
+              {showTools && m.role === "assistant" && m.progress && m.progress.length > 0 && (
+                <ProgressBlock title="技能" kind="skill"
+                  items={m.progress.filter((p) => p.scope === "skill")} status="ok" />
+              )}
               {m.role === "assistant" && m.progress && (() => {
                 const planItems = m.progress.filter((p) => p.scope === "plan");
                 const plan = planItems[planItems.length - 1];
@@ -583,7 +588,6 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                 // executor 子代理已并入 PlanBlock 的计划树；这里只留 dispatch 派发的子代理，避免与顶部计划步重复
                 const sub = m.progress.filter(
                   (p) => p.scope.startsWith("subagent:") && !p.scope.startsWith("subagent:executor:"));
-                const skill = m.progress.filter((p) => p.scope === "skill");
                 const live = busy && i === messages.length - 1 && m.status === "streaming";
                 const stopped = m.status === "stopped";
                 // 进行中的块：生成中转圈；用户停止→stopped（已取消）；否则收尾为 ok
@@ -601,7 +605,6 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                 // 校验状态改由常驻 VerifyBadge 展示（脱离本 showTools 分支）
                 return (
                   <>
-                    <ProgressBlock title="技能" kind="skill" items={skill} status="ok" />
                     <ProgressBlock title="沙箱执行" kind="sandbox" items={sandbox} status={sbStatus} />
                     <SubagentProgress items={sub} live={live} stopped={stopped} status={subStatus} />
                   </>
