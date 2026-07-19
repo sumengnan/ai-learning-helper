@@ -91,6 +91,9 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
   const [think, setThink] = useState(() => readBool(THINK_KEY, false));  // 思考模式默认关
   const [models, setModels] = useState<ModelsInfo | null>(null);   // 各角色当前模型名（展示用）
   const [exam, setExam] = useState<ExamStatus | null>(null);       // 考试状态：进行中时显示「考试中」标识
+  // 本轮 run 句柄是否已拿到（镜像 turnRunIdRef，用于驱动「停止」按钮的可用态）。拿到 X-Run-Id
+  // 前不允许停止——否则只断本地流、杀不掉后端后台任务，任务会继续跑到完。
+  const [turnRunId, setTurnRunId] = useState<string | null>(null);
   const [verify, setVerify] = useState(() => readBool(VERIFY_KEY, true));
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
@@ -358,6 +361,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
     }
     let outcome: "done" | "error" | "stopped" | null = "done";
     userStoppedRef.current = false;
+    turnRunIdRef.current = null; setTurnRunId(null);   // 新一轮：清空上轮句柄，拿到本轮的才允许停止
     setInput(""); setPending([]); setBusy(true); busyRef.current = true;
     const controller = new AbortController();
     abortRef.current = controller;
@@ -365,7 +369,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
     try {
       await streamChat(conversationId, msg, onEvent, controller.signal,
         attachments.map((a) => a.id),
-        (rid) => { turnRunIdRef.current = rid; upd((a) => { a.runId = rid; }); },
+        (rid) => { turnRunIdRef.current = rid; setTurnRunId(rid); upd((a) => { a.runId = rid; }); },
         thinkRef.current, verifyRef.current);
     } catch (err: any) {
       // 用户点停止 → 已停止；非用户 abort（卸载/重挂载）→ null：不落终态，保留 streaming 待重连
@@ -407,10 +411,13 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
   }
 
   // 停止本轮生成：显式取消后端后台任务（断开已不再取消它）+ 断开本地流。
+  // 前提是已拿到本轮 run 句柄——没有句柄就只能断本地流、杀不掉后端任务，故直接不允许停止
+  // （按钮此时禁用，这里再做一道防御）。
   function stop() {
-    userStoppedRef.current = true;   // 标记为用户主动停止：本次 abort 才落「已停止」终态
     const tid = turnRunIdRef.current;
-    if (tid) void stopRun(tid);
+    if (!tid) return;                // 未拿到句柄不停止：否则后端任务照跑，前后端会不一致
+    userStoppedRef.current = true;   // 标记为用户主动停止：本次 abort 才落「已停止」终态
+    void stopRun(tid);
     abortRef.current?.abort();
   }
 
@@ -430,7 +437,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
   async function reattach(runId: string) {
     if (busyRef.current) return;
     userStoppedRef.current = false;
-    turnRunIdRef.current = runId;
+    turnRunIdRef.current = runId; setTurnRunId(runId);   // 接回即已知句柄，可停止
     setBusy(true); busyRef.current = true;
     upd((a) => { a.content = ""; a.steps = []; a.progress = undefined; a.sources = undefined;
       a.startedAt = a.startedAt ?? Date.now(); a.elapsedMs = undefined; });
@@ -810,8 +817,14 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
               : exam?.active ? "作答本题…（或说「结束考试」退出）" : "问点什么…"}
           />
           {busy ? (
-            <Button variant="outlined" color="error" onClick={stop}
-              sx={{ flexShrink: 0, mb: 0.25 }}>停止</Button>
+            // 拿到本轮 run 句柄前禁用停止：没有句柄停不掉后端后台任务（只断本地流），故先禁用、
+            // 句柄到达（通常瞬间）后再亮起。禁用按钮不触发 Tooltip，需用 span 包裹。
+            <Tooltip title={turnRunId ? "停止本轮生成" : "正在建立连接…可停止时按钮亮起"}>
+              <span style={{ display: "inline-flex" }}>
+                <Button variant="outlined" color="error" onClick={stop} disabled={!turnRunId}
+                  sx={{ flexShrink: 0, mb: 0.25 }}>停止</Button>
+              </span>
+            </Tooltip>
           ) : (
             <Button variant="contained" onClick={() => send()}
               sx={{ flexShrink: 0, mb: 0.25 }}>发送</Button>
