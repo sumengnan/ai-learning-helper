@@ -46,7 +46,7 @@ def _mk(planner, critic, order, triage_simple=False, synth="最终答复", max_r
     async def fake_synth(goal, artifacts, recent_dialogue=""):
         from harness.events import TextDelta
         yield TextDelta(text=synth)
-    async def fake_simple(msg, budget=None, *, context=None, registry=None):
+    async def fake_simple(msg, budget=None, *, context=None, registry=None, prefer_main=False):
         yield RunFinished(message=__import__("harness.types", fromlist=["Message"]).Message(
             role=__import__("harness.types", fromlist=["Role"]).Role.ASSISTANT, content="简单答复"))
     orch = Orchestrator.__new__(Orchestrator)
@@ -506,7 +506,7 @@ async def test_early_abort_cancels_pending_workers():
 async def test_run_threads_context_and_registry_to_simple_answer():
     """每请求 context/registry 应透传给简单直答（多轮/用户工具靠它）。"""
     seen = {}
-    async def cap_simple(msg, budget=None, *, context=None, registry=None):
+    async def cap_simple(msg, budget=None, *, context=None, registry=None, prefer_main=False):
         seen["ctx"], seen["reg"] = context, registry
         yield RunFinished(message=__import__("harness.types", fromlist=["Message"]).Message(
             role=__import__("harness.types", fromlist=["Role"]).Role.ASSISTANT, content="简单答复"))
@@ -578,7 +578,7 @@ async def test_greeting_short_circuits_without_llm_triage():
         calls["triage"] += 1
         return False
     hit = {"simple": 0}
-    async def cap_simple(msg, budget=None, *, context=None, registry=None):
+    async def cap_simple(msg, budget=None, *, context=None, registry=None, prefer_main=False):
         hit["simple"] += 1
         yield RunFinished(message=Message(role=Role.ASSISTANT, content="hi"))
     orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [])
@@ -621,7 +621,9 @@ async def test_force_simple_bypasses_triage_and_planning():
         calls["triage"] += 1
         return False   # 判复杂：只有真正短路才不会走到规划
 
-    async def cap_simple(msg, budget=None, *, context=None, registry=None):
+    seen = {}
+    async def cap_simple(msg, budget=None, *, context=None, registry=None, prefer_main=False):
+        seen["prefer_main"] = prefer_main
         yield RunFinished(message=Message(role=Role.ASSISTANT, content="简单答复"))
 
     orch = _mk(SpyPlanner(), FakeCritic(), order, triage_simple=False)
@@ -632,6 +634,7 @@ async def test_force_simple_bypasses_triage_and_planning():
     assert events[-1].message.content == "简单答复"   # 走了 _simple_answer
     assert calls["triage"] == 0 and calls["plan"] == 0   # 未 triage、未规划
     assert order == []                                    # 未执行任何计划步
+    assert seen["prefer_main"] is True                    # 考试走主模型（可靠逐题推进）
 
 
 def test_orchestrator_uses_fast_model_for_simple_answer():
@@ -641,6 +644,37 @@ def test_orchestrator_uses_fast_model_for_simple_answer():
                   planner=None, critic=None, executor=None, fast_complete=None,
                   fast_client="FAST", fast_model="fast-model")
     assert orch._fast_client == "FAST" and orch._fast_model == "fast-model"
+
+
+async def test_simple_answer_prefer_main_uses_main_client_no_reclamp(monkeypatch):
+    """prefer_main=True（考试）→ 用主 client/model，且不按快速档重裁窗口（避免截断携带下一题的
+    最后一条消息）；prefer_main=False → 快速档 client/model 且按其窗口重裁。"""
+    import app.orchestration.orchestrator as orch_mod
+    from harness.context.manager import ContextManager
+    from harness.types import Message, Role
+    cap: list[dict] = []
+
+    class FakeLoop:
+        def __init__(self, *, client, registry, context, max_steps, model_name, budget=None):
+            cap.append({"client": client, "model": model_name, "context": context})
+        async def run(self, message):
+            yield RunFinished(message=Message(role=Role.ASSISTANT, content="ok"))
+
+    monkeypatch.setattr(orch_mod, "AgentLoop", FakeLoop)
+    orch = Orchestrator.__new__(Orchestrator)
+    orch._client, orch._model = "MAIN", "main-model"
+    orch._fast_client, orch._fast_model = "FAST", "fast-model"
+    orch._fast_max_prompt_tokens = 999999          # >0：非主档时会触发重裁
+    orch._registry = None
+    ctx_obj = ContextManager("sys")
+
+    _ = [ev async for ev in orch._simple_answer("hi", context=ctx_obj, prefer_main=True)]
+    assert cap[-1]["client"] == "MAIN" and cap[-1]["model"] == "main-model"
+    assert cap[-1]["context"] is ctx_obj           # 主档不重裁，原样传入
+
+    _ = [ev async for ev in orch._simple_answer("hi", context=ctx_obj, prefer_main=False)]
+    assert cap[-1]["client"] == "FAST" and cap[-1]["model"] == "fast-model"
+    assert cap[-1]["context"] is not ctx_obj       # 快速档按窗口重裁（被 Clamp 包裹）
 
 
 def test_orchestrator_fast_falls_back_to_main_when_unset():
