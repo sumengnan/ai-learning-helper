@@ -24,16 +24,37 @@ class WrongAnswerStore:
         self._seq = self._db.execute(
             "SELECT COALESCE(MAX(seq), 0) FROM wrong_answers").fetchone()[0]
 
+    def _find_duplicate(self, user_id: str, snapshot: dict) -> str | None:
+        """找同一道题已有的错题：按 (题型, 去空白题干) 判重——与题库 create_deduped 的判重口径
+        一致（题干即"哪道题"，题库题与即席题统一按题干认）。找到返回其 id，否则 None。"""
+        r = self._db.execute(
+            "SELECT id FROM wrong_answers WHERE user_id=? "
+            "AND json_extract(snapshot,'$.type')=? "
+            "AND TRIM(json_extract(snapshot,'$.stem'))=TRIM(?)",
+            (user_id, snapshot.get("type"), snapshot.get("stem", ""))).fetchone()
+        return r[0] if r else None
+
     def create(self, user_id: str, question_id: str, exam_id: str,
                snapshot: dict, user_answer) -> str:
-        wid = uuid4().hex
+        """存入错题集，同题去重：已有同一道题（题型+题干相同）的错题则用新数据（question_id/
+        来源/快照/作答）整条替换旧的，并刷新时间与 seq 让它回到列表顶部；否则新建。
+        返回该错题 id（替换时为原 id）。"""
+        snap = json.dumps(snapshot, ensure_ascii=False)
+        ans = json.dumps(user_answer, ensure_ascii=False)
         self._seq += 1
+        dup = self._find_duplicate(user_id, snapshot)
+        if dup is not None:
+            self._db.execute(
+                "UPDATE wrong_answers SET question_id=?, exam_id=?, snapshot=?, user_answer=?, "
+                "created_at=?, seq=? WHERE id=? AND user_id=?",
+                (question_id, exam_id, snap, ans, _now(), self._seq, dup, user_id))
+            self._db.commit()
+            return dup
+        wid = uuid4().hex
         self._db.execute(
             "INSERT INTO wrong_answers(id, user_id, question_id, exam_id, snapshot, "
             "user_answer, created_at, seq) VALUES (?,?,?,?,?,?,?,?)",
-            (wid, user_id, question_id, exam_id,
-             json.dumps(snapshot, ensure_ascii=False),
-             json.dumps(user_answer, ensure_ascii=False), _now(), self._seq))
+            (wid, user_id, question_id, exam_id, snap, ans, _now(), self._seq))
         self._db.commit()
         return wid
 
