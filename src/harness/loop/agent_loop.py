@@ -20,7 +20,7 @@ from ..state import RunState
 from ..telemetry.tracer import get_tracer
 from ..tools.base import ToolExecutor, ToolRegistry
 from ..types import Message, Role, ToolCall, ToolResult
-from ..usage import cost_usd
+from ..usage import effective_cost
 
 
 @dataclass
@@ -182,7 +182,7 @@ class AgentLoop:
 
                     latency_ms = (time.monotonic() - t0) * 1000
                     if usage is not None:
-                        cost = cost_usd(usage, self._model_name, self._price_map)
+                        cost = effective_cost(usage, self._model_name, self._price_map)
                         if self._budget:
                             self._budget.add_usage(usage)
                         yield ModelUsage(usage=usage, cost_usd=cost, attempts=attempts, latency_ms=latency_ms)

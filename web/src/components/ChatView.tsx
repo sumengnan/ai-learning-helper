@@ -129,6 +129,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
       : ps.map((p) => (p.id === tmpId ? { ...p, ...patch } : p)));
 
   async function addFiles(files: FileList | File[]) {
+    if (busyRef.current) { setErr("AI 回复中，暂不能添加附件"); return; }  // 拖拽/粘贴/选择统一挡在这
     const list = Array.from(files);
     if (list.length === 0) return;
     for (const file of list) {
@@ -234,6 +235,13 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
       if (s) { s.result = e.data.result.content; s.isError = e.data.result.is_error; }
     });
     else if (e.type === "ModelUsage") upd((a) => { a.usage = { tokens: e.data.usage.total, cost: e.data.cost_usd }; });
+    // 任务计划思考（scope=plan_reasoning）：流式累积成单独的"任务计划思考"块，不入 progress 列。
+    // 末尾带 detail.elapsed_ms 的是耗时标记（后端权威），据此冻结耗时。
+    else if (e.type === "Progress" && e.data.scope === "plan_reasoning") upd((a) => {
+      if (e.data.detail?.elapsed_ms != null) { a.planReasoningMs = e.data.detail.elapsed_ms; return; }
+      if (a.planReasoningStartedAt == null) a.planReasoningStartedAt = Date.now();
+      a.planReasoning = (a.planReasoning || "") + e.data.text;
+    });
     // 来源借 Progress 通道传（scope=sources，text 为 JSON）：特判解析成 sources，不入 progress 列
     else if (e.type === "Progress" && e.data.scope === "sources") upd((a) => {
       try { a.sources = JSON.parse(e.data.text); } catch { /* 忽略坏 JSON */ }
@@ -273,7 +281,13 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
     // 让新版从头打字机输出。只清正文，不动 steps/progress/校验历史（那是过程轨迹，另有 purged
     // 事件处理失效产物）。特判、不入 progress 列。
     else if (e.type === "Progress" && e.data.scope === "reset") upd((a) => { a.content = ""; });
-    else if (e.type === "Progress") upd((a) => { (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text, status: e.data.status, key: e.data.key, agent: e.data.agent, detail: e.data.detail }); });
+    else if (e.type === "Progress") upd((a) => {
+      // 计划快照出现 = 规划思考结束，冻结"任务计划思考"耗时
+      if (e.data.scope === "plan" && a.planReasoningStartedAt != null && a.planReasoningMs == null) {
+        a.planReasoningMs = Date.now() - a.planReasoningStartedAt;
+      }
+      (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text, status: e.data.status, key: e.data.key, agent: e.data.agent, detail: e.data.detail });
+    });
     else if (e.type === "RunStarted") runIdRef.current = e.data.run_id;
     else if (e.type === "ApprovalRequired") setApproval({ approvalId: e.data.approval_id, command: e.data.command, reason: e.data.reason });
     else if (e.type === "ApprovalResolved") setApproval(null);
@@ -466,7 +480,11 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
             <Paper
               elevation={0}
               sx={{
-                maxWidth: "80%", px: 1.5, py: 1, borderRadius: 2,
+                // 助手气泡固定占满列宽（80%），一有内容就展到最右，不随正文长短忽宽忽窄；
+                // 用户气泡仍按内容自适应（右对齐的短消息更自然）。
+                maxWidth: "80%",
+                ...(m.role === "assistant" && { width: "80%" }),
+                px: 1.5, py: 1, borderRadius: 2,
                 bgcolor: m.role === "user" ? "primary.main" : "action.hover",
                 color: m.role === "user" ? "primary.contrastText" : "text.primary",
               }}
@@ -476,14 +494,25 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                   <AttachmentChips items={m.attachments} />
                 </Box>
               )}
-              {/* 思考过程：置于最顶（工具调用等过程块之上），先于正文展示推理内容 */}
-              {m.role === "assistant" && m.reasoning && (() => {
+              {(() => {
+                const hasPlan = m.role === "assistant"
+                  && !!m.progress?.some((p) => p.scope === "plan");
                 const streamingLast = busy && i === messages.length - 1 && m.status === "streaming";
-                // 思考进行中 = 本轮仍在流式 且 正文尚未开始（首字一到即视为思考结束）
                 const thinking = streamingLast && !m.content;
                 return (
-                  <ThinkingBlock reasoning={m.reasoning} thinking={thinking}
-                    startedAt={m.reasoningStartedAt ?? m.startedAt} elapsedMs={m.reasoningMs} />
+                  <>
+                    {/* 顶部：编排器"任务计划思考"（规划前思考）；计划未出现前视为思考中，可读秒 */}
+                    {m.role === "assistant" && m.planReasoning && (
+                      <ThinkingBlock reasoning={m.planReasoning} thinking={thinking && !hasPlan}
+                        title="任务计划思考"
+                        startedAt={m.planReasoningStartedAt} elapsedMs={m.planReasoningMs} />
+                    )}
+                    {/* 顶部：非编排器（ReAct/简单问答，无计划）的思考——保持原样 */}
+                    {m.role === "assistant" && m.reasoning && !hasPlan && (
+                      <ThinkingBlock reasoning={m.reasoning} thinking={thinking}
+                        startedAt={m.reasoningStartedAt ?? m.startedAt} elapsedMs={m.reasoningMs} />
+                    )}
+                  </>
                 );
               })()}
               {m.role === "assistant" && m.progress && (() => {
@@ -492,9 +521,20 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                 const live = busy && i === messages.length - 1 && m.status === "streaming";
                 // 编排器 executor 的执行明细挂到对应计划步下（计划步 → agent+工具 → 入参/返回）
                 const execSubs = m.progress.filter((p) => p.scope.startsWith("subagent:executor:"));
-                return plan ? (
-                  <PlanBlock text={plan.text} live={live} status={m.status} subItems={execSubs} />
-                ) : null;
+                if (!plan) return null;
+                const streamingLast = busy && i === messages.length - 1 && m.status === "streaming";
+                const thinking = streamingLast && !m.content;
+                return (
+                  <>
+                    <PlanBlock text={plan.text} live={live} status={m.status} subItems={execSubs} />
+                    {/* 任务步骤块下面：编排器"结果思考"（最终答复的思考） */}
+                    {m.reasoning && (
+                      <ThinkingBlock reasoning={m.reasoning} thinking={thinking}
+                        title="结果思考"
+                        startedAt={m.reasoningStartedAt ?? m.startedAt} elapsedMs={m.reasoningMs} />
+                    )}
+                  </>
+                );
               })()}
               {showTools && m.role === "assistant" && m.progress && m.progress.length > 0 && (() => {
                 const sandbox = m.progress.filter((p) => p.scope === "sandbox");
@@ -618,29 +658,30 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
       </Box>
       <Box sx={{ px: 1.5, pt: 1, borderTop: 1, borderColor: "divider",
         display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+        {/* AI 回复中封住所有开关（只留停止按钮可用）——避免中途改设置/干扰本轮 */}
         <FormControlLabel
-          control={<Switch size="small" checked={think}
+          control={<Switch size="small" checked={think} disabled={busy}
             onChange={(e) => toggleThink(e.target.checked)} />}
           label={<Typography variant="caption">思考模式</Typography>}
         />
         <FormControlLabel
-          control={<Switch size="small" checked={verify}
+          control={<Switch size="small" checked={verify} disabled={busy}
             onChange={(e) => toggleVerify(e.target.checked)} />}
           label={<Typography variant="caption">结果校验</Typography>}
         />
         <FormControlLabel
-          control={<Switch size="small" checked={showTools}
+          control={<Switch size="small" checked={showTools} disabled={busy}
             onChange={(e) => toggleShowTools(e.target.checked)} />}
           label={<Typography variant="caption">展示工具调用和 Token</Typography>}
         />
         <FormControlLabel
-          control={<Switch size="small" checked={showSources}
+          control={<Switch size="small" checked={showSources} disabled={busy}
             onChange={(e) => toggleShowSources(e.target.checked)} />}
           label={<Typography variant="caption">展示数据来源和引用</Typography>}
         />
       </Box>
       <Box
-        onDragOver={(e) => { e.preventDefault(); if (!dragOver) setDragOver(true); }}
+        onDragOver={(e) => { e.preventDefault(); if (!busy && !dragOver) setDragOver(true); }}
         onDragLeave={(e) => { e.preventDefault(); setDragOver(false); }}
         onDrop={onDrop}
         sx={{
@@ -660,7 +701,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
           <Tooltip title="上传文件（也可拖拽/粘贴）">
             <span>
               <IconButton aria-label="上传文件" onClick={() => fileRef.current?.click()}
-                disabled={pending.length >= MAX_ATTACHMENTS} sx={{ mb: 0.25 }}>
+                disabled={busy || pending.length >= MAX_ATTACHMENTS} sx={{ mb: 0.25 }}>
                 <AttachFileIcon />
               </IconButton>
             </span>
@@ -668,12 +709,13 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
           <TextField
             fullWidth size="small" value={input}
             multiline minRows={1} maxRows={6}
+            disabled={busy}   // AI 回复中封住输入框
             onChange={(e) => setInput(e.target.value)}
             onPaste={onPaste}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
             }}
-            placeholder="问点什么…"
+            placeholder={busy ? "AI 正在回复…（可点停止）" : "问点什么…"}
           />
           {busy ? (
             <Button variant="outlined" color="error" onClick={stop}

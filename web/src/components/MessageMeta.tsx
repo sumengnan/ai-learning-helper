@@ -72,7 +72,7 @@ export function MessageMeta({ status, live, startedAt, elapsedMs, usage, showMet
       {showTokens && usage && (
         <Pill icon={<TollIcon />} color={S.secondary.main} title="本轮 token 用量">
           <RollingNumber value={usage.tokens} /><Box component="span" sx={{ ml: 0.4, opacity: 0.8 }}>tokens</Box>
-          {usage.cost != null ? <Box component="span" sx={{ ml: 0.4, opacity: 0.8 }}>· ${usage.cost.toFixed(4)}</Box> : null}
+          {usage.cost != null ? <Box component="span" sx={{ ml: 0.4, opacity: 0.8 }}>· ¥{usage.cost.toFixed(4)}</Box> : null}
         </Pill>
       )}
     </Box>

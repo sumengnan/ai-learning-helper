@@ -7,6 +7,7 @@ import logging
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -29,13 +30,15 @@ from harness.telemetry.tracer import get_tracer
 from harness.tools.base import ToolRegistry
 from harness.tools.builtins.memory_search import SearchMemoryTool
 from harness.types import Message, Role
+from harness.usage import reset_price_tiers, set_price_tiers
 
 from ..auth import current_user
 from ..completion import build_fast_completer
 from ..context_assembly import ContextAssembler
 from ..conversation_memory import ConversationMemoryService
+from ..orchestration.executor import CLARIFY_GUIDE
 from ..profile import render_profile_block
-from ..sandbox_manager import reset_sandbox_conv, set_sandbox_conv
+from ..sandbox_manager import reset_sandbox_conv, sandbox_guide, set_sandbox_conv
 from ..summaries import SummaryStore
 from ..summarizer import RollingSummarizer
 from ..sources import SOURCE_GUIDE, SourceSink, wrap_tool
@@ -158,6 +161,7 @@ ATTACHMENT_GUIDE = (
     "- 所有附件也已放入沙箱 /workspace/uploads/，可用 run_python/run_shell 直接读取或执行。\n"
     "- 只在确有需要时才读取附件，不要无谓地逐个打开。\n")
 
+# CLARIFY_GUIDE（信息不足先问、不要猜）现集中定义在 orchestration.executor，供主聊天与编排器共用。
 # 北京时间（东八区）：本应用面向中文用户，用它作为「今天」的基准
 _CN_TZ = timezone(timedelta(hours=8))
 
@@ -633,6 +637,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         # read_attachment 根本没注册（见 _build_registry），此时还介绍它们的用法，等于
         # 告诉模型一批它没有的工具——比浪费 token 更糟。
         attachment_guide = ATTACHMENT_GUIDE if has_attachments else ""
+        # 有沙箱才提醒环境：无沙箱时这些工具根本没注册，介绍其 cwd/镜像/联网只会误导模型
+        sandbox_dir_guide = (sandbox_guide(config)
+                             if getattr(harness, "sandbox", None) is not None else "")
         # EXAM_GUIDE 命中考试语境才注入（约省 60% 常驻）。exam_active 已由上面的
         # grade_exam_turn 判定；history 用于识别模型自驱的多轮练习。工具本身仍常驻注册，
         # 只省指引文本 —— 万一触发词漏判，模型仍能靠工具描述兜底，是降级而非失能。
@@ -642,8 +649,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         plan_trace: dict = {}
         ctx_trace: dict = {}      # 上下文组装结果 → finish_turn 落 context 列，供 stats 统计
         base_ctx = await _assembler.build_manager(
-            harness.system_prompt + profile_block + exam_guide + attachment_guide
-            + SOURCE_GUIDE + _today_guide(),
+            harness.system_prompt + CLARIFY_GUIDE + profile_block + exam_guide
+            + attachment_guide + sandbox_dir_guide + SOURCE_GUIDE + _today_guide(),
             history, req.message, req.conversation_id, trace=ctx_trace)
         log.info("上下文组装 conv=%s 历史%d条 耗时%dms %s",
                  req.conversation_id, len(history), round((time.time() - _ctx_t0) * 1000),
@@ -683,6 +690,10 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 # 想那么久」，管的是回答用户的那些调用，而不是交付门校验、记忆调和、记忆整合
                 # 这些旁路。此前它设在 gen() 里且从不 reset，那些旁路全都悄悄继承了它。
                 btoken = set_extra_body_override({"enable_thinking": req.think})
+                # 分层计费回退：price_map 未配某模型价时，实时成本按 model_price_tiers 估算，
+                # 主循环与其派生的所有子任务（编排器 executor/synthesize/planner/critic 等）都读得到，
+                # 否则聊天气泡的花费会一直显示 0（真实 ¥ 计费此前只接进后台 stats）。
+                cttoken = set_price_tiers(config.model_price_tiers)
                 try:
                     # 本轮附件播种进会话沙箱 /workspace/uploads/，供模型直接执行（写盘≠给模型）
                     if attachment_metas and harness.sandbox is not None:
@@ -701,6 +712,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 except Exception as e:  # 兜底成 RunError，避免流卡死
                     queue.put_nowait(RunError(error=str(e)))
                 finally:
+                    reset_price_tiers(cttoken)
                     reset_extra_body_override(btoken)
                     reset_plan_clock(ptoken)
                     reset_sandbox_conv(stoken)
@@ -864,11 +876,16 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 return Progress("sources", json.dumps(items, ensure_ascii=False))
 
             try:
-                if config.enable_orchestrator and getattr(harness, "orchestrator", None) is not None:
-                    # 编排器路径：单次流式，直接把 harness.orchestrator 当作 loop_obj 交给 _drain
-                    # （其 run(message) 签名与 AgentLoop 相同、只 yield 既有 Event 类型），复用同一套
-                    # 事件处理与 SSE 下发。天然跳过交付门——编排器自带质量把关与计划终态（见设计 §4）。
-                    # 事件源换成编排器，_drain 之后的兜底逻辑照抄下方直通路径。
+                if getattr(harness, "orchestrator", None) is not None:
+                    # 编排器路径（唯一主流程：装配层恒建 orchestrator，故本轮总走这里）。
+                    # 把 harness.orchestrator 当作 loop_obj 交给 _drain（其 run(message) 只 yield 既有
+                    # Event 类型），复用同一套事件处理与 SSE 下发。前端"结果校验"开关(req.verify)映射到
+                    # 编排器的终局 Critic：开→把关+可重规划，关→跑完一轮直接汇总交付。
+                    # 关键：把每请求上下文（base_ctx，含会话历史+全部指引+记忆）、每请求工具表
+                    # （registry，含用户级工具）、最近对话注入 run()——否则多轮对话/附件/考试/引用/
+                    # 个性化/用户工具全丢。context 只喂给编排器的简单直答（与 ReAct 主路径同源，故也
+                    # 同样包一层技能上下文）；registry 喂给简单直答与各执行子步。
+                    # 下方 ReAct/交付门两分支仅在 orchestrator 缺失时作惰性兜底（如精简测试注入 None）。
                     used_orchestrator = True
                     collect = {"final": None, "error": None, "steps": steps,
                                "grounding": [], "progress": progress, "usage": None,
@@ -876,7 +893,15 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     run_id_a = uuid4().hex
                     store.add_run(req.conversation_id, run_id_a)
                     source_sink.reset()
-                    async for s in _drain(harness.orchestrator, run_id_a, model_message, True, collect):
+                    _octx = base_ctx
+                    if getattr(harness, "skill_registry", None) is not None:
+                        from harness.skills.context import SkillContextManager
+                        _octx = SkillContextManager(_octx, harness.skill_registry)
+                    _orch_src = SimpleNamespace(
+                        run=lambda m: harness.orchestrator.run(
+                            m, verify=req.verify, context=_octx, registry=registry,
+                            recent_dialogue=recent_dialogue))
+                    async for s in _drain(_orch_src, run_id_a, model_message, True, collect):
                         yield _acc(s)
                     errored = collect["final"] is None
                     if not errored:

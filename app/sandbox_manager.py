@@ -28,6 +28,51 @@ from harness.sandbox.factory import _docker_for, build_sandbox
 
 _log = logging.getLogger("app.sandbox")
 
+
+def _is_online(net) -> bool:
+    """该网络配置是否可联网：'none'/空为禁网，其余（bridge/host/...）视为可联网。"""
+    return str(net or "none").strip().lower() not in ("none", "")
+
+
+def sandbox_guide(config) -> str:
+    """按配置如实告诉模型沙箱的工作目录、镜像与联网情况，避免它用宿主机路径、或在禁网环境里
+    执意联网装包、选错命令。
+
+    关键区别（按配置渲染）：run_shell 在**基础容器**执行（镜像 sandbox_image、网络 sandbox_network），
+    run_python/run_node/run_java 在**语言子沙箱**执行（镜像 sandbox_lang_images、网络 sandbox_sub_network）——
+    两者的镜像和联网可不同，模型据此才知道「能否自行安装依赖、该用哪个工具」。
+    主聊天路径（chat.py）与编排器执行子步（executor.py）共用同一段文案，DRY。
+    """
+    ws = getattr(config, "sandbox_workspace", "/workspace")
+    guide = (
+        f"\n\n【沙箱工作目录】run_python / run_shell / run_node 等沙箱工具的当前工作目录（cwd）"
+        f"就是 {ws}。读写文件用相对路径（相对 {ws}），或以 {ws}/ 开头的绝对路径；"
+        f"生成的文件也放在这里。用户上传的附件在 {ws}/uploads/ 下。"
+        f"不要使用宿主机路径（如 /Users、/home、/tmp）或其它臆想的目录——那些在沙箱里并不存在。")
+    if getattr(config, "sandbox_backend", "") != "docker":
+        return guide   # 本地后端跑在宿主机，无镜像/网络隔离概念，只给工作目录提醒
+    base_img = getattr(config, "sandbox_image", "") or "（未配置）"
+    base_online = _is_online(getattr(config, "sandbox_network", "none"))
+    lang = getattr(config, "sandbox_lang_images", None) or {}
+    sub_online = _is_online(getattr(config, "sandbox_sub_network", "none"))
+    net = lambda ok: "可联网" if ok else "禁止联网"   # noqa: E731
+    lines = [f"\n\n【沙箱镜像与联网】run_shell 在基础容器执行：镜像 {base_img}，{net(base_online)}。"]
+    if lang:
+        primary = {k: lang[k] for k in ("python", "node", "java") if k in lang}
+        shown = primary or dict(list(lang.items())[:3])
+        imgs = "、".join(f"{k}→{v}" for k, v in shown.items())
+        jvers = sorted(k for k in lang if k not in ("python", "node", "java"))
+        ver = f"（Java 另有 {', '.join(jvers)}，可传 version 指定）" if jvers else ""
+        lines.append(
+            f"run_python / run_node / run_java 各在对应语言子沙箱执行（{imgs}）{ver}，{net(sub_online)}。")
+    # 能否自行安装依赖，严格按各自网络如实说——防止在禁网沙箱里执意联网装包/选错命令
+    lines.append(
+        "需要用到额外的库或命令时：在【可联网】的环境里可以自行安装（Python 用 pip install、"
+        "Node 用 npm i、系统命令按镜像发行版用 dnf/apt 等），装好后再用；在【禁止联网】的环境里"
+        "无法联网下载，只能使用镜像已自带的标准库与预装命令，不要执意 pip/npm/apt 联网安装（必然失败），"
+        "改用镜像已有的等价命令，或改用可联网的那个工具（如基础容器里的 run_shell）来完成需要联网的步骤。")
+    return guide + "".join(lines)
+
 # 当前请求所属会话；由 chat 处理器在 pump() 内 set，工具执行都在此上下文内。
 _current_conv: ContextVar[str | None] = ContextVar("sandbox_conv", default=None)
 
@@ -55,8 +100,15 @@ class SandboxManager:
     def __init__(self, config) -> None:
         self._config = config
         self._boxes: dict[str, _Entry] = {}
+        # 语言子沙箱缓存：键 (conv_id, label)，label 形如 "python"/"java17"。用完不即销毁，
+        # 复用同一容器，避免反复重建；按空闲超时/会话销毁/关停统一回收。
+        self._subs: dict[tuple[str, str], _Entry] = {}
+        # 浏览器沙箱：全局共用一个（跨会话），懒加载创建/启动、复用，24h 空闲或关停时销毁。
+        self._browser: _Entry | None = None
         self._lock = asyncio.Lock()
         self._idle_timeout = float(getattr(config, "sandbox_idle_timeout", 0) or 0)
+        self._sub_idle_timeout = float(getattr(config, "sandbox_sub_idle_timeout", 0) or 0)
+        self._browser_idle = float(getattr(config, "browser_sandbox_idle_timeout", 0) or 0)
 
     async def get(self, conv_id: str):
         """取（或惰性创建）该会话的 Sandbox，并刷新其空闲计时。"""
@@ -72,32 +124,119 @@ class SandboxManager:
             entry.last_used = time.monotonic()
             return entry.box
 
+    async def _cached_or_new(self, key: tuple, box_factory) -> tuple[object, bool]:
+        """子沙箱缓存的通用取用（语言子沙箱、浏览器子沙箱共用）。
+
+        缓存开启（_sub_idle_timeout>0）时：复用 key 对应的、否则惰性创建并入缓存，刷新空闲计时，
+        返回 (box, True)——调用方**不要**销毁它，生命周期归 manager（空闲/会话销毁/关停回收）。
+        缓存关闭时：新建一个临时子沙箱，返回 (box, False)——调用方 finally 里自行销毁（旧行为）。
+        box_factory(cached: bool)->box 由调用方按各自镜像/网络/内存/角色标签创建；只在锁内创建
+        容器对象（不启动，start 惰性且幂等），启动交调用方。"""
+        if self._sub_idle_timeout <= 0:      # 不缓存：保持「用完即销毁」旧语义
+            return box_factory(False), False
+        async with self._lock:
+            await self._evict_idle(keep=key[0])
+            entry = self._subs.get(key)
+            if entry is None:
+                entry = _Entry(box=box_factory(True))
+                self._subs[key] = entry
+            entry.last_used = time.monotonic()
+            return entry.box, True
+
+    async def get_sub(self, conv_id: str, label: str, image: str) -> tuple[object, bool]:
+        """取该会话某语言/版本子沙箱，返回 (子沙箱, 是否缓存复用)。见 _cached_or_new。"""
+        net = getattr(self._config, "sandbox_sub_network", "none")
+        display = f"{label} 子沙箱（{image}）"
+
+        def mk(cached):
+            labels = {_SANDBOX_LABEL: "true", "conv_id": conv_id,
+                      "role": "lang" if cached else "ephemeral", "lang": label}
+            return _docker_for(self._config, image, labels=labels,
+                               network=net, display_name=display)
+        return await self._cached_or_new((conv_id, label), mk)
+
+    async def get_browser(self) -> tuple[object, bool]:
+        """取（或惰性创建）**全局共用**的浏览器沙箱（专用 playwright 镜像），返回 (box, True)。
+
+        全局一个、跨会话共用；懒加载创建容器对象（start 仍惰性且幂等），空闲超
+        browser_sandbox_idle_timeout（默认 24h）由 manager 回收、下次用再重建，关停时销毁。
+        返回 cached 恒为 True——调用方（浏览器）**不得**销毁它，生命周期归 manager。
+        浏览器需真实出网（用 sandbox_network）与更大内存（browser_sandbox_mem_limit，防 Chromium OOM）。"""
+        cfg = self._config
+        async with self._lock:
+            await self._evict_idle(keep="")   # 顺带回收空闲超时的容器（含 24h 全局浏览器）
+            if self._browser is None:
+                labels = {_SANDBOX_LABEL: "true", "role": "browser-global"}
+                box = _docker_for(cfg, cfg.browser_sandbox_image, labels=labels,
+                                  network=cfg.sandbox_network, display_name="浏览器沙箱",
+                                  mem_limit=getattr(cfg, "browser_sandbox_mem_limit", None))
+                self._browser = _Entry(box=box)
+            self._browser.last_used = time.monotonic()
+            return self._browser.box, True
+
     async def destroy(self, conv_id: str) -> None:
-        """销毁某会话的容器（删除会话时调用）；不存在则静默。"""
+        """销毁某会话的容器（删除会话时调用）；连同其语言子沙箱一并销毁。不存在则静默。"""
         async with self._lock:
             entry = self._boxes.pop(conv_id, None)
+            subs = self._pop_subs_of(conv_id)
         if entry is not None:
             await self._safe_close(entry.box, conv_id)
+        await self._close_subs(subs)
 
     async def close_all(self) -> None:
-        """关停时销毁全部会话容器。"""
+        """关停时销毁全部会话容器、子沙箱与全局浏览器沙箱。"""
         async with self._lock:
             items = list(self._boxes.items())
+            subs = list(self._subs.items())
+            browser = self._browser
             self._boxes.clear()
+            self._subs.clear()
+            self._browser = None
         for conv_id, entry in items:
             await self._safe_close(entry.box, conv_id)
+        await self._close_subs(subs)
+        if browser is not None:
+            await self._safe_close(browser.box, "浏览器")
+
+    def _pop_subs_of(self, conv_id: str) -> list:
+        """从缓存摘出某会话的全部子沙箱条目（在锁内调用），返回 [(key, entry)]。"""
+        keys = [k for k in self._subs if k[0] == conv_id]
+        return [(k, self._subs.pop(k)) for k in keys]
+
+    async def _close_subs(self, items: list) -> None:
+        """销毁一批子沙箱条目（在锁外调用，容器关停可能较慢）。"""
+        for key, entry in items:
+            await self._safe_close(entry.box, f"{key[0]}/{key[1]} 子沙箱")
 
     async def _evict_idle(self, keep: str) -> None:
-        """惰性驱逐空闲超时的会话容器（在锁内调用）。keep 为本次要用的会话，不驱逐。"""
-        if self._idle_timeout <= 0:
-            return
+        """惰性驱逐空闲超时的会话容器与语言子沙箱（在锁内调用）。keep 为本次要用的会话，不驱逐。
+
+        基础容器被驱逐/销毁时，其子沙箱失去承载工作区的基础、复用价值归零，故一并销毁。
+        子沙箱另有独立的（更长的）空闲超时，与基础容器超时各自计。
+        """
         now = time.monotonic()
-        stale = [cid for cid, e in self._boxes.items()
-                 if cid != keep and now - e.last_used > self._idle_timeout]
-        for cid in stale:
-            entry = self._boxes.pop(cid, None)
-            if entry is not None:
-                await self._safe_close(entry.box, cid)
+        dead_subs: list = []
+        if self._idle_timeout > 0:
+            stale = [cid for cid, e in self._boxes.items()
+                     if cid != keep and now - e.last_used > self._idle_timeout]
+            for cid in stale:
+                entry = self._boxes.pop(cid, None)
+                if entry is not None:
+                    await self._safe_close(entry.box, cid)
+                dead_subs += self._pop_subs_of(cid)   # 基础没了，其子沙箱一并回收
+        if self._sub_idle_timeout > 0:
+            stale_subs = [k for k, e in self._subs.items()
+                          if k[0] != keep and now - e.last_used > self._sub_idle_timeout]
+            dead_subs += [(k, self._subs.pop(k)) for k in stale_subs]
+        # 全局浏览器沙箱空闲超时（默认 24h）→ 销毁，下次抓取再懒加载重建
+        dead_browser = None
+        if self._browser is not None and self._browser_idle > 0 \
+                and now - self._browser.last_used > self._browser_idle:
+            dead_browser = self._browser.box
+            self._browser = None
+        await self._close_subs(dead_subs)
+        if dead_browser is not None:
+            await self._safe_close(dead_browser, "浏览器")
 
     @staticmethod
     async def _safe_close(box, conv_id: str) -> None:
@@ -214,8 +353,10 @@ class SandboxProxy:
 
     async def run_code(self, language: str, version: str | None, filename: str,
                        code: str, argv: list | None, shell: str | None, timeout: float):
-        """按语言[+版本]在一次性子沙箱内跑代码；跑完销毁子沙箱、产物回传会话基础容器。
+        """按语言[+版本]在（缓存复用的）语言子沙箱内跑代码，产物回传会话基础容器。
 
+        子沙箱按 (会话, 语言) 缓存，跑完不即销毁，同语言下次执行直接复用，避免反复重建镜像容器；
+        默认空闲 1h 由 manager 回收（sandbox_sub_idle_timeout<=0 则退回用完即销毁）。
         未配置该语言/版本的子沙箱镜像时回退：会话基础容器（若配了多镜像路由则用其语言容器）。
         """
         base = await self._box()
@@ -228,16 +369,14 @@ class SandboxProxy:
             target = await route(language) if route is not None else base
             await target.write_file(filename, code)
             return await target.exec(cmd, timeout)
-        # 一次性语言/版本子沙箱
+        # 语言/版本子沙箱：按 (会话, label) 缓存复用，用完不即销毁（默认 1h 空闲由 manager 回收），
+        # 避免每次执行都重建镜像容器。缓存关闭时退回「用完即销毁」旧行为。
         label = f"{language}{version}" if version else language
         conv = _current_conv.get() or ""
-        labels = {_SANDBOX_LABEL: "true", "conv_id": conv, "role": "ephemeral"}
         # 先启动基础沙箱，让「启动 基础沙箱…」进度排在子沙箱之前（基础是承载会话工作区的容器）
         await base.start()
-        # 子沙箱的「启动…」进度由 sub.start() 按 display_name 上报（与基础沙箱区分）
-        sub = _docker_for(cfg, image, labels=labels,
-                          network=getattr(cfg, "sandbox_sub_network", "none"),
-                          display_name=f"{label} 子沙箱（{image}）")
+        # 取（或惰性创建/复用）该语言子沙箱；复用时 start() 幂等，不会重复上报「启动…」进度
+        sub, cached = await self._m.get_sub(conv, label, image)
         try:
             await sub.start()
             await _copy_workspace(base, sub)    # 执行前：基础工作区 → 子沙箱（输入）
@@ -246,6 +385,8 @@ class SandboxProxy:
             await _copy_workspace(sub, base)     # 执行后：子沙箱 → 基础工作区（产物回传）
             return res
         finally:
-            await sub.close()                    # 用完即销毁
-            # 收尾：绿色成功状态标识
-            emit(Progress("sandbox", f"执行完成，回收 {label} 子沙箱", status="ok"))
+            if not cached:
+                await sub.close()                # 未开缓存：用完即销毁
+            emit(Progress("sandbox",
+                          f"{label} 子沙箱执行完成" if cached else f"执行完成，回收 {label} 子沙箱",
+                          status="ok"))

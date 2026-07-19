@@ -13,24 +13,37 @@ from .http_tool import (
 
 
 def _parse_response(raw: str) -> tuple[int, str | None, str, str]:
-    """解析 curl -i 的输出：返回 (status, location, content_type, body)。"""
-    sep = "\r\n\r\n" if "\r\n\r\n" in raw else "\n\n"
-    head, _, body = raw.partition(sep)
-    lines = head.splitlines()
+    """解析 curl -i 的输出：返回 (status, location, content_type, body)。
+
+    curl -i 会把 1xx 信息响应（100 Continue、以及 CDN 为预加载 CSS/JS 常发的 103 Early Hints）
+    的头块也打印在最终响应之前。必须逐个跳过这些 1xx 头块、取第一个非 1xx 头块为最终响应，
+    否则会把 103 当成状态码、content-type 解析成空——于是 HTML 页面识别不出、被原样打印。
+    """
+    rest = raw
     status = 0
-    if lines and lines[0].startswith("HTTP/"):
+    location: str | None = None
+    content_type = ""
+    while True:
+        sep = "\r\n\r\n" if "\r\n\r\n" in rest else "\n\n"
+        head, found, body = rest.partition(sep)
+        lines = head.splitlines()
+        if not (lines and lines[0].startswith("HTTP/")):
+            return status, location, content_type, rest   # 已越过所有头块（不含状态行）
+        status = 0
         parts = lines[0].split()
         if len(parts) >= 2 and parts[1].isdigit():
             status = int(parts[1])
-    location = None
-    content_type = ""
-    for ln in lines[1:]:
-        low = ln.lower()
-        if location is None and low.startswith("location:"):
-            location = ln.split(":", 1)[1].strip()
-        elif not content_type and low.startswith("content-type:"):
-            content_type = ln.split(":", 1)[1].strip()
-    return status, location, content_type, body
+        location, content_type = None, ""
+        for ln in lines[1:]:
+            low = ln.lower()
+            if location is None and low.startswith("location:"):
+                location = ln.split(":", 1)[1].strip()
+            elif not content_type and low.startswith("content-type:"):
+                content_type = ln.split(":", 1)[1].strip()
+        if 100 <= status < 200 and found:      # 1xx 信息响应：跳过，继续解析下一头块
+            rest = body
+            continue
+        return status, location, content_type, body
 
 
 class SandboxedHttpRequestTool(Tool):

@@ -43,6 +43,18 @@ describe("SubagentProgress", () => {
     expect(screen.getByText("结果 · 失败")).toBeTruthy();
   });
 
+  it("MCP 工具显示 MCP 徽章 + server·tool，不露原始 mcp__ 前缀名", () => {
+    render(<SubagentProgress items={[
+      { scope: "subagent:executor:s1", text: "调用工具 mcp__websearch__bailian_web_search",
+        status: "ok" as const, key: "c9",
+        detail: { tool: "mcp__websearch__bailian_web_search", args: {}, result: "r", is_error: false } },
+    ]} live={false} stopped={false} status="ok" />);
+    expect(screen.getByText("MCP")).toBeTruthy();
+    expect(screen.getByText("websearch · bailian_web_search")).toBeTruthy();
+    // 不出现拼接的原始名
+    expect(screen.queryByText(/mcp__websearch__bailian_web_search/)).toBeNull();
+  });
+
   it("无 items 渲染 null", () => {
     const { container } = render(
       <SubagentProgress items={[]} live={false} stopped={false} status="ok" />);

@@ -5,7 +5,7 @@ import operator
 
 from pydantic import BaseModel
 
-from ..base import Tool
+from ..base import Tool, ToolError
 
 _OPS = {
     ast.Add: operator.add,
@@ -42,10 +42,20 @@ def safe_eval(expression: str):
 
 class CalculatorTool(Tool):
     name = "calculator"
-    description = "计算一个算术表达式，支持 + - * / ** % 和括号。"
+    description = (
+        "对纯数字做算术计算，支持 + - * / ** % 和括号（如 3*(4+5)、2**10、100%7）。"
+        "只接受数值表达式：不支持日期/时间运算（如 “2026-07-19 + 2” 这类会失败）、"
+        "变量、函数、单位或文本。日期加减、时间换算等请勿传入本工具，另行推算。")
 
     class Params(BaseModel):
         expression: str
 
     async def run(self, params: "CalculatorTool.Params") -> str:
-        return str(safe_eval(params.expression))
+        try:
+            return str(safe_eval(params.expression))
+        except (SyntaxError, ValueError, TypeError) as e:
+            # 非纯数值表达式（如日期 “2026-07-19 + 2”、变量、函数、文本）会在解析/求值时抛错。
+            # 回一句清楚的说明而非 cryptic 报错，让模型知道该换算法、别再把它塞进计算器。
+            raise ToolError(
+                f"无法计算 “{params.expression}”：本工具只做纯数字算术（+ - * / ** % 和括号），"
+                f"不支持日期/时间运算、变量、函数或文本。请改用纯数字表达式，或另行推算。") from e

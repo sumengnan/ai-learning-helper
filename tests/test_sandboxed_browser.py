@@ -190,3 +190,23 @@ def test_factory_returns_sandboxed_when_sandbox_present():
 def test_factory_returns_host_playwright_without_sandbox():
     cfg = HarnessConfig(api_key="k", _env_file=None)
     assert isinstance(build_browser(cfg), PlaywrightBrowser)
+
+
+async def test_sub_acquire_cached_box_not_closed_after_fetch():
+    """sub_acquire 返回 cached=True（全局共用浏览器）→ 抓取后不销毁容器，生命周期归属主管理。"""
+    box = _CountingSandbox(_ok_output())
+    async def acquire():
+        return box, True
+    br = SandboxedBrowser(FakeSandbox(_ok_output()), allowed_domains=[], sub_acquire=acquire)
+    await br.fetch("https://example.com/a", timeout=5, wait_until="load")
+    assert box.closed == 0
+
+
+async def test_sub_acquire_uncached_box_closed_after_fetch():
+    """cached=False（未开缓存）→ 抓取后销毁（退回一次性语义）。"""
+    box = _CountingSandbox(_ok_output())
+    async def acquire():
+        return box, False
+    br = SandboxedBrowser(FakeSandbox(_ok_output()), allowed_domains=[], sub_acquire=acquire)
+    await br.fetch("https://example.com/a", timeout=5, wait_until="load")
+    assert box.closed == 1

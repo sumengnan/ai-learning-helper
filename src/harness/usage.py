@@ -1,6 +1,7 @@
 # src/harness/usage.py
 from __future__ import annotations
 
+import contextvars
 import json
 from dataclasses import dataclass
 
@@ -100,6 +101,37 @@ def cost_usd(usage: Usage, model: str, price_map: dict) -> float | None:
         return None
     in_per_1k, out_per_1k = price
     return usage.prompt_tokens / 1000 * in_per_1k + usage.completion_tokens / 1000 * out_per_1k
+
+
+# 分层计费 tiers 的进程内旁路（contextvar）：扁平 price_map 未配某模型价时的实时成本回退。
+# 由应用层（chat 路由的 pump()）在进入模型循环前 set，主循环与其派生的所有子任务（executor、
+# synthesize、planner/critic completer、dispatch 子循环——皆由 create_task 拷贝上下文）都能读到，
+# 无需把 tiers 逐个穿过构造函数。未 set 时为 None，effective_cost 退回「无价即 None」的旧语义。
+_price_tiers: contextvars.ContextVar = contextvars.ContextVar("price_tiers", default=None)
+
+
+def set_price_tiers(tiers):
+    """设置实时成本回退用的分层计费表，返回 token 供 reset。"""
+    return _price_tiers.set(tiers)
+
+
+def reset_price_tiers(token) -> None:
+    _price_tiers.reset(token)
+
+
+def effective_cost(usage: Usage, model: str, price_map: dict) -> float | None:
+    """实时成本：优先扁平 price_map（按模型精确定价）；该模型无价时回退上下文里的分层计费表。
+
+    解决「price_map 默认空 → 聊天气泡成本恒为 0」：真实计费走 model_price_tiers（¥），
+    此前只接进后台 stats，没接进实时 ModelUsage，于是前端花费一直显示 0。
+    """
+    c = cost_usd(usage, model, price_map)
+    if c is not None:
+        return c
+    tiers = _price_tiers.get()
+    if tiers:
+        return tiered_cost(usage.prompt_tokens, usage.completion_tokens, tiers)
+    return None
 
 
 def tiered_cost(prompt_tokens: int, completion_tokens: int, tiers: list) -> float | None:

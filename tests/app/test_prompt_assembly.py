@@ -106,6 +106,7 @@ def test_always_resident_guides_are_present(tmp_path):
     sys_prompt = rec.systems[0]
     assert "【当前日期】" in sys_prompt                 # _today_guide：模型无从自知
     assert "参考来源" in sys_prompt                     # 引用约定
+    assert "信息不足先问" in sys_prompt                 # CLARIFY_GUIDE：不足先问、不要猜
 
 
 def test_exam_guide_absent_for_non_exam_message(tmp_path):
