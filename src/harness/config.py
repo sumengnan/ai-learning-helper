@@ -35,6 +35,9 @@ class HarnessConfig(BaseSettings):
     # （DashScope 百炼 compatible-mode 用此形式；自托管 vLLM 用
     # {"chat_template_kwargs": {"enable_thinking": false}}）。
     llm_extra_body: dict = {}
+    # 不支持「思考模式」切换参数的模型（子串匹配模型名，JSON 数组）：命中的模型不发
+    # enable_thinking / thinking，避免端点因「未知参数」报错。例：["qwen-turbo","-flash"]
+    thinking_unsupported_models: list = []
     max_retries: int = 2
     retry_base_delay: float = 0.5
     max_tokens_budget: int | None = None

@@ -239,3 +239,38 @@ async def test_include_usage_disabled_omits_stream_options(monkeypatch):
     done = [c for c in out if c.type == "done"][0]
     assert done.usage is not None
     assert done.usage.total_tokens > 0   # tiktoken 兜底
+
+
+# ---- _adapt_thinking：按模型名判厂商 + 不支持思考参数的模型白名单 ----
+
+def test_adapt_thinking_detects_deepseek_by_model_name():
+    from harness.llm.openai_compat import _adapt_thinking
+    # 统一网关：base_url 判不出厂商，但模型名含 deepseek → 翻成 thinking={type}
+    out = _adapt_thinking({"enable_thinking": True}, "https://gateway.example.com/v1",
+                          model="deepseek-v4-flash")
+    assert out == {"thinking": {"type": "enabled"}}
+
+
+def test_adapt_thinking_keeps_enable_thinking_for_qwen_on_gateway():
+    from harness.llm.openai_compat import _adapt_thinking
+    # 同一网关上的 qwen 模型 → 保持 enable_thinking（不被 deepseek 规则误伤）
+    out = _adapt_thinking({"enable_thinking": False}, "https://gateway.example.com/v1",
+                          model="qwen-turbo")
+    assert out == {"enable_thinking": False}
+
+
+def test_adapt_thinking_strips_param_for_unsupported_model():
+    from harness.llm.openai_compat import _adapt_thinking
+    # 白名单命中（子串匹配）→ 既不发 enable_thinking 也不发 thinking
+    out = _adapt_thinking({"enable_thinking": True}, "https://dashscope.example.com/v1",
+                          model="qwen-turbo", unsupported=["qwen-turbo", "-flash"])
+    assert out == {}
+    # deepseek 模型也一样：命中白名单就不翻译
+    out2 = _adapt_thinking({"enable_thinking": False}, "https://api.deepseek.com",
+                           model="deepseek-v4-flash", unsupported=["-flash"])
+    assert out2 == {}
+
+
+def test_adapt_thinking_noop_when_no_intent():
+    from harness.llm.openai_compat import _adapt_thinking
+    assert _adapt_thinking({"a": 1}, "https://api.deepseek.com", model="deepseek-x") == {"a": 1}

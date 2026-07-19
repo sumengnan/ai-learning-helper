@@ -51,23 +51,32 @@ def json_output():
         reset_extra_body_override(token)
 
 
-def _adapt_thinking(extra_body: dict, base_url: str) -> dict:
-    """把厂商中立的思考意图 enable_thinking(bool) 翻译成当前端点认识的参数。
+def _adapt_thinking(extra_body: dict, base_url: str, model: str = "",
+                    unsupported: list | tuple = ()) -> dict:
+    """把厂商中立的思考意图 enable_thinking(bool) 翻译成当前端点/模型认识的参数。
 
     各厂商开关「思考模式」的参数不同：Qwen/百炼(dashscope) 用 enable_thinking，
     DeepSeek 用 thinking={"type": "enabled"/"disabled"}。上游（聊天页开关、judge/
-    grounding/fast 各 completer）统一只表达 enable_thinking 意图，落成哪种参数由这里按
-    base_url 适配——新增厂商在此扩展、调用方无需改动。未知端点保持 enable_thinking 原样
-    （Qwen 原生即认；其它端点维持既有行为，不擅自改）。
+    grounding/fast 各 completer）统一只表达 enable_thinking 意图，落成哪种参数由这里适配：
+
+    - 厂商识别**模型名优先、再看 base_url**：统一网关下一个 base_url 转发多家模型时，base_url
+      判不出厂商，靠模型名（如含 "deepseek"）区分；同端点混用多厂商也能翻对。
+    - unsupported：不支持思考切换的模型（子串匹配模型名）——直接去掉思考参数，避免端点因
+      「未知参数」报错。上游无需改动，新增厂商/例外在此扩展。
     """
     if "enable_thinking" not in extra_body:
         return extra_body
     eb = dict(extra_body)
+    m = (model or "").lower()
+    if any(x and str(x).lower() in m for x in (unsupported or ())):
+        eb.pop("enable_thinking", None)   # 该模型不认思考参数 → 一律不发
+        return eb
     want = bool(eb["enable_thinking"])
     host = (base_url or "").lower()
-    if "deepseek" in host:               # DeepSeek 不认 enable_thinking，改用 thinking
+    if "deepseek" in m or "deepseek" in host:   # DeepSeek 口径：模型名优先，再看端点
         eb.pop("enable_thinking", None)
         eb["thinking"] = {"type": "enabled" if want else "disabled"}
+    # 否则保持 enable_thinking 原样（Qwen/百炼 原生即认）
     return eb
 
 
@@ -103,7 +112,8 @@ class OpenAICompatibleClient:
         # 再按端点厂商把思考意图翻译成对应参数（enable_thinking / thinking），见 _adapt_thinking
         extra_body = _adapt_thinking(
             {**self._config.llm_extra_body, **get_extra_body_override()},
-            self._config.base_url)
+            self._config.base_url, self._config.model,
+            getattr(self._config, "thinking_unsupported_models", ()))
         if extra_body:
             kwargs["extra_body"] = extra_body
 
