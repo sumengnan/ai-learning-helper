@@ -9,6 +9,8 @@ import DownloadIcon from "@mui/icons-material/Download";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 import StopCircleIcon from "@mui/icons-material/StopCircle";
+import SmartToyOutlinedIcon from "@mui/icons-material/SmartToyOutlined";
+import { alpha } from "@mui/material/styles";
 import { motion } from "framer-motion";
 import type { ChatMessage } from "../types";
 import { streamChat, attachChat, stopRun, sendDecision, api, type ModelsInfo } from "../api/client";
@@ -716,9 +718,18 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                 models.rerank ? `重排(rerank)：${models.rerank}` : ""].filter(Boolean).join("\n")}
             </Box>
           }>
-            <Chip size="small" variant="outlined" label={`模型：${models.main}`}
-              sx={{ ml: "auto", alignSelf: "center", maxWidth: 240,
-                    "& .MuiChip-label": { fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis" } }} />
+            <Chip size="small" color="primary" clickable
+              icon={<SmartToyOutlinedIcon />} label={models.main}
+              sx={{
+                ml: "auto", alignSelf: "center", maxWidth: 260, height: 24, fontWeight: 700,
+                borderRadius: 1.5,
+                color: "primary.main",
+                bgcolor: (t) => alpha(t.palette.primary.main, 0.12),
+                border: (t) => `1px solid ${alpha(t.palette.primary.main, 0.4)}`,
+                "&:hover": { bgcolor: (t) => alpha(t.palette.primary.main, 0.2) },
+                "& .MuiChip-icon": { color: "primary.main", fontSize: 15, ml: 0.5 },
+                "& .MuiChip-label": { fontSize: 12, px: 0.75, overflow: "hidden", textOverflow: "ellipsis" },
+              }} />
           </Tooltip>
         )}
       </Box>
