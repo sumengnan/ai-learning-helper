@@ -18,7 +18,10 @@ mcp = FastMCP("example")
 
 @mcp.tool()
 def calc(expression: str) -> str:
-    """计算一个算术表达式，支持 + - * / ** % 和括号。"""
+    """对纯数字做算术计算，支持 + - * / ** % 和括号（如 3*(4+5)、2**10）。
+
+    只接受数值表达式：不支持日期/时间运算（如 “2026-07-19 + 2”）、变量、函数或文本。
+    """
     # 复用现成的受限 AST 求值（绝不 eval，天然安全）
     from harness.tools.builtins.calculator import safe_eval
     return str(safe_eval(expression))
