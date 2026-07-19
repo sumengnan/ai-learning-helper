@@ -103,6 +103,20 @@ async def test_triage_short_circuit():
     assert order == []   # 未进编排
 
 
+async def test_skill_match_emits_skill_progress():
+    """路由命中技能时发 scope=skill 进度事件，前端「技能」块据此展示。"""
+    from types import SimpleNamespace
+    from harness.events import Progress
+    order = []
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), order, triage_simple=True)
+    orch._skill_matcher = SimpleNamespace(match=lambda msg: SimpleNamespace(
+        name="错题精讲", description="精讲错题并举一反三", body="剧本正文"))
+    events = await _run(orch, "帮我讲讲错题")
+    skill_evs = [e for e in events if isinstance(e, Progress) and e.scope == "skill"]
+    assert skill_evs, "命中技能应发 scope=skill 进度事件"
+    assert "错题精讲" in skill_evs[0].text
+
+
 async def test_reject_then_replan_then_accept():
     order = []
     orch = _mk(FakePlanner([_plan(_s("s1")), _plan(_s("s2"))]),

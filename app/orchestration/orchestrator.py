@@ -271,7 +271,11 @@ class Orchestrator:
             _matcher = getattr(self, "_skill_matcher", None)   # __new__ 构造的测试实例可能未设该属性
             if _matcher is not None and not force_simple:
                 _matched = _matcher.match(user_message)
-                skill_hint = _matched.body if _matched else ""
+                if _matched is not None:
+                    skill_hint = _matched.body
+                    # 命中即发 skill 进度事件：前端「技能」块据此展示（与 load_skill 同 scope，复用渲染）
+                    yield Progress("skill", f"已启用技能「{_matched.name}」：{_matched.description}",
+                                   status="ok")
 
             if force_simple or _obvious_simple(user_message) or await self._is_simple(user_message):
                 async for ev in self._simple_answer(user_message, budget, context=context,
