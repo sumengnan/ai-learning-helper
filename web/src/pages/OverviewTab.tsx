@@ -26,6 +26,10 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
   const theme = useTheme();
   const [preview, setPreview] = useState<PreviewFile | null>(null);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  // 偏好数量本地态：初值取自 overview，删除记忆后就地递减，卡片数字与详情页同步；
+  // 切换时间范围重新加载 overview 时，随新总数重置
+  const [memoryCount, setMemoryCount] = useState(data.learn.assets.memory);
+  useEffect(() => { setMemoryCount(data.learn.assets.memory); }, [data.learn.assets.memory]);
   // 个性化「已设置/未设置」状态：profile 非 stats 数据，本卡自取；保存后随 savedTick 刷新
   const { open: openProfile, savedTick } = useProfileDrawer();
   const [profileSet, setProfileSet] = useState<boolean | null>(null);
@@ -52,7 +56,7 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
     { icon: "📚", lbl: "知识库", v: learn.assets.documents, sub: "去查看 →", hue: "info", onClick: () => nav("/knowledge") },
     { icon: "✏️", lbl: "题库", v: learn.assets.questions, sub: "去查看 →", hue: "primary", onClick: () => nav("/questions") },
     { icon: "❌", lbl: "错题集", v: learn.assets.wrong_answers, sub: "去查看 →", hue: "warning", onClick: () => nav("/wrong") },
-    { icon: "🧠", lbl: "AI 记的偏好", v: learn.assets.memory, sub: "点击查看它记住了什么 →", hue: "secondary", onClick: () => setMemoryOpen(true) },
+    { icon: "🧠", lbl: "AI 记的偏好", v: memoryCount, sub: "点击查看它记住了什么 →", hue: "secondary", onClick: () => setMemoryOpen(true) },
     // 与「AI 记的偏好」成对：AI 猜的(只读) ↔ 你说的(可编辑)
     // AI 个性化：未设置标红突出「未设置」告警，已设置标绿突出「已设置」安心
     { icon: "⚙️", lbl: "AI 个性化", v: profileSet == null ? "" : (profileSet ? "已设置" : "未设置"),
@@ -254,7 +258,8 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
       </Box>
 
       <DownloadPreviewDialog file={preview} onClose={() => setPreview(null)} />
-      <MemoryDrawer open={memoryOpen} onClose={() => setMemoryOpen(false)} />
+      <MemoryDrawer open={memoryOpen} onClose={() => setMemoryOpen(false)}
+        total={memoryCount} onCountDelta={(d) => setMemoryCount((n) => Math.max(0, n + d))} />
     </>
   );
 }
