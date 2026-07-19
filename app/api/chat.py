@@ -160,6 +160,14 @@ ATTACHMENT_GUIDE = (
     "- 所有附件也已放入沙箱 /workspace/uploads/，可用 run_python/run_shell 直接读取或执行。\n"
     "- 只在确有需要时才读取附件，不要无谓地逐个打开。\n")
 
+# 信息不足先问、不要猜：常驻注入。与 verify.py 的立场一致（请求澄清/合理追问属恰当推进、不扣分）。
+CLARIFY_GUIDE = (
+    "\n\n【信息不足先问，不要猜】当用户的需求缺少完成任务所必需的关键信息（如目标、对象、范围、"
+    "格式、版本、时间、约束等），且无法从对话上下文合理推断时，先用一两句话向用户澄清或确认，"
+    "再动手——不要凭空假设或替用户拿主意，猜错会浪费一整轮、给出跑偏的结果。"
+    "但也不要为无关紧要的细节反复追问：信息已足够、或缺的只是不影响结果的小事时，"
+    "按合理默认直接推进，并在答复里说明你采用的假设，让用户能纠正。")
+
 # 北京时间（东八区）：本应用面向中文用户，用它作为「今天」的基准
 _CN_TZ = timezone(timedelta(hours=8))
 
@@ -647,8 +655,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         plan_trace: dict = {}
         ctx_trace: dict = {}      # 上下文组装结果 → finish_turn 落 context 列，供 stats 统计
         base_ctx = await _assembler.build_manager(
-            harness.system_prompt + profile_block + exam_guide + attachment_guide
-            + sandbox_dir_guide + SOURCE_GUIDE + _today_guide(),
+            harness.system_prompt + CLARIFY_GUIDE + profile_block + exam_guide
+            + attachment_guide + sandbox_dir_guide + SOURCE_GUIDE + _today_guide(),
             history, req.message, req.conversation_id, trace=ctx_trace)
         log.info("上下文组装 conv=%s 历史%d条 耗时%dms %s",
                  req.conversation_id, len(history), round((time.time() - _ctx_t0) * 1000),
