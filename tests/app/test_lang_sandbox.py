@@ -68,11 +68,13 @@ def _stub_docker(monkeypatch):
     _StubSub.made = []
     captured = {}
 
-    def fake_docker_for(config, image, labels=None, network=None, display_name="基础沙箱"):
+    def fake_docker_for(config, image, labels=None, network=None,
+                        display_name="基础沙箱", mem_limit=None):
         captured["image"] = image
         captured["labels"] = labels
         captured["network"] = network
         captured["display_name"] = display_name
+        captured["mem_limit"] = mem_limit
         return _StubSub(image, produce=captured.get("produce"))
     monkeypatch.setattr(sm, "_docker_for", fake_docker_for)
     return captured
@@ -203,3 +205,57 @@ async def test_run_python_tool_without_proxy_runs_in_base_sandbox():
         assert r.is_error is False and "7" in r.content
     finally:
         await sb.close()
+
+
+# ---- 全局浏览器沙箱：跨会话共用一个、懒加载复用、24h 空闲/关停销毁 ----
+
+def _bcfg(**kw):
+    return _cfg(browser_sandbox_image="playwright:pw",
+                browser_sandbox_mem_limit="512m", **kw)
+
+
+async def test_browser_is_global_singleton_reused(_stub_docker):
+    mgr = SandboxManager(_bcfg())
+    box1, c1 = await mgr.get_browser()
+    box2, c2 = await mgr.get_browser()
+    assert box1 is box2                     # 全局一个，跨调用复用
+    assert c1 is True and c2 is True        # 恒 cached=True：浏览器不得销毁它
+    assert len(_StubSub.made) == 1          # 只建了一个容器
+    assert _stub_docker["labels"]["role"] == "browser-global"
+    assert _stub_docker["network"] == "bridge"      # 浏览器用真实网络（sandbox_network）
+    assert _stub_docker["mem_limit"] == "512m"      # 更大内存防 Chromium OOM
+
+
+async def test_browser_closed_on_close_all(_stub_docker):
+    mgr = SandboxManager(_bcfg())
+    box, _ = await mgr.get_browser()
+    await mgr.close_all()
+    assert box.closed == 1 and mgr._browser is None   # 关停销毁
+
+
+async def test_browser_idle_evicted_and_recreated(_stub_docker):
+    import time as _t
+    mgr = SandboxManager(_bcfg())
+    box1, _ = await mgr.get_browser()
+    mgr._browser.last_used = _t.monotonic() - (mgr._browser_idle + 1)   # 假装已空闲超时（24h）
+    box2, _ = await mgr.get_browser()        # 触发驱逐 + 懒加载重建
+    assert box1.closed == 1                  # 旧容器被销毁
+    assert box2 is not box1 and len(_StubSub.made) == 2
+
+
+async def test_browser_idle_off_keeps_forever(_stub_docker):
+    import time as _t
+    mgr = SandboxManager(_bcfg(browser_sandbox_idle_timeout=0))
+    box1, _ = await mgr.get_browser()
+    mgr._browser.last_used = _t.monotonic() - 999999
+    box2, _ = await mgr.get_browser()
+    assert box1 is box2                      # 关空闲驱逐 → 永久复用
+    assert box1.closed == 0
+
+
+async def test_browser_not_touched_by_conv_destroy(_stub_docker):
+    """全局浏览器不属于任何会话：删除会话不应销毁它。"""
+    mgr = SandboxManager(_bcfg())
+    box, _ = await mgr.get_browser()
+    await mgr.destroy("conv-x")
+    assert box.closed == 0 and mgr._browser is not None
