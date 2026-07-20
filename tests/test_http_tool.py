@@ -153,15 +153,23 @@ async def test_policy_error_does_not_fallback():
     assert calls == []          # 安全拦截不触发浏览器兜底
 
 
-async def test_blocked_but_fallback_fails_returns_http_result():
-    def handler(req):
-        return httpx.Response(403, text="Access Denied")
+def handler_403(req):
+    return httpx.Response(403, text="Access Denied")
+
+
+async def test_blocked_but_fallback_fails_says_so_plainly():
+    """兜底失败时仍要试过兜底、且不隐瞒被拦（本测试的原意），但不再把拦截页当正文交出去。
+
+    原先退回 render_http_result：状态码是带出来了，可整体形态与一次正常抓取无异，
+    模型容易把「Access Denied」当页面内容继续用。现在明说抓取失败并给出下一步。
+    """
     calls = []
-    tool = HttpRequestTool([], True, 5.0, 2000, 3, client_factory=_factory(handler),
+    tool = HttpRequestTool([], True, 5.0, 2000, 3, client_factory=_factory(handler_403),
                            resolve=_public, browser_fallback=_fallback(calls, fail=True))
     out = await tool.run(tool.Params(url="http://example.com/"))
-    assert calls                # 尝试过兜底
-    assert "403" in out and "Access Denied" in out   # 兜底失败 → 退回 http 原结果
+    assert calls                                     # 尝试过兜底（原意保留）
+    assert "403" in out                              # 不隐瞒具体状态（原意保留）
+    assert "抓取失败" in out and "不要引用" in out    # 但要明说不可用
 
 
 async def test_normal_page_no_fallback():
@@ -239,3 +247,55 @@ async def test_empty_user_agent_config_sends_none():
                            resolve=_public, user_agent="")
     await tool.run(tool.Params(url="http://example.com/"))
     assert seen["ua"] is None or "python-httpx" in seen["ua"].lower()
+
+
+# ---------- 防抓页不得冒充正文 ----------
+
+def _blocked_tool(status, body, *, fallback=None):
+    """构造一个恒返回指定响应的 HttpRequestTool（走真实 client_factory，不打网络）。"""
+    def handler(req):
+        return httpx.Response(status, text=body)
+    return HttpRequestTool([], True, 5.0, 200_000, 3, client_factory=_factory(handler),
+                           resolve=_public, browser_fallback=fallback)
+
+
+async def test_block_status_without_browser_refuses_to_pass_page_off_as_content():
+    """回归：浏览器兜底不可用时，拦截页曾被原样当正文返回。
+
+    模型拿到的是格式完全正常的「标题+正文」，于是照着人机验证页总结。
+    looks_blocked 已经判定它是拦截页，这个结论不能丢。
+    """
+    t = _blocked_tool(403, "Access Denied")
+    out = await t.run(t.Params(url="http://example.com/a"))
+    assert "抓取失败" in out and "不要引用" in out
+    assert "换一个可访问的来源" in out
+
+
+async def test_keyword_only_hit_keeps_content_but_warns():
+    """仅正文关键词命中（HTTP 200）→ 可能是误判，内容照给但把疑点摆前面。
+
+    一篇正经讨论「人机验证」的文章会命中关键词。若一律判死，误判的代价会从
+    「白试一次浏览器、照样返回内容」恶化成「内容被整个吞掉」，比不修还糟。
+    """
+    article = "本文讨论人机验证的实现原理。" * 20
+    t = _blocked_tool(200, article)
+    out = await t.run(t.Params(url="http://example.com/a"))
+    assert "疑似" in out                       # 有警示
+    assert "人机验证的实现原理" in out          # 但正文没丢
+
+
+async def test_browser_fallback_still_wins_when_available():
+    """有浏览器兜底时仍走兜底，不受本次改动影响。"""
+    async def _fb(_url):
+        return "浏览器抓到的真实正文"
+    t = _blocked_tool(403, "Access Denied", fallback=_fb)
+    out = await t.run(t.Params(url="http://example.com/a"))
+    assert "浏览器抓到的真实正文" in out
+    assert "抓取失败" not in out
+
+
+def test_baidu_challenge_wording_is_recognised():
+    """百度系挑战页写的是「百度安全验证」，与信号表里既有的「人机验证」不是同一个词。"""
+    from harness.tools.builtins.http_tool import looks_blocked
+    assert looks_blocked(200, "<title>百度安全验证</title>请完成验证")
+    assert not looks_blocked(200, "一篇讲人工智能的普通文章")

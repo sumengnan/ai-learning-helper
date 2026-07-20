@@ -27,7 +27,8 @@ export interface QualityStat {
   avg_steps: number | null;
   distribution: StepBucket[];      // 与步数直方图同形状，复用 StepsHistogram 渲染
 }
-/** 分层上下文（L1 窗口 / L2 摘要 / L3 检索）。仅 layered 策略产出，默认 full 故常态为 0。 */
+/** 分层上下文（L1 窗口 / L2 摘要 / L3 检索）。仅 layered 策略产出，而它是默认策略，
+ *  故常态应当有值；全 0 多半是策略被改成了 full/window，或该区间没有对话记录。 */
 export interface ContextStat {
   turns: number;                   // 有上下文记录的轮数（含 full）
   layered_turns: number;           // 其中走 layered 的轮数（下列指标的分母）

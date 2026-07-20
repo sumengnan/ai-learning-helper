@@ -204,7 +204,9 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
 
       {/* 上下文健康度：与「回答质量」分开成节 —— 那节讲「答得好不好」，这节讲「答的时候
           还记不记得住」。二者是不同的失败面：上下文丢了，答案照样能拿高分（judge 只看当轮）。
-          仅 layered 策略产出，默认 full，故常态全 0 —— 与本页其它块一致：照常出 tiles、值为 0，
+          本节各项仅 layered 策略产出（config.context_strategy，**默认就是 layered**），
+          故常态应当有值；全 0 通常意味着策略被显式改成了 full/window，或该时间范围内没有
+          对话记录——不是「本就不该有值」。与本页其它块一致：照常出 tiles、值为 0，
           不换成一段说明文案。 */}
       <Eyebrow note={rangeLabel(days)}>上下文健康度</Eyebrow>
       <Box sx={{ display: "grid", gap: 1.75, mb: 1.75,
