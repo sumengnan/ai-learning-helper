@@ -355,6 +355,29 @@ def test_sentinel_not_rehardcoded_in_production_code():
     assert offenders == ["src/harness/tools/builtins/memory_search.py"], \
         f"字面量被重抄到：{offenders}"
 
+# —— 成品文件的角标剥离：跳过代码块 ——
+
+def test_strip_citations_outside_code_keeps_code_spans():
+    from app.sources import strip_citations_outside_code
+    src = "见下[1]。\n```py\nx = a[0] + a[1]\n```\n行内 `b[2]` 保留[3]。"
+    out = strip_citations_outside_code(src)
+    assert "a[0] + a[1]" in out and "`b[2]`" in out     # 代码原样
+    assert "[1]" not in out.split("```")[0]             # 正文角标被剥
+    assert out.endswith("保留。")
+
+
+def test_strip_citations_outside_code_empty_and_noop():
+    from app.sources import strip_citations_outside_code
+    assert strip_citations_outside_code("") == ""
+    assert strip_citations_outside_code("没有角标") == "没有角标"
+
+
+def test_strip_step_markers_removes_only_step_ids():
+    from app.sources import strip_step_markers
+    # 连同紧邻空格一起吃掉：漏出的形态是「[s2] # 标题」，留前导空格不干净
+    assert strip_step_markers("[s2] # 标题 [s10]尾") == "# 标题尾"
+    assert strip_step_markers("来源[1]不动") == "来源[1]不动"   # 数字角标归 strip_citations
+
 
 # —— 成品文件的角标剥离：跳过代码块 ——
 

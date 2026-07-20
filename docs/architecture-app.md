@@ -6,10 +6,10 @@
 >
 > 这份文档回答两个问题：**为什么这样分层**，以及**一次聊天请求的数据是怎么流的**。
 > 每个说法都用文件路径 / 类名锚定，方便直接跳过去读代码。
-
-> **依赖方向是单向的**:`app` 可以随意用 `harness`,但 `harness` 不得反向 import `app`
-> ——只有 `src/harness` 会被打包发布,`app/` 不在其中。新工具该放哪一侧、这条线如何用
-> 测试钉死,见 [harness 核心](architecture-harness.md#分层harness-是库app-是它的消费者)。
+>
+> **依赖方向是单向的**：`app` 可以随意用 `harness`，但 `harness` 不得反向 import `app`
+> ——只有 `src/harness` 会被打包发布，`app/` 不在其中。新工具该放哪一侧、这条线如何用
+> 测试钉死，见 [harness 内核](architecture-harness.md#分层harness-是库app-是它的消费者)。
 
 ## 分层总览
 

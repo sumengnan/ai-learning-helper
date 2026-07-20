@@ -56,19 +56,30 @@ def test_skill_does_not_instruct_asking_the_user(path: Path):
 # ---------- 真实技能的路由：拿仓库里的 skills/ 跑，不用临时假数据 ----------
 
 _ROUTING_CASES = [
-    # 用户实际说过的话 → 应命中的技能
+    # 用户实际说过的话 → 应命中的技能。
+    # 只覆盖 skills/ 下**现存**的技能；dev 的 4d50ee9 删过 4 个（study-plan / exam-prep /
+    # spaced-review / code-learning），增删技能时这张表要同步（下面有覆盖度断言兜着）。
     ("搜索最新的 AI 资讯，保存到知识库", "research-learning"),
     ("查一下最新进展", "research-learning"),
     ("帮我搜集最新资讯", "research-learning"),
     ("整理这份资料，据此出题", "material-to-knowledge"),
     ("把这份资料消化一下", "material-to-knowledge"),
-    ("帮我制定 7 天的 AI 学习计划", "study-plan"),
     ("讲讲我的错题", "wrong-answer-remediation"),
+    ("我哪里薄弱", "wrong-answer-remediation"),
     ("什么是注意力机制", "concept-teaching"),
-    ("模考一次", "exam-prep"),
-    ("今天复习什么", "spaced-review"),
-    ("讲讲这段代码", "code-learning"),
+    ("解释一下反向传播", "concept-teaching"),
 ]
+
+
+def test_routing_table_covers_every_skill():
+    """基准表必须覆盖 skills/ 下每一个技能。
+
+    新增技能却不进表 = 它的触发词没有任何回归保护；删技能却留在表里 = 测试会红。
+    两种情况都该被立刻发现。
+    """
+    covered = {want for _, want in _ROUTING_CASES}
+    present = {p.parent.name for p in _skill_files()}
+    assert covered == present, f"表与实际技能不一致：只在表里={covered - present}，未覆盖={present - covered}"
 
 
 @pytest.mark.parametrize("msg,want", _ROUTING_CASES, ids=[c[1] + "|" + c[0][:10]
@@ -86,3 +97,17 @@ def test_real_skills_route_as_expected(msg, want):
     got = m.match(msg)
     assert got is not None and got.name == want, \
         f"「{msg}」命中 {got.name if got else '（无）'}，期望 {want}"
+
+@pytest.mark.parametrize("path", _skill_files(), ids=lambda p: p.parent.name)
+def test_skill_does_not_instruct_asking_the_user(path: Path):
+    """技能不得指示「问用户」——技能是规划器的拆解蓝本，这类措辞会被抄进步骤描述。
+
+    计划在一轮内自主跑完，执行子步没有与用户对话的通道，这种步骤会被 validate_plan
+    直接打回（见 plan._ASK_USER_RE），白费一轮重试；漏过去也只会输出「需要用户提供
+    X」，拖成「信息不足，无法完成」。技能要教的是「按合理默认推进 + 说明假设」。
+    """
+    from app.orchestration.plan import _ASK_USER_RE
+    hits = [(i, m.group(0))
+            for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+            if (m := _ASK_USER_RE.search(line))]
+    assert not hits, f"{path.parent.name} 含「问用户」措辞（行号, 命中）：{hits}"
