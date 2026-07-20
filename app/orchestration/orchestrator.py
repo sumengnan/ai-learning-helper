@@ -291,7 +291,8 @@ class Orchestrator:
             elif isinstance(ev, ReasoningDelta):   # 思考过程透传（前端 ThinkingBlock 展示）
                 yield ev
             elif isinstance(ev, ModelUsage):       # 用量记进累加器，run() 末尾汇总
-                record_usage(ev.usage, ev.cost_usd, ev.model)
+                record_usage(ev.usage, ev.cost_usd, ev.model,
+                             ev.latency_ms, ev.attempts)
             elif isinstance(ev, RunFinished):
                 final = ev.message.content or ""
         # 端点未流式（只在 RunFinished 给全量）时，补一个 TextDelta，保证 run() 能累加到文本

@@ -48,17 +48,24 @@ class UsageAcc:
 _acc: contextvars.ContextVar = contextvars.ContextVar("orchestrator_usage_acc", default=None)
 
 
-def record_usage(usage: Usage, cost: float | None, model: str | None = None) -> None:
+def record_usage(usage: Usage, cost: float | None, model: str | None = None,
+                 latency_ms: float = 0.0, attempts: int = 1) -> None:
     """把一次模型调用的用量按**模型**记进当前累加器；无累加器（非编排器路径）时仍会 emit。
 
     emit() 旁路发一条**本次调用的增量** ModelUsage（带 model 名）：chat 路由的 emitter 把带模型名的
     ModelUsage 并入主事件流 → 经 sink 落 trajectory（进历史分模型统计）+ 前端（按模型累加得合计）。
     与 embedding/rerank 的用量上报走同一条路。emit 未设 emitter（单测）时 no-op，对既有行为透明。
-    acc 用于同一进程内需要读汇总的场景（非编排器路径 acc 为 None，仅 emit）。"""
+    acc 用于同一进程内需要读汇总的场景（非编排器路径 acc 为 None，仅 emit）。
+
+    latency_ms / attempts 必须由调用方从原始 ModelUsage 透传。它们曾被写死成 0/1，
+    而编排器是唯一主流程——落进 trajectory 的用量事件几乎全走这里，于是「AI 运行统计」
+    的平均延迟、p95 延迟恒为 0，重试次数恒为 0（retries 靠 attempts>1 判定）。
+    统计口径全靠这条链，丢一个字段就是整列数据消失，且不会有任何报错。"""
     acc = _acc.get()
     if acc is not None:
         acc.add(usage, cost, model)
-    emit(ModelUsage(usage=usage, cost_usd=cost, attempts=1, latency_ms=0.0, model=model))
+    emit(ModelUsage(usage=usage, cost_usd=cost, attempts=attempts,
+                    latency_ms=latency_ms, model=model))
 
 
 def set_acc(acc: UsageAcc):

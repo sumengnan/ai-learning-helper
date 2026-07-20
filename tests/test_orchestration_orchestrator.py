@@ -1104,3 +1104,59 @@ async def test_plain_simple_turn_still_skips_review():
     events = [ev async for ev in orch.run("你好", verify=True)]   # 命中 _obvious_simple
     assert not [e for e in events if isinstance(e, Progress) and e.scope == "verify"]
     assert len(cap) == 1
+
+
+# ---------- 用量事件必须带上真实延迟与重试次数 ----------
+
+async def test_record_usage_preserves_latency_and_attempts():
+    """回归：编排器重发 ModelUsage 时把 latency_ms/attempts 写死成 0/1，而它是唯一主流程
+    ——落进 trajectory 的用量事件几乎全走这里，于是「AI 运行统计」的平均延迟、p95 延迟
+    恒为 0，重试次数也恒为 0（retries 靠 attempts>1 判定）。丢字段不会报错，只是整列空白。"""
+    from harness.events import ModelUsage
+    from harness.usage import Usage
+    from harness import progress as _p
+    from app.orchestration.usage_ctx import record_usage
+
+    got = []
+    tok = _p.set_emitter(got.append)
+    try:
+        record_usage(Usage(10, 20, 30), 0.001, "m1", 1234.5, 3)
+    finally:
+        _p.reset_emitter(tok)
+
+    ev = next(e for e in got if isinstance(e, ModelUsage))
+    assert ev.latency_ms == 1234.5
+    assert ev.attempts == 3
+    assert ev.model == "m1"
+
+
+async def test_executor_passes_through_model_usage_latency():
+    """执行子步收到内核的 ModelUsage 后要把延迟带下去，而不是自己造一条空的。"""
+    from harness.events import ModelUsage, RunFinished
+    from harness.types import Message, Role
+    from harness.usage import Usage
+    from harness import progress as _p
+    from app.orchestration.executor import Executor
+    from app.orchestration.plan import PlanStep
+
+    class _Loop:
+        def __init__(self, *a, **k): pass
+        async def run(self, prompt):
+            yield ModelUsage(usage=Usage(1, 2, 3), cost_usd=0.0,
+                             attempts=2, latency_ms=888.0, model="m1")
+            yield RunFinished(message=Message(role=Role.ASSISTANT, content="ok"))
+
+    import app.orchestration.executor as _ex
+    orig, _ex.AgentLoop = _ex.AgentLoop, _Loop
+    got = []
+    tok = _p.set_emitter(got.append)
+    try:
+        ex = Executor(client=None, registry=None, system_prompt="s", model="m")
+        async for _ in ex.execute(PlanStep(id="s1", description="d", expected="e"), {}):
+            pass
+    finally:
+        _ex.AgentLoop = orig
+        _p.reset_emitter(tok)
+
+    ev = next(e for e in got if isinstance(e, ModelUsage))
+    assert ev.latency_ms == 888.0 and ev.attempts == 2
