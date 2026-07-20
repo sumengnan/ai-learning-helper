@@ -11,6 +11,7 @@ from harness.tools.base import ToolRegistry
 from harness.tools.builtins.calculator import CalculatorTool
 from harness.tools.builtins.http_tool import HttpRequestTool
 
+from .search_guidance import SEARCH_SYSTEM_GUIDANCE
 from .tools.plan_tool import UpdatePlanTool, PLAN_SYSTEM_GUIDANCE
 from .tools.validating import ValidatingTool, relevance_check
 
@@ -248,7 +249,8 @@ def build_harness(config) -> Harness:
         client=client, registry=reg,
         checkpoint_store=CheckpointStore(config.persistence_db_path),
         trajectory_store=traj, sink=TrajectorySink(traj),
-        system_prompt=config.app_system_prompt + PLAN_SYSTEM_GUIDANCE,
+        system_prompt=(config.app_system_prompt + PLAN_SYSTEM_GUIDANCE
+                       + SEARCH_SYSTEM_GUIDANCE),
         memory=memory, memory_store=memory_store, memory_writer=memory_writer,
         memory_maintainer=memory_maintainer,
         download_store=dstore,

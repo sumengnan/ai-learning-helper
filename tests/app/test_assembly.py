@@ -128,6 +128,18 @@ def test_update_plan_registered_and_prompt_has_guidance():
     assert "update_plan" in h.system_prompt
 
 
+def test_prompt_has_search_guidance():
+    """联网检索指引必须进系统提示：否则模型会把用户原话整句当 query 搜一次就下笔。
+
+    这条只能靠提示词——搜索工具是 MCP 接入的第三方工具，描述改不了；而每步检索校验
+    只判空命中，一条宽泛 query 照样返回若干条非空结果，必然放行。
+    """
+    sp = build_harness(_cfg()).system_prompt
+    assert "未来 N 年" in sp          # 相对时间必须换算成绝对年份再进 query
+    assert "正交的子查询" in sp        # 宽泛问题要拆
+    assert "不要为拆而拆" in sp        # 但简单事实查询不该被拖成多次检索
+
+
 # ---- 快速模型档的接线 ----
 
 def test_memory_writer_extract_uses_fast_completer_reconcile_stays_main():
