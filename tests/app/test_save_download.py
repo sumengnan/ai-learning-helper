@@ -106,3 +106,43 @@ def test_description_does_not_trigger_on_content_shaping():
     desc = SaveDownloadTool.description
     assert "整理成笔记" not in desc
     assert "导出" in desc and "下载" in desc
+
+
+@pytest.mark.asyncio
+async def test_strips_leaked_step_markers(tmp_path):
+    """存成品文件前剥掉内部步骤标记 [sN]——它对用户毫无意义，纯属管道残留。"""
+    tool, store = _tool(tmp_path)
+    await tool.run(tool.Params(filename="笔记.md", content="[s2] # 标题\n\n正文[s10]"))
+    did = store.list("u1")[0]["id"]
+    text = open(store.path(did), encoding="utf-8").read()
+    assert "[s2]" not in text and "[s10]" not in text
+    assert "# 标题" in text and "正文" in text
+
+
+@pytest.mark.asyncio
+async def test_strips_numeric_citations(tmp_path):
+    """数字角标 [n] 脱离原对话后没有指向，成品文件里是纯噪声，落盘前剥掉。"""
+    tool, store = _tool(tmp_path)
+    await tool.run(tool.Params(filename="笔记.md", content="光合作用发生在叶绿体中[1]，另见[12]。"))
+    text = open(store.path(store.list("u1")[0]["id"]), encoding="utf-8").read()
+    assert "[1]" not in text and "[12]" not in text
+    assert "光合作用发生在叶绿体中" in text
+
+
+@pytest.mark.asyncio
+async def test_does_not_corrupt_code_indexing(tmp_path):
+    """代码块里的 arr[1] 不是角标——剥离必须跳过代码，否则导出的代码笔记会被改坏。"""
+    tool, store = _tool(tmp_path)
+    content = (
+        "讲解见下[1]。\n\n"
+        "```python\n"
+        "arr = [10, 20]\n"
+        "print(arr[0], arr[1])\n"
+        "```\n\n"
+        "行内的 `nums[2]` 也要保住。\n"
+    )
+    await tool.run(tool.Params(filename="代码笔记.md", content=content))
+    text = open(store.path(store.list("u1")[0]["id"]), encoding="utf-8").read()
+    assert "arr[0], arr[1]" in text        # 围栏代码块原样保留
+    assert "`nums[2]`" in text             # 行内代码原样保留
+    assert "讲解见下。" in text             # 正文里的角标仍被剥掉
