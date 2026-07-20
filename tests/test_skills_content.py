@@ -36,3 +36,18 @@ def test_skill_does_not_write_question_ids_into_user_output(path: Path):
     banned = ("+ 配套题 id", "+ 题 id", "题目 id）", "题 id）")
     hits = [b for b in banned if b in text]
     assert not hits, f"{path.parent.name} 指示把题目 id 写进用户可见产物：{hits}"
+
+
+@pytest.mark.parametrize("path", _skill_files(), ids=lambda p: p.parent.name)
+def test_skill_does_not_instruct_asking_the_user(path: Path):
+    """技能不得指示「问用户」——技能是规划器的拆解蓝本，这类措辞会被抄进步骤描述。
+
+    计划在一轮内自主跑完，执行子步没有与用户对话的通道，这种步骤会被 validate_plan
+    直接打回（见 plan._ASK_USER_RE），白费一轮重试；漏过去也只会输出「需要用户提供
+    X」，拖成「信息不足，无法完成」。技能要教的是「按合理默认推进 + 说明假设」。
+    """
+    from app.orchestration.plan import _ASK_USER_RE
+    hits = [(i, m.group(0))
+            for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+            if (m := _ASK_USER_RE.search(line))]
+    assert not hits, f"{path.parent.name} 含「问用户」措辞（行号, 命中）：{hits}"
