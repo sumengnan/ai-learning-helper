@@ -247,7 +247,7 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
                 <span>最深的一次推理</span><b style={{ color: theme.palette.text.primary }}>{learn.effort.max_steps} 步</b>
               </Stack>
               <Stack direction="row" sx={{ justifyContent: "space-between" }}>
-                <span>一次答对、没返工</span><b style={{ color: theme.palette.text.primary }}>{fmtPct(learn.effort.success_rate)}</b>
+                <span>跑完没中断</span><b style={{ color: theme.palette.text.primary }}>{fmtPct(learn.effort.success_rate)}</b>
               </Stack>
             </Stack>
             <Sparkline data={learn.activity} />

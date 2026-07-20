@@ -196,7 +196,8 @@ class Executor:
                 elif isinstance(ev, StepStarted):   # 透传：前端忽略，仅供 trajectory 统计步数
                     yield ev
                 elif isinstance(ev, ModelUsage):   # 用量记进累加器，供 Orchestrator 末尾汇总
-                    record_usage(ev.usage, ev.cost_usd, ev.model)
+                    record_usage(ev.usage, ev.cost_usd, ev.model,
+                                 ev.latency_ms, ev.attempts)
                 elif isinstance(ev, RunFinished):
                     final_text = ev.message.content or ""
                 elif isinstance(ev, RunError):

@@ -38,6 +38,9 @@ from .usage_ctx import (
     UsageAcc, record_usage, reset_acc, reset_reason_sink, set_acc, set_reason_sink,
 )
 
+# 结构化交付门留痕的 Progress key（chat 路由据此提取，写进 verify 列）
+VERIFY_TRACE_KEY = "verify:trace"
+
 TRIAGE_SYSTEM = (
     "判断用户消息是否为简单问答（打招呼、寒暄、单句事实、闲聊）。"
     "多步任务、需要检索/代码/工具、需要规划的一律算复杂。"
@@ -291,7 +294,8 @@ class Orchestrator:
             elif isinstance(ev, ReasoningDelta):   # 思考过程透传（前端 ThinkingBlock 展示）
                 yield ev
             elif isinstance(ev, ModelUsage):       # 用量记进累加器，run() 末尾汇总
-                record_usage(ev.usage, ev.cost_usd, ev.model)
+                record_usage(ev.usage, ev.cost_usd, ev.model,
+                             ev.latency_ms, ev.attempts)
             elif isinstance(ev, RunFinished):
                 final = ev.message.content or ""
         # 端点未流式（只在 RunFinished 给全量）时，补一个 TextDelta，保证 run() 能累加到文本
@@ -423,6 +427,8 @@ class Orchestrator:
             yield _plan_progress(plan)
 
             replan_count = 0
+            _review_history: list[dict] = []   # 每轮终局校验结论（供 verify 列结构化统计）
+            _last_review_ok = True             # verify=False 时不校验，按通过记
             retry_hints: dict[str, str] = {}
             # 跨轮累积 done 产物：replan 返回全新 Plan（旧 done 步不在其中），必须在换 plan 前收走，
             # 否则终局 synthesize/review 只剩最后一轮的产物 —— 违反 spec §4「保留成果」并使闭环残废。
@@ -448,6 +454,12 @@ class Orchestrator:
                 # 显示「结果校验中…→通过/未通过」；不通过带缺口说明，重规划后会再发一轮，形成校验历史。
                 yield Progress(scope="verify", text="结果校验中…", status="running")
                 review = await self._critic.review(user_message, plan, all_artifacts)
+                # 结构化留痕：Progress 里只有给人看的中文，统计侧解不出「过没过/拦在哪层」。
+                # 交付门那套 verify 列此前只在已成死代码的交付门分支里写，编排器每轮都在
+                # 校验、结论却全丢——统计页因此显示「从来没有回答被拦下过」。
+                _review_history.append({"failed": [] if review.accept else ["review"],
+                                        "feedback": review.feedback or ""})
+                _last_review_ok = review.accept
                 yield Progress(scope="verify",
                                text="结果校验通过" if review.accept
                                     else (review.feedback or "存在缺口，重新规划"),
@@ -489,6 +501,18 @@ class Orchestrator:
             # 用量不再在此聚合发射：各子调用（executor/synthesize/planner/critic）的 record_usage
             # 已一路 emit 逐模型增量，经 chat 路由的 emitter 并入主流 → sink 落 trajectory（分模型
             # 历史统计）+ 前端（按模型累加得合计）。与 embedding/rerank 走同一条路，零重复。
+            # 交付门结构化留痕：chat 路由据此写 conversation_messages.verify 列，
+            # 统计页的「一次过率 / 降级交付 / 重答次数 / 哪一层拦下的」全靠它。
+            # 走 Progress 的 detail 通道（已有的落库路径），不新增事件类型。
+            # 只在真的跑了校验时发：verify=False 那轮一条 verify 事件都不该有——前端正是靠
+            # 「本轮有无 verify 事件」决定交付前要不要盖住生成的文件，乱发会把文件藏起来。
+            _degraded = any(st.status in ("failed", "skipped") for st in plan.steps)
+            if verify:
+                yield Progress(
+                    scope="verify", text="", key=VERIFY_TRACE_KEY,
+                    detail={"attempts": replan_count + 1, "retries": replan_count,
+                            "ok": bool(_last_review_ok), "degraded": _degraded,
+                            "gate_error": False, "history": _review_history})
             yield RunFinished(message=Message(role=Role.ASSISTANT, content=final))
         finally:
             reset_acc(acc_token)
