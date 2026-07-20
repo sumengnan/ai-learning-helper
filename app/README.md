@@ -273,6 +273,7 @@ cd web && npm run test        # 前端：Vitest
   未配该项时代码在会话基础容器内直接执行（向后兼容）。
 - **浏览器沙箱是全局共用一个**（跨会话），懒加载启动、复用，空闲 24 小时才销毁，避免每次重建
   Chromium 容器。镜像须含 Playwright + Chromium + curl，内存单列一档（默认 1g，沿用小额度会 OOM）。
-- **字符串耦合**：`SearchKnowledgeTool` 的空命中文案「（未在知识库中检索到相关内容）」被
-  `app/tools/validating.py` 与 `app/verify.py` **逐字匹配**，改动需同步，否则 grounding 校验会
-  静默失效。
+- **跨层字符串契约**：知识库空命中的哨兵文案由内核常量 `NO_KNOWLEDGE_HIT`
+  （`harness/tools/builtins/memory_search.py`）单点定义，`app/tools/validating.py` 与
+  `app/verify.py` 均从此导入。改文案只需改这一处；`tests/test_sources.py` 有护栏禁止
+  在生产代码里重抄该字面量（重抄会让 grounding 校验在内核改文案时静默失效）。

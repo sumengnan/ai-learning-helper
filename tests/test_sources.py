@@ -322,3 +322,35 @@ def test_browse_real_domain_still_recorded():
     r = "标题：光合作用 - 维基百科\n最终URL：https://zh.wikipedia.org/wiki/光合作用\n\n正文……"
     d = build_source("browse", {"url": "https://zh.wikipedia.org/wiki/光合作用"}, r)
     assert d is not None and d["type"] == "web"
+
+
+# ---------- 跨层字符串契约 ----------
+
+def test_no_hit_sentinel_is_single_source_of_truth():
+    """空命中哨兵必须只有一处定义。
+
+    它是跨层契约：内核工具产出这串文字，app 的每步校验与交付门 grounding 靠认出它来
+    判断「这次什么也没查到」。任何一处重抄字面量，内核改文案时该处就**静默**失效——
+    相关性校验永远判通过、grounding 把空结果当成有依据，且不会有任何报错。
+    """
+    from harness.tools.builtins.memory_search import NO_KNOWLEDGE_HIT, SearchKnowledgeTool
+    from app.tools.validating import NO_HIT_MARK
+    from app.verify import _NO_HIT
+
+    assert SearchKnowledgeTool._empty is NO_KNOWLEDGE_HIT
+    assert NO_HIT_MARK is NO_KNOWLEDGE_HIT
+    assert _NO_HIT is NO_KNOWLEDGE_HIT
+
+
+def test_sentinel_not_rehardcoded_in_production_code():
+    """生产代码里不得再出现该字面量（测试与 evals 数据集里是黑盒断言，不在此列）。"""
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parents[1]
+    literal = "（未在知识库中检索到相关内容）"
+    offenders = []
+    for d in ("app", "src"):
+        for f in (root / d).rglob("*.py"):
+            if literal in f.read_text(encoding="utf-8"):
+                offenders.append(str(f.relative_to(root)))
+    assert offenders == ["src/harness/tools/builtins/memory_search.py"], \
+        f"字面量被重抄到：{offenders}"

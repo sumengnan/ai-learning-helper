@@ -50,6 +50,13 @@ class _CollectionSearchTool(Tool):
         return "\n".join(lines)
 
 
+# 知识库空命中的哨兵文案。**这是跨层契约**：app 的每步校验（relevance_check）与交付门的
+# grounding 判据都要认出「这次检索什么也没查到」，而它们唯一的依据就是这串文字。
+# 从这里 import，别在各处重抄一遍——重抄的后果是改了内核这句话，app 侧会**静默**失效：
+# 相关性校验永远判通过、grounding 把空结果当成有依据，没有任何报错提示你。
+NO_KNOWLEDGE_HIT = "（未在知识库中检索到相关内容）"
+
+
 class SearchKnowledgeTool(_CollectionSearchTool):
     """检索用户知识库（上传/保存的资料）。作答的可引用依据，交付门的 grounding 判据。"""
 
@@ -63,8 +70,7 @@ class SearchKnowledgeTool(_CollectionSearchTool):
     # 知识库检索的下限：这是作答依据的来源，宁可多给几段也别漏。
     _K_MIN = 10
     _default_collection = "knowledge"
-    # 空命中文案被 app/tools/validating.py 的 NO_HIT_MARK 与 verify.py 的 _NO_HIT 逐字匹配，改动需同步
-    _empty = "（未在知识库中检索到相关内容）"
+    _empty = NO_KNOWLEDGE_HIT
 
 
 class SearchMemoryTool(_CollectionSearchTool):

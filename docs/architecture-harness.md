@@ -424,11 +424,14 @@ grep -rE "^\s*(from|import)\s+app(\.|\s|$)" src/harness/   →  零命中
 | `telemetry.get_tracer()` | OTel 返回 no-op tracer，零开销 |
 | `SkillContextManager.build()` | registry 为空时透明透传 inner |
 
-> **一处需要收口的隐性契约**：内核 `tools/builtins/memory_search.py` 里的空命中文案
-> 「（未在知识库中检索到相关内容）」被 app 层**逐字依赖**——`app/tools/validating.py` 的
-> `NO_HIT_MARK` 与 `app/verify.py` 的 `_NO_HIT` 都在做字符串匹配。这不是 import，
-> 但改内核的这句话会静默破坏 app 的相关性校验与 grounding 判定。内核源码里有注释标注了
-> 这一点，但契约本身应当显式化。
+> **一条显式的跨层契约**：知识库空命中的哨兵文案由内核常量 `NO_KNOWLEDGE_HIT`
+> （`tools/builtins/memory_search.py`）单点定义并导出。app 层的
+> `app/tools/validating.py::NO_HIT_MARK` 与 `app/verify.py::_NO_HIT` 都从此导入，
+> 不再各自重抄字面量。
+>
+> 为什么值得收口：app 靠认出这串文字来判断「这次检索什么也没查到」。若各处抄一份，
+> 改内核文案时 app 侧会**静默**失效——相关性校验永远判通过、grounding 把空结果当成
+> 有依据，且不会有任何报错。`tests/test_sources.py` 有护栏禁止在生产代码里重抄它。
 
 ## 几条设计原则
 

@@ -19,14 +19,15 @@ from typing import Callable
 from harness.events import Progress
 from harness.progress import emit
 from harness.tools.base import Tool, ToolError
+from harness.tools.builtins.memory_search import NO_KNOWLEDGE_HIT
 from harness.types import ToolOutput
 
 from ..sources import looks_placeholder_page
 
 _log = logging.getLogger("app.validating")
 
-# 与 SearchKnowledgeTool 的空命中文案、verify.py 的 _NO_HIT 保持一致
-NO_HIT_MARK = "（未在知识库中检索到相关内容）"
+# 空命中哨兵：直接取内核常量，不再重抄字面量（重抄会让内核改文案时此处静默失效）
+NO_HIT_MARK = NO_KNOWLEDGE_HIT
 
 # 网页正文低于此长度即视为「没抓到东西」。取值偏保守：宁可放过短页，也不误伤真实的短文档。
 _MIN_PAGE_BODY = 80
