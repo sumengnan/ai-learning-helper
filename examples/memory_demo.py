@@ -15,7 +15,7 @@ from harness.memory.embeddings import OpenAICompatibleEmbeddingClient
 from harness.memory.memory import Memory
 from harness.memory.store import MemoryStore
 from harness.tools.base import ToolRegistry
-from harness.tools.builtins.memory_search import SearchMemoryTool
+from harness.tools.builtins.memory_search import SearchKnowledgeTool
 from harness.tools.builtins.memory_write import RememberTool
 from harness.events import TextDelta, ToolStarted, ToolFinished, RunFinished
 
@@ -36,13 +36,16 @@ async def main() -> None:
         cfg.memory_collection, {"source": "生物笔记"})
 
     registry = ToolRegistry()
-    registry.register(SearchMemoryTool(memory, cfg.memory_collection, default_k=cfg.search_top_k))
-    registry.register(RememberTool(memory, cfg.memory_collection))
+    # 本 demo 演示的是知识库检索（上面种的是「生物笔记」这份资料），故用 search_knowledge。
+    registry.register(SearchKnowledgeTool(memory, cfg.memory_collection,
+                                          default_k=cfg.search_top_k))
+    # remember 走它自己的默认 scope（memory），与知识库分开——别在示例里示范错误的配对。
+    registry.register(RememberTool(memory))
 
     loop = AgentLoop(
         client=OpenAICompatibleClient(cfg),
         registry=registry,
-        context=ContextManager(system_prompt="你可以用 search_memory 查询知识库来回答问题。"),
+        context=ContextManager(system_prompt="你可以用 search_knowledge 查询知识库来回答问题。"),
         max_steps=cfg.max_steps,
         model_name=cfg.model,
     )

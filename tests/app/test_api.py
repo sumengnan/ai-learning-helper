@@ -63,7 +63,7 @@ def _client(make_mock, turns=None):
 def _client_with_kb(make_mock, mock_embedder, turns=None):
     from harness.memory.memory import Memory
     from harness.memory.sqlite_backend import SqliteVecBackend
-    from harness.tools.builtins.memory_search import SearchMemoryTool
+    from harness.tools.builtins.memory_search import SearchKnowledgeTool
     from app.documents import DocumentStore
     mstore = SqliteVecBackend(":memory:", dimension=64)
     mem = Memory(mstore, mock_embedder(dimension=64), 1000, 0)
@@ -73,7 +73,7 @@ def _client_with_kb(make_mock, mock_embedder, turns=None):
     # owner=_global）—— 忠实复现生产：chat 的 _build_registry 必须用用户级的把它覆盖掉，
     # 否则模型搜的是 _global、永远看不到 knowledge:{user_id} 里的文档。registry 留空的话
     # 就变成测「工具没注册」，测不到真正的 collection 错配。
-    reg.register(SearchMemoryTool(mem))
+    reg.register(SearchKnowledgeTool(mem))
     harness = Harness(client=make_mock(turns or []), registry=reg,
                       checkpoint_store=CheckpointStore(":memory:"),
                       trajectory_store=traj, sink=TrajectorySink(traj), system_prompt="s",
