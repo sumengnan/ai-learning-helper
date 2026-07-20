@@ -26,6 +26,8 @@ from harness.net.policy import PolicyError
 from harness.tools.base import Tool, ToolError
 from harness.types import ToolOutput
 
+from .sources import is_placeholder_host
+
 _log = logging.getLogger("app.url_blocklist")
 
 
@@ -248,8 +250,42 @@ class _BlocklistGuardedTool(Tool):
         _log.info("登记抓取失败 %s=%s（%s），%d 秒内跳过", scope, key, reason, ttl)
 
 
+class _PlaceholderGuardedTool(Tool):
+    """抓取前拦掉指向保留/占位域名的请求。
+
+    模型没有真实网址时会照着 API 文档的样子编一个（实测 https://api.example.com/ai-trends、
+    https://example.com/ai-agent-advancements）。这类域名真实存在且恒返回 200，抓完才判
+    「是占位页」既浪费一次往返，也让模型误以为自己拿到了数据。所以要在**发请求之前**拦掉，
+    并当场告诉它正确做法是改用联网搜索工具——只说「不许」而不给出路，它只会换个编造的网址重试。
+    """
+
+    def __init__(self, inner: Tool) -> None:
+        self._inner = inner
+        self.name = inner.name
+        self.description = inner.description
+        self.Params = inner.Params
+
+    def schema(self) -> dict:
+        return self._inner.schema()
+
+    async def run(self, params):
+        url = getattr(params, "url", None)
+        if url and is_placeholder_host(str(url)):
+            raise ToolError(
+                f"未发起请求：{url} 指向文档示例用的保留域名（example.com/.org/.net/.edu 一族），"
+                "不是真实可用的接口或页面——这个网址多半是你凭印象编的。\n"
+                "正确做法：先用联网搜索工具找到真实来源，再抓它给出的网址；"
+                "不要再猜别的网址，也不要把本次当作已获取到数据。")
+        return await self._inner.run(params)
+
+
 def guard_fetch_tool(tool: Tool, store: UrlBlockStore | None) -> Tool:
-    """抓取工具包一层失败记忆；其余工具原样返回。"""
-    if store is None or tool.name not in FETCH_TOOLS:
+    """抓取工具包守卫；其余工具原样返回。
+
+    占位域名拦截**不依赖** store：它是纯粹的 URL 合法性判断，与失败记忆无关，
+    没配登记表时同样必须生效（此前整层守卫都挂在 store 上，store 为 None 就全失效）。
+    """
+    if tool.name not in FETCH_TOOLS:
         return tool
-    return _BlocklistGuardedTool(tool, store)
+    guarded = _PlaceholderGuardedTool(tool)
+    return _BlocklistGuardedTool(guarded, store) if store is not None else guarded
