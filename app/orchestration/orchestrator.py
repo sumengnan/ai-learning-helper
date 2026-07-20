@@ -33,7 +33,7 @@ from harness.types import Message, Role
 from .critic import Critic
 from .executor import CLARIFY_GUIDE, Executor, HidingRegistry, StepArtifact
 from .planner import Planner, PlannerError, render_tool_roster
-from .plan import Artifact, Plan, has_pending, ready_steps
+from .plan import _KB_REQUESTED_RE, Artifact, Plan, has_pending, ready_steps
 from .usage_ctx import (
     UsageAcc, record_usage, reset_acc, reset_reason_sink, set_acc, set_reason_sink,
 )
@@ -256,8 +256,6 @@ class Orchestrator:
         # 的运行统计（AI 在为我做什么/回答质量）会把它们全滤掉。缺省自造，保持对既有测试透明。
         run_id = run_id or uuid.uuid4().hex
         yield RunStarted(run_id=run_id)
-        # 执行子步用的工具视图：每请求 registry 隐藏 update_plan（子步调它会覆盖总计划）；无则回退
-        exec_reg = HidingRegistry(registry, {"update_plan"}) if registry is not None else None
         # 每次 run 新建独立预算（工厂优先），以局部变量贯穿本轮——单例并发安全、不跨轮累加
         budget = self._budget_factory() if self._budget_factory else self._budget
         if budget:
@@ -281,6 +279,19 @@ class Orchestrator:
                     # 命中即发 skill 进度事件：前端「技能」块据此展示（与 load_skill 同 scope，复用渲染）
                     yield Progress("skill", f"已启用技能「{_matched.name}」：{_matched.description}",
                                    status="ok")
+
+
+            # 执行子步的工具视图。恒隐藏 update_plan（子步调它会覆盖总计划）。
+            # save_to_knowledge 则按需隐藏：计划步骤文本再干净，子步也可能自作主张把整理好的
+            # 笔记塞进知识库（实测「归纳成结构化学习笔记」这一步就直接存了）——那是用户自己
+            # 策展的资料库，没要求就写入等于替他做主。validate_plan 只看计划文本，拦不到这种
+            # 执行期的自作主张，故在工具层面直接不给。
+            # 用户要求过、或命中的技能剧本本就以入库为目的（如「资料入库」）时不隐藏。
+            _hidden = {"update_plan"}
+            if not (_KB_REQUESTED_RE.search(user_message or "")
+                    or "save_to_knowledge" in (skill_hint or "")):
+                _hidden.add("save_to_knowledge")
+            exec_reg = HidingRegistry(registry, _hidden) if registry is not None else None
 
             if force_simple or _obvious_simple(user_message) or await self._is_simple(user_message):
                 async for ev in self._simple_answer(user_message, budget, context=context,

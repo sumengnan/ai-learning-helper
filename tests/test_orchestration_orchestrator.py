@@ -873,6 +873,79 @@ async def test_ordinary_failure_still_retries():
     await _run(orch)
     assert order.count("s1") == 2      # 初次 + 1 次重试（max_step_retry=2）
 
+
+# ---------- 执行子步不得自作主张写知识库 ----------
+
+def _reg_with_kb():
+    from harness.tools.base import Tool, ToolRegistry
+    from pydantic import BaseModel
+
+    class _T(Tool):
+        class Params(BaseModel):
+            x: str = ""
+        def __init__(self, name):
+            self.name = name; self.description = "d"
+        async def run(self, params):
+            return ""
+
+    reg = ToolRegistry()
+    for n in ("save_to_knowledge", "save_download", "search_knowledge", "update_plan"):
+        reg.register(_T(n))
+    return reg
+
+
+class _CapturingExecutor:
+    """记录每步实际拿到的工具视图。"""
+    def __init__(self):
+        self.seen = []
+
+    async def execute(self, step, deps, hint="", *, registry=None):
+        from app.orchestration.executor import StepArtifact
+        self.seen.append({t.name for t in registry.tools()} if registry else set())
+        yield StepArtifact(Artifact(summary="done"))
+
+
+async def _run_with(msg, executor):
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [])
+    orch._executor = executor
+    reg = _reg_with_kb()
+    orch._registry = reg
+    [ev async for ev in orch.run(msg, registry=reg)]
+    return executor.seen[0]
+
+
+async def test_kb_write_tool_hidden_from_substeps_when_not_requested():
+    """回归：步骤文本干净（「归纳成结构化学习笔记」），子步却自己调 save_to_knowledge
+    把笔记塞进了用户知识库。validate_plan 只看计划文本、拦不到执行期的自作主张，
+    故在工具层面直接不给。"""
+    tools = await _run_with("整理这些 AI 资料，归纳成学习笔记", _CapturingExecutor())
+    assert "save_to_knowledge" not in tools
+    assert "update_plan" not in tools          # 既有隐藏项不受影响
+    assert "save_download" in tools            # 交付物工具照常可用
+    assert "search_knowledge" in tools         # 读取知识库不受影响
+
+
+async def test_kb_write_tool_available_when_user_asks():
+    tools = await _run_with("把这些资料整理好存进知识库", _CapturingExecutor())
+    assert "save_to_knowledge" in tools
+
+
+async def test_kb_write_tool_available_when_skill_prescribes_it():
+    """命中以入库为目的的技能（如「资料入库」）时不隐藏，否则会把技能本身弄坏。"""
+    class _M:
+        def match(self, msg):
+            class _S:
+                name = "资料入库"; description = "d"
+                body = "1. 读料  2. 用 save_to_knowledge 入库"
+            return _S()
+    ex = _CapturingExecutor()
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [])
+    orch._executor = ex
+    orch._skill_matcher = _M()
+    reg = _reg_with_kb(); orch._registry = reg
+    [e async for e in orch.run("整理这份讲义", registry=reg)]
+    assert "save_to_knowledge" in ex.seen[0]
+
 def test_synth_user_does_not_glue_step_id_to_content():
     """汇总提示词同样不能把步骤 id 粘在正文前，否则最终答复里会漏出 [s1] 残留。"""
     from app.orchestration.orchestrator import _synth_user

@@ -142,12 +142,21 @@ def final_url_of(result: str) -> str:
     return ""
 
 
+def is_placeholder_host(url: str) -> bool:
+    """URL 的主机是否为保留/占位域名。
+
+    子域名一并算：模型编造端点时最爱写 api.example.com、www.example.org 这种，
+    只做精确匹配会全部漏过（此前就漏了）。
+    """
+    host = (urlparse(url or "").hostname or "").lower()
+    if not host:
+        return False
+    return any(host == d or host.endswith("." + d) for d in _PLACEHOLDER_HOSTS)
+
+
 def looks_placeholder_page(result: str, url: str = "") -> bool:
     """是否为占位/示例域名或域名停放页。优先按最终URL判域名，其次按页面文案。"""
-    host = (urlparse(url or final_url_of(result)).hostname or "").lower()
-    if host.startswith("www."):
-        host = host[4:]
-    if host in _PLACEHOLDER_HOSTS:
+    if is_placeholder_host(url or final_url_of(result)):
         return True
     return any(m in (result or "")[:600].lower() for m in _PLACEHOLDER_MARKS)
 
