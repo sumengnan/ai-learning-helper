@@ -123,11 +123,15 @@ async def test_destroy_conv_also_closes_its_cached_subs(_conv, _stub_docker):
 
 
 async def test_idle_cached_sub_evicted_after_timeout(_conv, _stub_docker):
+    import time as _t
     mgr = SandboxManager(_cfg())
     proxy = SandboxProxy(mgr)
     await proxy.run_code("python", None, "a.py", "print(1)", ["python3", "a.py"], None, timeout=5)
     sub = _StubSub.made[0]
-    mgr._subs[("conv-x", "python")].last_used = 0.0            # 假装该子沙箱早已空闲超时
+    # 假装该子沙箱早已空闲超时。必须相对当前时钟回拨，不能直接填 0.0：monotonic() 是开机
+    # 以来的秒数，填 0 等价于假设「开机已超过 sub_idle_timeout（默认 1h）」——开发机常年
+    # 满足，刚拉起的 CI 容器不满足，于是同一份代码本地绿、CI 红。
+    mgr._subs[("conv-x", "python")].last_used = _t.monotonic() - (mgr._sub_idle_timeout + 1)
     await mgr.get("other-conv")                                 # 别的会话活动触发惰性驱逐
     assert sub.closed == 1                                      # 空闲超时 → 自动销毁
     assert ("conv-x", "python") not in mgr._subs
