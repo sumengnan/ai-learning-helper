@@ -3,6 +3,10 @@
 > 面向第一次接触本项目的人。`app/` 是建立在 [harness 核心](architecture-harness.md) 之上的
 > **Web 应用层**:用 FastAPI 暴露 HTTP 接口,把 Agent 内核包装成一个学习助手产品——聊天、
 > 知识库、题库、错题、概览等。这份文档讲清:后端由哪些部件组成、一次聊天请求是怎么走完的。
+>
+> **依赖方向是单向的**:`app` 可以随意用 `harness`,但 `harness` 不得反向 import `app`
+> ——只有 `src/harness` 会被打包发布,`app/` 不在其中。新工具该放哪一侧、这条线如何用
+> 测试钉死,见 [harness 核心](architecture-harness.md#分层harness-是库app-是它的消费者)。
 
 ## 分层总览
 
