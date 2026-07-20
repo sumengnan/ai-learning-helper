@@ -1047,3 +1047,52 @@ async def test_plain_simple_turn_still_skips_review():
     events = [ev async for ev in orch.run("你好", verify=True)]   # 命中 _obvious_simple
     assert not [e for e in events if isinstance(e, Progress) and e.scope == "verify"]
     assert len(cap) == 1
+
+
+# ---- 技能路由的关闭条件：只在真正逐题作答时关，不跟 force_simple 一起关 ----
+
+def _skill_orch(order=None):
+    from types import SimpleNamespace
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), order if order is not None else [],
+               triage_simple=True)
+    orch._skill_matcher = SimpleNamespace(match=lambda msg: SimpleNamespace(
+        name="错题精讲", description="精讲错题并举一反三", body="剧本正文"))
+    return orch
+
+
+async def test_skill_routing_survives_force_simple():
+    """force_simple 不该关掉技能路由。
+
+    覆盖 Bug：「讲讲我的错题」含考试触发词「错题」→ chat 路由置 force_simple → 技能路由
+    被整段跳过，而错题精讲技能的触发词恰恰就是这些词，等于被自己的触发词挡在门外。
+    force_simple 宽是对的（「考我10道题」这类开考请求也得走单循环），但技能剧本只在
+    **正在逐题作答**时才会干扰推进。
+    """
+    orch = _skill_orch()
+    events = [ev async for ev in orch.run("讲讲我的错题", force_simple=True)]
+    skill_evs = [e for e in events if isinstance(e, Progress) and e.scope == "skill"]
+    assert skill_evs, "force_simple 下技能仍应命中"
+    assert "错题精讲" in skill_evs[0].text
+
+
+async def test_skill_routing_off_while_answering_questions():
+    """正在逐题作答（in_stateful_exam）时才关技能路由——剧本会打乱逐题推进。"""
+    orch = _skill_orch()
+    events = [ev async for ev in orch.run("B", force_simple=True, in_stateful_exam=True)]
+    assert not [e for e in events if isinstance(e, Progress) and e.scope == "skill"]
+
+
+async def test_skill_hint_reaches_simple_answer_under_force_simple():
+    """命中的剧本要真的喂进简单直答，否则「命中」只是发了个事件、不影响作答。"""
+    from harness.types import Message, Role
+    seen = {}
+
+    async def cap_simple(msg, budget=None, *, context=None, registry=None,
+                         prefer_main=False, skill_hint=""):
+        seen["skill_hint"] = skill_hint
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content="答复"))
+
+    orch = _skill_orch()
+    orch._simple_answer = cap_simple
+    [ev async for ev in orch.run("讲讲我的错题", verify=False, force_simple=True)]
+    assert seen["skill_hint"] == "剧本正文"
