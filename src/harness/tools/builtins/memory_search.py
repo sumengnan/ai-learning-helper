@@ -18,6 +18,9 @@ class _CollectionSearchTool(Tool):
     # validating/verify 当哨兵匹配，给个兜底默认值只会让漏定义的子类静默记出假来源。
     _default_collection: str
     _empty: str
+    # 检索条数的上下限。上限防止把上下文撑爆；下限由子类按用途收紧。
+    _K_MIN = 1
+    _K_MAX = 50
 
     class Params(BaseModel):
         query: str
@@ -31,7 +34,11 @@ class _CollectionSearchTool(Tool):
         self._default_k = default_k
 
     async def run(self, params: "_CollectionSearchTool.Params") -> str:
+        # 夹到 [_K_MIN, _K_MAX]：模型常自作主张传很小的 k（实测传 3），几条片段根本
+        # 覆盖不住知识库里的相关内容，回答就变成「资料里没提到」。光调默认值没用——
+        # 显式传参会盖掉默认值，所以要有下限兜底。
         k = params.k if params.k is not None else self._default_k
+        k = max(self._K_MIN, min(int(k), self._K_MAX))
         hits = await self._memory.search(params.query, self._collection, k)
         if not hits:
             return self._empty
@@ -50,7 +57,11 @@ class SearchKnowledgeTool(_CollectionSearchTool):
     description = (
         "在用户的知识库中检索相关资料并返回原文片段。知识库装的是用户上传或保存的文档，"
         "是回答学习问题时可引用的依据。"
+        "k 常用 10-50（不传则用默认值）：检索片段太少容易漏掉相关资料，"
+        "把本来有依据的问题答成「资料里没有」。"
         "注意：这里查不到你自己记下的偏好/结论，那些请用 search_memory。")
+    # 知识库检索的下限：这是作答依据的来源，宁可多给几段也别漏。
+    _K_MIN = 10
     _default_collection = "knowledge"
     # 空命中文案被 app/tools/validating.py 的 NO_HIT_MARK 与 verify.py 的 _NO_HIT 逐字匹配，改动需同步
     _empty = "（未在知识库中检索到相关内容）"
