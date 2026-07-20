@@ -92,6 +92,34 @@ AgentLoop
 `ToolRegistry` 汇总所有工具;`AgentLoop` 把它们的 schema 一起发给模型,模型选择调用哪个。
 新增一种能力 = 写一个 `Tool` 子类并注册,循环无感知。
 
+### 新工具该放哪:`harness/tools/builtins/` 还是 `app/tools/`
+
+两处都有工具目录,判据是**这个工具离开学习助手还有没有意义**:
+
+- **`src/harness/tools/builtins/`** —— 与业务无关的通用能力:算术、抓网页、发 HTTP、
+  跑代码、读写文件、检索记忆。换个产品照样能用。
+- **`app/tools/`** —— 学习助手的领域工具:题库、错题集、知识库、附件、下载区。
+  离开这个产品就没有意义。
+
+有个很硬的经验判据:看构造函数要什么。`app/tools/*` 几乎都要 `user_id`、
+`question_store`、`download_store` 这类**应用态**;`harness/tools/builtins/*` 不需要。
+**带用户态或业务存储的,一律归 app。**
+
+## 分层:harness 是库,app 是它的消费者
+
+两者**不是平级模块**。`pyproject.toml` 里只有 `packages = ["src/harness"]` 会被打包
+——发布出去的产物是 `harness`(一个可分发的 Agent 运行时内核),`app/` 不在其中,
+它是建于其上的第一个应用。`skills/`、`web/`、`evals/` 同理,都属于 app 层。
+
+**依赖方向必须单向:`app` → `harness`,反向零依赖。**
+
+这条线由 `tests/test_architecture_layering.py` 用 AST 扫描钉死:`src/harness/**` 里
+出现任何 `import app` / `from app.x` 即测试失败。它靠人自觉是守不住的——随手写一句
+`from app.config import AppConfig` 就能把内核焊死在这个产品上,而且运行时不会有任何
+报错,只有发布时才发现打出来的包 import 不动。
+
+内核确实需要感知上层的东西时,走**鸭子类型或回调注入**(见下方设计原则),不要反向 import。
+
 ## 几条设计原则
 
 - **内核零改动、鸭子类型扩展**:上层要加能力(如注入对话历史、分层上下文),用鸭子类型
