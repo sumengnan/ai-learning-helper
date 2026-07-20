@@ -42,7 +42,32 @@ def strip_citations(text: str) -> str:
 
 # 编排器内部的步骤标记 [s1]/[s12]…（计划步 id）。与来源角标 [n] 形似但来路完全不同：
 # 它来自执行子步/汇总提示词里对前置产出的标注，模型复用内容时会连前缀一起抄出来。
-_STEP_MARKER_RE = re.compile(r"[ \t]*\[s\d+\]")
+# 连同紧邻的前后空格一起吃掉：漏出来的形态是「[s2] # 标题」，只删记号会留下前导空格。
+_STEP_MARKER_RE = re.compile(r"[ \t]*\[s\d+\][ \t]*")
+
+
+# 围栏代码块 ```…``` 与行内代码 `…`：剥角标时整段跳过。
+# 代码里的 arr[1]/nums[0] 形态与角标 [n] 完全一致，_CITATION_RE 的前导空格又是可选的，
+# 不跳过就会把 arr[1] 削成 arr——导出的代码笔记直接被改坏。
+_CODE_SPAN_RE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
+
+
+def _outside_code(text: str, sub) -> str:
+    """只对代码块之外的部分做替换，代码原样保留。"""
+    out, last = [], 0
+    for m in _CODE_SPAN_RE.finditer(text):
+        out.append(sub(text[last:m.start()]))
+        out.append(m.group(0))
+        last = m.end()
+    out.append(sub(text[last:]))
+    return "".join(out)
+
+
+def strip_citations_outside_code(text: str) -> str:
+    """剥离正文角标 [n]，但跳过代码块（见 _outside_code）。用于交付给用户的成品文件。"""
+    if not text:
+        return text
+    return _outside_code(text, lambda s: _CITATION_RE.sub("", s))
 
 
 def strip_step_markers(text: str) -> str:
