@@ -945,3 +945,60 @@ async def test_kb_write_tool_available_when_skill_prescribes_it():
     reg = _reg_with_kb(); orch._registry = reg
     [e async for e in orch.run("整理这份讲义", registry=reg)]
     assert "save_to_knowledge" in ex.seen[0]
+
+
+# ---------- 命中技能即走规划 ----------
+
+class _SkillMatcherStub:
+    def __init__(self, body="1. 联网查  2. 整理  3. 入库"):
+        self._body = body
+
+    def match(self, msg):
+        class _S:
+            name = "联网调研"; description = "d"
+        _S.body = self._body
+        return _S()
+
+
+async def test_skill_hit_forces_planning_even_if_triage_says_simple():
+    """回归：技能剧本本身就是多步流程，却因 triage 判 simple 而被塞进单循环——
+    结果不出计划步，模型还可能自己发一份没有 id 的 ReAct 清单把工具块吞掉。"""
+    order = []
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), order, triage_simple=True)
+    orch._skill_matcher = _SkillMatcherStub()
+    events = await _run(orch, "搜索最新的 AI 资讯，保存到知识库")
+
+    assert order == ["s1"], "命中技能应走规划执行，而非简单直答"
+    assert any(isinstance(e, Progress) and e.scope == "plan" for e in events), "应发出计划"
+    assert events[-1].message.content == "最终答复"       # 走的是编排汇总，不是简单直答
+
+
+async def test_skill_hit_skips_triage_call():
+    """命中技能时结论已定，不必再花一次 triage 调用。"""
+    called = {"n": 0}
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [])
+
+    async def _counting_triage(msg):
+        called["n"] += 1
+        return True
+    orch._is_simple = _counting_triage
+    orch._skill_matcher = _SkillMatcherStub()
+    await _run(orch, "搜索最新的 AI 资讯")
+    assert called["n"] == 0
+
+
+async def test_no_skill_still_honours_triage():
+    """反向：没命中技能时 triage 说了算——别把这条改动做成「永远不走简单直答」。"""
+    order = []
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), order, triage_simple=True)
+    events = await _run(orch, "你好")
+    assert order == [] and events[-1].message.content == "简单答复"
+
+
+async def test_exam_stays_single_loop_even_with_skill_matcher():
+    """考试（force_simple）永远走单循环：逐题推进不能被拆成计划。"""
+    order = []
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), order, triage_simple=False)
+    orch._skill_matcher = _SkillMatcherStub()
+    events = [e async for e in orch.run("下一题", force_simple=True)]
+    assert order == [] and events[-1].message.content == "简单答复"
