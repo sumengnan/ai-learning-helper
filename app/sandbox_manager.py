@@ -48,7 +48,14 @@ def sandbox_guide(config) -> str:
         f"\n\n【沙箱工作目录】run_shell / run_python / run_shell / run_node 等沙箱工具的当前工作目录（cwd）"
         f"就是 {ws}。读写文件用相对路径（相对 {ws}），或以 {ws}/ 开头的绝对路径；"
         f"生成的文件也放在这里。用户上传的附件在 {ws}/uploads/ 下。"
-        f"不要使用宿主机路径（如 /Users、/home、/tmp）或其它臆想的目录——那些在沙箱里并不存在。")
+        f"不要使用宿主机路径（如 /Users、/home、/tmp）或其它臆想的目录——那些在沙箱里并不存在。"
+        # write_file 写的是沙箱临时文件，随沙箱销毁；save_download 才产出用户拿得到的成品。
+        # 模型常把两者当一条流水线用（先 write_file 再 save_download），白跑一次往返；
+        # 更糟的是子步一旦重试，这套组合会整个再来一遍。
+        f"\n【成品文件直接用 save_download】要交给用户下载/查看的最终产物（笔记、总结、报告、"
+        f"导出文件等），直接调 save_download 生成即可，**不需要**先 write_file 落到沙箱再转存——"
+        f"沙箱里的文件是过程中间物、随沙箱销毁，用户拿不到。"
+        f"只有当后续步骤还要在沙箱里读取/处理该文件时，才先 write_file。")
     if getattr(config, "sandbox_backend", "") != "docker":
         return guide   # 本地后端跑在宿主机，无镜像/网络隔离概念，只给工作目录提醒
     base_img = getattr(config, "sandbox_image", "") or "（未配置）"
