@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 
 from harness.llm.openai_compat import json_output
 from harness.tools.base import ToolError
+from harness.tools.builtins.memory_search import NO_KNOWLEDGE_HIT
 
 from .quiz_service import _strip_fence
 from .url_blocklist import UrlBlockedError
@@ -105,7 +106,7 @@ _LANG_TOOL = {
     "js": "run_node", "javascript": "run_node", "node": "run_node",
     "java": "run_java",
 }
-_NO_HIT = "（未在知识库中检索到相关内容）"
+_NO_HIT = NO_KNOWLEDGE_HIT   # 知识库空命中哨兵：取自内核，勿重抄字面量
 _GROUNDING_CONTEXT_MAX = 12000     # grounding 核查上下文上限（含知识库+联网），防撑爆核查模型
 
 

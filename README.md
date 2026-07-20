@@ -14,6 +14,7 @@
 
 它的特别之处在于**后端是一套自研的最小 Agent 运行时内核 `harness`**(不套任何 Agent 框架):
 AI 不只是"聊天",还能调用工具——联网查资料、在沙箱里跑代码、用无头浏览器抓网页、接入外部 MCP 工具。
+内核之上是一层 Plan-Execute-Reflect 编排器,复杂请求先拆计划再并行执行、逐步质检后汇总。
 前端是 React,后端是 FastAPI + `harness`。
 
 > 第一次看这个项目?建议按这个顺序读:本页 → [架构:harness 核心](docs/architecture-harness.md)
@@ -37,11 +38,21 @@ AI 不只是"聊天",还能调用工具——联网查资料、在沙箱里跑�
 
 - **AI 聊天**:多轮对话、断点续传(刷新/重连可接回在途生成)、附件上传、消息耗时/tokens 统计、
   回复标注参考来源、生成的文件在聊天内内联预览/下载。
-- **知识库(RAG)**:上传文档入库、语义检索、片段抽屉预览;AI 回答基于知识库做事实核对(grounding)。
-- **题库 / 错题集**:基于知识库出题、作答判分,答错的题自动归集回顾;支持题库文本批量导入。
+- **任务编排**:复杂请求由 Plan-Execute-Reflect 编排器拆成 DAG 计划、无依赖的步骤并行执行、
+  逐步质检后汇总;简单问答自动短路成单轮直答,不额外增加开销(见[架构一览](#架构一览))。
+- **知识库(RAG)**:上传 PDF / docx / txt / md 入库、语义检索、片段列表与详情抽屉;
+  AI 回答基于知识库做事实核对(grounding)。知识库按用户隔离。
+- **资料与记忆分离**:`search_knowledge` 查用户自己上传/保存的资料(`knowledge:{user_id}`),
+  `search_memory` 查 AI 用 `remember` 记下的长期结论与偏好(`memory:{user_id}`),两者互不串味。
+- **题库 / 模拟考试 / 错题集**:在聊天里基于知识库出题、开考、逐题判分,答错自动进错题集;
+  题库页支持文本批量导入、筛选与删除。考试由服务端托管游标与判分,不靠模型自觉。
+- **人工确认**:删题库 / 删错题这类破坏性操作,AI 只登记待确认卡片,用户在前端点确认后才真正执行;
+  沙箱里的危险命令(任何 `rm` 等)执行前弹窗审核,拒绝即终止该步。
+- **抓取防护**:发请求前拦掉指向保留域名(`example.com` 一族)的编造网址;抓失败的网址按原因分级
+  登记(1 小时 ~ 30 天),下次抓前短路让模型换来源,不永久拉黑。
 - **首页概览**:学习主场 + 系统监控双视角,时间范围筛选、图表、记忆查看、产物预览、模型分层计费与成本估算。
 - **工具能力**:联网 `http_request`(失败/被防抓自动改用浏览器)、代码沙箱(按语言起一次性子沙箱执行)、
-  无头浏览器抓取、MCP 客户端(stdio + streamable-http)、多智能体派发。
+  无头浏览器抓取、MCP 客户端(stdio + streamable-http)、技能渐进式披露、多智能体派发。
 - **回答校验门**(可选):交付前对格式 / 知识库 grounding / 代码可运行 / LLM 自评打分做校验,不过则自动带反馈重答(详见 [回答校验门](docs/answer-gate.md))。
 - **循环/停滞防护**:除步数、token、墙钟时间三道硬上限外,agent 循环还做循环检测——连续 N 步发起完全相同的工具调用(同名+同参)即判为原地打转,先注入一次纠偏提示让模型换思路,纠偏后仍重复才中止,防模型卡在重复动作上白跑(`HARNESS_LOOP_DETECT_WINDOW`,默认 3,<2 关闭)。
 - **上下文管理**:长对话按 `full` / `window` / `layered` 三档策略裁剪(详见 [上下文管理](docs/context-management.md))。
@@ -54,8 +65,9 @@ AI 不只是"聊天",还能调用工具——联网查资料、在沙箱里跑�
 flowchart TD
     UI["React 前端 (web/)"] -->|HTTP / SSE| APP["FastAPI 应用层 (app/)"]
     APP --> ROUTES["API 路由 + 领域服务<br/>聊天 / 知识库 / 题库 / 概览 …"]
-    ROUTES --> DB[("SQLite<br/>业务数据 · 向量库 · 运行轨迹")]
-    ROUTES -->|驱动 Agent| CORE["harness 核心 (src/harness/)<br/>AgentLoop：模型 ↔ 工具 循环"]
+    ROUTES --> ORCH["Plan-Execute-Reflect 编排器<br/>(app/orchestration/)"]
+    ROUTES --> DB[("SQLite<br/>app.db 业务数据<br/>memory.db 向量库<br/>harness.db 运行轨迹")]
+    ORCH -->|每步一个独立 AgentLoop| CORE["harness 核心 (src/harness/)<br/>AgentLoop：模型 ↔ 工具 循环"]
     CORE -->|调用| EXT["外部<br/>LLM API · Embedding · 沙箱容器 · 网页 · MCP"]
 ```
 
@@ -63,6 +75,41 @@ flowchart TD
   持久化、可观测。详见 [架构:harness 核心](docs/architecture-harness.md)。
 - **app 应用层**(`app/`):FastAPI 把内核包装成学习助手产品——鉴权、会话、知识库、题库、校验门等。
   详见 [架构:app 层](docs/architecture-app.md)。
+
+### 一次聊天请求怎么走
+
+编排器是**唯一主流程**(`app/assembly.py` 恒构建,无开关),`/api/chat` 每请求把会话上下文
+(系统提示 + 指引 + 历史 + 记忆)与用户级工具表注入它的 `run()`:
+
+```mermaid
+flowchart TD
+    IN["用户消息"] --> TRIAGE{"triage<br/>简单还是复杂？"}
+    TRIAGE -->|简单 / 考试等有状态交互| SIMPLE["简单直答<br/>单个 ReAct AgentLoop，全量工具"]
+    TRIAGE -->|复杂| PLAN["Planner<br/>拆成 2-10 步 DAG"]
+    PLAN --> EXEC["Executor 并行跑就绪步<br/>每步独立上下文的 AgentLoop"]
+    EXEC --> VAL["Critic.validate<br/>单步质检，不过则重试"]
+    VAL --> REVIEW{"Critic.review<br/>整体够不够？"}
+    REVIEW -->|有缺口| PLAN
+    REVIEW -->|通过 / 重规划用尽| SYNTH["Synthesize<br/>流式汇总最终答复"]
+    SIMPLE --> OUT["SSE 推给前端"]
+    SYNTH --> OUT
+```
+
+几个要点:
+
+- **triage**:纯寒暄/致谢由正则零成本短路,其余交快速档模型判 `simple` / `complex`;判不出就
+  按复杂走(宁可多做)。简单直答承载绝大多数流量。
+- **模型分档**:规划与终局 review 用主模型(判断质量要求高),triage / 单步质检 / 执行子步走快速档
+  (`HARNESS_FAST_MODEL`,未配则回退主模型)。
+- **有状态流程强制单循环**:模拟考试走 `force_simple` + 主模型逐题推进——拆成多步再汇总会把
+  "原样呈现下一题"的指令吞掉。
+- **收尾兜底**:预算超限或某步重试耗尽时不硬失败,把未完成步标 skipped,带现有成果尽力汇总。
+- **重试上限**:单步 2 次、终局重规划 2 轮、Planner 出无效 DAG 重试 2 次、每个执行子步内部
+  最多 10 个 AgentLoop 步(均可配,见[环境变量](#环境变量))。用户拒绝危险操作导致的失败是
+  **终态**,不重试——重跑只会把同一个弹窗再怼给用户一次。
+- **交付门**:轮次开头就下发"开门"信号,本轮生成的文件在结果校验完成前不显示;校验不过触发
+  重答时,失败那次产生的下载/入库/出题副作用会被清理,不留悬空的下载按钮。
+
 ## 技术栈
 
 | 层 | 技术 |
@@ -107,9 +154,41 @@ npm run dev        # http://localhost:5173，/api 已代理到后端 8000
 
 ## 环境变量
 
-全部配置见 [`.env.example`](.env.example)（`HARNESS_` 前缀,另有 `AUTH_SECRET`),涵盖模型、
-沙箱、无头浏览器、MCP、回答校验门、上下文管理策略等。生产务必设置随机 `AUTH_SECRET` 与真实
-`HARNESS_API_KEY`。
+全部配置见 [`.env.example`](.env.example)。除 `AUTH_SECRET` 外一律 `HARNESS_` 前缀,
+dict / list 值写 JSON。生产务必设置随机 `AUTH_SECRET` 与真实 `HARNESS_API_KEY`。
+
+常用项与默认值(定义在 [`app/config.py`](app/config.py) 与 [`src/harness/config.py`](src/harness/config.py)):
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `HARNESS_API_KEY` | 空 | LLM key,**必填** |
+| `HARNESS_BASE_URL` | `https://api.openai.com/v1` | 任意 OpenAI 兼容端点 |
+| `HARNESS_MODEL` | `gpt-4o-mini` | 主模型 |
+| `HARNESS_FAST_MODEL` | 空 | 快速档模型;空则回退主模型(另有 `_BASE_URL` / `_API_KEY`) |
+| `AUTH_SECRET` | `dev-insecure-secret-change-me` | JWT 签名密钥,生产必改 |
+| `HARNESS_APP_HOST` / `HARNESS_APP_PORT` | `127.0.0.1` / `8000` | 监听地址 |
+| `HARNESS_APP_DB_PATH` | `app.db` | 应用领域各表统一存于此单一文件 |
+| `HARNESS_MEMORY_DB_PATH` | `memory.db` | 向量库(知识库 + 长期记忆) |
+| `HARNESS_PERSISTENCE_DB_PATH` | `harness.db` | 检查点与运行轨迹 |
+| `HARNESS_EMBEDDING_MODEL` | `text-embedding-3-small` | 空 key 时回退用 `HARNESS_API_KEY` |
+| `HARNESS_SEARCH_TOP_K` | `10` | 检索默认条数;`search_knowledge` 下限 10、上限 50 |
+| `HARNESS_CONTEXT_STRATEGY` | `layered` | `full` / `window` / `layered` |
+| `HARNESS_ENABLE_SANDBOX` | `false` | 需同时配 `HARNESS_SANDBOX_DOCKER_HOST` 才注册代码/命令工具 |
+| `HARNESS_ENABLE_BROWSER` | `false` | 无头浏览器抓取 |
+| `HARNESS_ENABLE_SKILLS` | `false` | 技能渐进式披露(扫 `skills/`) |
+| `HARNESS_ENABLE_MCP` | `false` | MCP 客户端,清单见 `mcp/mcp_servers.json` |
+| `HARNESS_ENABLE_DISPATCH` | `false` | 多智能体派发(花名册在 `agents/`) |
+| `HARNESS_ENABLE_ANSWER_GATE` | `false` | 回答校验门 |
+| `HARNESS_ENABLE_STEP_CHECK` | `true` | 高风险步实时校验(检索相关性 / 代码执行) |
+| `HARNESS_ENABLE_URL_BLOCKLIST` | `true` | 抓取失败网址分级登记 |
+| `HARNESS_REQUIRE_CAPTCHA` | `false` | 登录/注册强制图形验证码 |
+| `HARNESS_LOOP_DETECT_WINDOW` | `3` | 循环检测窗口,`<2` 关闭 |
+| `HARNESS_SANDBOX_APPROVAL_TIMEOUT` | `120` | 危险命令人工确认超时(秒),超时自动拒绝 |
+| `HARNESS_ORCHESTRATOR_MAX_STEP_RETRY` | `2` | 单步反复失败上限 |
+| `HARNESS_ORCHESTRATOR_MAX_REPLAN` | `2` | 终局重规划轮数上限 |
+| `HARNESS_ORCHESTRATOR_STEP_MAX_STEPS` | `10` | 每个执行子步内部的 AgentLoop 步数上限 |
+| `HARNESS_APP_MAX_UPLOAD_MB` | `20` | 知识库/题库导入的单文件上限 |
+| `HARNESS_DOWNLOAD_MAX_MB` | `25` | `save_download` 单文件上限 |
 
 ## 测试
 
@@ -140,14 +219,22 @@ cd docker && docker compose up -d --build
 ## 目录结构
 
 ```
-app/          FastAPI 应用层（api 路由、会话/知识/题库/下载等领域服务）
-src/harness/  最小 Agent 运行时内核（循环、工具、记忆、沙箱、持久化、MCP…）
-web/          React 前端（Vite）
-skills/       技能目录          agents/  子 agent 花名册
-tests/        pytest 测试        docker/  容器化与浏览器子沙箱镜像
-docs/         架构与专题文档、部署说明、截图
-VERSION       部署版本号的「大.中」声明（小版本由 CI 自增）
+app/                 FastAPI 应用层（见 app/README.md）
+  api/               HTTP 路由（chat / documents / questions / pending-actions / stats …）
+  orchestration/     Plan-Execute-Reflect 编排器（planner / executor / critic / plan）
+  tools/             应用级工具（题库、考试、知识库写入、下载、每步校验包装）
+src/harness/         最小 Agent 运行时内核（循环、工具、记忆、沙箱、持久化、MCP…）
+web/                 React 前端（Vite），npm run build 产出 web/dist 由后端同源托管
+skills/              技能目录            agents/   子 agent 花名册（YAML）
+mcp/                 MCP server 清单     docker/   容器化与浏览器子沙箱镜像
+tests/               pytest 测试         evals/    离线评测（数据集 / judge / CLI）
+examples/            各子系统的独立可跑示例脚本
+docs/                架构与专题文档、部署说明、截图
+.env.example         全部配置项与注释     VERSION   版本号「大.中」（小版本由 CI 自增）
 ```
+
+运行期产生的数据文件(均不入库):`app.db` 业务数据、`memory.db` 向量库、`harness.db`
+运行轨迹与检查点、`downloads/` 生成的产物、`attachments/` 聊天附件。
 
 ## 文档
 
@@ -156,6 +243,7 @@ VERSION       部署版本号的「大.中」声明（小版本由 CI 自增）
   事件驱动、各子系统、模型客户端与工具契约。
 - [`docs/architecture-app.md`](docs/architecture-app.md) —— app 层:分层总览、装配流程、
   一次聊天请求的全链路、数据存储。
+- [`app/README.md`](app/README.md) —— 应用层按功能域的实操说明:各域怎么跑、怎么验收、已知限制。
 
 **专题**
 - [`docs/context-management.md`](docs/context-management.md) —— 上下文管理:三档策略、L1/L2/L3 分层、token 预算。
