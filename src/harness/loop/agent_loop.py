@@ -252,7 +252,9 @@ class AgentLoop:
                             if result.is_error:
                                 ts.set_status(Status(StatusCode.ERROR, result.content[:200]))
                                 ts.add_event("tool.error", {"content": result.content[:200]})
-                        state.append(Message(role=Role.TOOL, content=result.content, tool_call_id=tc.id))
+                        # for_model()：机读 marker（〔下载ID:x〕等）只进事件/落库，不进上下文
+                        state.append(Message(role=Role.TOOL, content=result.for_model(),
+                                             tool_call_id=tc.id))
                         # 工具追加的后续消息（如把图片作为 user 视觉块注入）：接在 tool 结果之后
                         for fm in result.follow_up:
                             state.append(fm)

@@ -4,6 +4,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from harness.tools.base import Tool
+from harness.types import ToolOutput
 
 from ..knowledge import EmptyDocument, strip_markdown
 from ..sources import strip_citations
@@ -27,7 +28,7 @@ class SaveToKnowledgeTool(Tool):
         self._knowledge = knowledge
         self._uid = user_id
 
-    async def run(self, params: "SaveToKnowledgeTool.Params") -> str:
+    async def run(self, params: "SaveToKnowledgeTool.Params") -> "str | ToolOutput":
         # 只存纯文字内容：去掉 markdown 排版标记（##、**、列表、表格等）与正文里的
         # 来源角标 [1]（脱离对话后无指向、是检索噪声），减少检索噪声
         text = strip_citations(strip_markdown(params.text))
@@ -35,6 +36,9 @@ class SaveToKnowledgeTool(Tool):
             res = await self._knowledge.ingest_text(self._uid, params.title, text)
         except EmptyDocument:
             return "保存失败：内容为空。"
-        # 末尾带机读标记〔知识ID:...〕：交付门据此在校验不通过时清理该轮误入库的条目（前端剥离不展示）
-        return (f"已保存到知识库：《{res['filename']}》（{res['num_chunks']} 块），"
-                f"可在知识库菜单查看。〔知识ID:{res['id']}〕")
+        # 末尾带机读标记〔知识ID:...〕：交付门据此在校验不通过时清理该轮误入库的条目（前端剥离不展示）。
+        # 走 marker 而非拼进 text——它不进模型上下文，模型看不见就不会把这串 id 抄进回复正文。
+        return ToolOutput(
+            text=(f"已保存到知识库：《{res['filename']}》（{res['num_chunks']} 块），"
+                  f"用户可在知识库菜单查看。"),
+            marker=f"〔知识ID:{res['id']}〕")
