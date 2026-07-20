@@ -41,3 +41,56 @@ async def test_oversize_returns_error_no_store(tmp_path):
     tool, store = _tool(tmp_path, max_mb=0)                     # 0MB 上限 → 任何内容都超
     out = await tool.run(tool.Params(filename="big.txt", content="hello"))
     assert "失败" in out and "上限" in out and store.list("u1") == []
+
+
+# —— 文本内容不得套二进制文档的壳（模型爱写 .pdf，系统却没有渲染能力）——
+
+@pytest.mark.asyncio
+async def test_text_content_with_pdf_extension_rejected(tmp_path):
+    """模型把 Markdown 存成 .pdf → 用户下载到打不开的坏文件。必须拦下且不落库。"""
+    tool, store = _tool(tmp_path)
+    out = await tool.run(tool.Params(filename="AI发展与应用总结.pdf", content="# 标题\n\n正文"))
+    assert "失败" in out
+    assert ".md" in out                      # 告诉模型改用什么
+    assert store.list("u1") == []            # 未落库
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["报告.docx", "数据.xlsx", "讲义.pptx", "存档.zip"])
+async def test_text_content_with_binary_doc_extensions_rejected(tmp_path, name):
+    tool, store = _tool(tmp_path)
+    out = await tool.run(tool.Params(filename=name, content="纯文本"))
+    assert "失败" in out and store.list("u1") == []
+
+
+@pytest.mark.asyncio
+async def test_extension_check_is_case_insensitive(tmp_path):
+    tool, store = _tool(tmp_path)
+    out = await tool.run(tool.Params(filename="总结.PDF", content="正文"))
+    assert "失败" in out and store.list("u1") == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["笔记.md", "记录.txt", "页面.html", "表格.csv", "数据.json"])
+async def test_text_friendly_extensions_still_allowed(tmp_path, name):
+    """文本格式一律放行——本修复只拦「文本内容套二进制文档壳」这一种情况。"""
+    tool, store = _tool(tmp_path)
+    out = await tool.run(tool.Params(filename=name, content="内容"))
+    assert "已保存" in out and len(store.list("u1")) == 1
+
+
+@pytest.mark.asyncio
+async def test_base64_pdf_still_allowed(tmp_path):
+    """encoding=base64 时模型提供的是真二进制，不该被这道校验误伤。"""
+    tool, store = _tool(tmp_path)
+    b64 = base64.b64encode(b"%PDF-1.4 fake").decode()
+    out = await tool.run(tool.Params(filename="真报告.pdf", content=b64, encoding="base64"))
+    assert "已保存" in out
+    assert store.list("u1")[0]["content_type"] == "application/pdf"
+
+
+def test_description_states_supported_formats():
+    """description 要写清能产出什么格式，否则模型只能靠猜（这正是 .pdf 的来源）。"""
+    desc = SaveDownloadTool.description
+    assert ".md" in desc
+    assert "PDF" in desc or "pdf" in desc      # 明确说明不支持

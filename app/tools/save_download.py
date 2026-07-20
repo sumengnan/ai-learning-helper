@@ -4,10 +4,19 @@ from __future__ import annotations
 import base64
 import binascii
 import mimetypes
+import os
 
 from pydantic import BaseModel
 
 from harness.tools.base import Tool
+
+# 本系统只把 content 原样写成字节，没有任何排版/渲染能力（依赖里没有 reportlab、
+# weasyprint、pandoc 之流；python-docx 只用于「读」上传附件）。文本内容配上这些扩展名
+# 就是给用户一个打不开的坏文件——mimetypes 还会按文件名把它标成 application/pdf。
+_BINARY_DOC_EXTS = frozenset({
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "zip", "rar", "7z", "epub", "rtf",
+})
+_TEXT_EXTS_HINT = ".md、.txt、.html、.csv、.json"
 
 
 class SaveDownloadTool(Tool):
@@ -15,7 +24,9 @@ class SaveDownloadTool(Tool):
     description = (
         "把整理好的内容生成为「给用户的成品文件」供查看/下载——学习笔记、总结、报告、导出、图表等。"
         "这是给用户的最终产物、文件（不进知识库检索）。用户说「整理成笔记 / 导出 / 存成文件」用这个。"
-        "content 为文本内容；若要保存图片等二进制，先把它 base64 编码并令 encoding=base64。")
+        f"content 为文本内容，扩展名只能用文本格式（{_TEXT_EXTS_HINT}）；"
+        "本系统不能生成 PDF/Word/Excel/PPT，用户即使说「导出 PDF」也要存成 .md 并在答复里说明。"
+        "若要保存图片等二进制，先把它 base64 编码并令 encoding=base64。")
 
     class Params(BaseModel):
         filename: str
@@ -34,6 +45,12 @@ class SaveDownloadTool(Tool):
             except (binascii.Error, ValueError):
                 return "保存失败：内容不是合法 base64。"
         else:
+            # base64 走的是模型自备的真二进制，不设限；只拦「文本内容套二进制文档壳」
+            ext = os.path.splitext(params.filename)[1].lstrip(".").lower()
+            if ext in _BINARY_DOC_EXTS:
+                return (f"保存失败：本系统不能生成 {ext.upper()} 文件，只能写文本。"
+                        f"请把 filename 换成文本扩展名（{_TEXT_EXTS_HINT}）重试，"
+                        "并在给用户的答复里说明格式已改。")
             data = params.content.encode("utf-8")
         if len(data) > self._max:
             return f"保存失败：超过 {self._max // (1024 * 1024)}MB 上限。"
