@@ -261,3 +261,31 @@ def test_exam_guide_forbids_exposing_question_ids():
     from app.api.chat import EXAM_GUIDE
     assert "题目 id 绝不出现在给用户的回答里" in EXAM_GUIDE
     assert "用题干" in EXAM_GUIDE
+
+
+# ---------- 采样量 ----------
+
+def test_sample_tools_default_to_ten():
+    """默认 5 太少：题库/错题集抽两下就没了，复习也不见效。上限 50 不变。"""
+    assert SampleQuestionsTool.Params().count == 10
+    assert SampleWrongAnswersTool.Params().count == 10
+
+
+async def test_sample_questions_honours_larger_count():
+    store = QuestionStore(":memory:")
+    for i in range(40):
+        store.create("u1", {"type": "single", "stem": f"题{i}",
+                            "options": ["A", "B"], "answer": 0})
+    t = SampleQuestionsTool(store, "u1")
+    out = json.loads(await t.run(t.Params(count=30)))
+    assert len(out) == 30
+
+
+async def test_sample_questions_clamps_to_fifty():
+    store = QuestionStore(":memory:")
+    for i in range(60):
+        store.create("u1", {"type": "single", "stem": f"题{i}",
+                            "options": ["A", "B"], "answer": 0})
+    t = SampleQuestionsTool(store, "u1")
+    out = json.loads(await t.run(t.Params(count=999)))
+    assert len(out) == 50
