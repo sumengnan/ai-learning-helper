@@ -13,11 +13,13 @@ def _tool(tmp_path, max_mb=25):
 async def test_save_text(tmp_path):
     tool, store = _tool(tmp_path)
     out = await tool.run(tool.Params(filename="note.md", content="# 标题"))
-    assert "已保存" in out
+    assert "已保存" in out.text
     lst = store.list("u1")
     assert len(lst) == 1 and lst[0]["filename"] == "note.md"
     assert lst[0]["content_type"] == "text/markdown"
-    assert f"〔下载ID:{lst[0]['id']}〕" in out          # 结果带机读下载 id，供聊天页渲染下载按钮
+    # 下载 id 只走 marker：供聊天页渲染下载按钮，且不会进模型上下文（模型抄进正文就露给用户了）
+    assert out.marker == f"〔下载ID:{lst[0]['id']}〕"
+    assert lst[0]["id"] not in out.text
 
 
 @pytest.mark.asyncio
@@ -25,7 +27,7 @@ async def test_save_base64_image(tmp_path):
     tool, store = _tool(tmp_path)
     b64 = base64.b64encode(b"\x89PNG\r\n\x1a\n fake png").decode()
     out = await tool.run(tool.Params(filename="chart.png", content=b64, encoding="base64"))
-    assert "已保存" in out
+    assert "已保存" in out.text
     assert store.list("u1")[0]["content_type"] == "image/png"   # mimetypes 识别
 
 

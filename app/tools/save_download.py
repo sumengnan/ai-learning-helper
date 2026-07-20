@@ -9,6 +9,7 @@ import os
 from pydantic import BaseModel
 
 from harness.tools.base import Tool
+from harness.types import ToolOutput
 
 from ..sources import strip_citations_outside_code, strip_step_markers
 
@@ -46,7 +47,7 @@ class SaveDownloadTool(Tool):
         self._max = max_bytes
         self._uid = user_id
 
-    async def run(self, params: "SaveDownloadTool.Params") -> str:
+    async def run(self, params: "SaveDownloadTool.Params") -> "str | ToolOutput":
         if params.encoding == "base64":
             try:
                 data = base64.b64decode(params.content, validate=True)
@@ -67,6 +68,9 @@ class SaveDownloadTool(Tool):
             return f"保存失败：超过 {self._max // (1024 * 1024)}MB 上限。"
         content_type = mimetypes.guess_type(params.filename)[0] or "application/octet-stream"
         rec = self._store.create(self._uid, params.filename, data, content_type)
-        # 末尾带机读标记〔下载ID:...〕：前端据此在该条消息下方渲染下载按钮（会剥离不展示给用户）
-        return (f"已保存到下载区：{rec['filename']}（{rec['size']} 字节）。"
-                f"〔下载ID:{rec['id']}〕")
+        # 末尾带机读标记〔下载ID:...〕：前端据此在该条消息下方渲染下载按钮（会剥离不展示给用户）。
+        # 走 marker 而非拼进 text——它不进模型上下文，模型看不见就不会把这串 id 抄进回复正文。
+        return ToolOutput(
+            text=(f"已保存到下载区：{rec['filename']}（{rec['size']} 字节），"
+                  f"用户可在该条消息下方点按钮下载。"),
+            marker=f"〔下载ID:{rec['id']}〕")
