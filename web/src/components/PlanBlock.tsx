@@ -252,8 +252,8 @@ export function PlanBlock({ text, live = false, stopped = false, status, subItem
             </AccordionSummary>
             <AccordionDetails sx={{ px: 0, pt: 0, pl: 2 }}>
               <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 0.25 }}>
-                {/* 编排器每步由一个通用「执行智能体」执行（无花名册角色名），
-                    用中文角色名替代内部 id executor:sN，避免向用户暴露黑话 */}
+                {/* 编排器每步由一个通用执行智能体执行（无花名册角色名）。徽章带上步骤 id：
+                    多步并行展开时，光看「执行智能体」分不清这段明细属于哪一步。 */}
                 <Chip label={`executor智能体:${s.id}`} size="small" color="secondary" variant="outlined"
                   sx={{ height: 16, "& .MuiChip-label": { px: 0.5, fontSize: 10, fontWeight: 700 } }} />
                 <Typography variant="caption" color="text.disabled">工具调用</Typography>

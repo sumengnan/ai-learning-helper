@@ -339,7 +339,8 @@ def test_orchestrator_reset_clears_streaming_partial(make_mock, monkeypatch):
 class VerifyTraceOrchestrator:
     """模拟编排器收尾时发的结构化留痕。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
-                  recent_dialogue="", force_simple=False, run_id=None):
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False,
+                  run_id=None):
         from harness.events import Progress, RunStarted, RunFinished
         from harness.types import Message, Role
         from app.orchestration.orchestrator import VERIFY_TRACE_KEY
@@ -384,6 +385,10 @@ def test_no_verify_trace_when_verify_off(make_mock, monkeypatch):
                   headers=h) as r:
         list(r.iter_lines())
     row = store._conn.execute(
-        "SELECT verify FROM conversation_messages WHERE conv_id=? AND role='assistant'"
+        "SELECT content, verify FROM conversation_messages WHERE conv_id=? AND role='assistant'"
         " ORDER BY seq DESC LIMIT 1", (cid,)).fetchone()
-    assert row and not row[0]
+    # 先确认这轮真的跑通了。只断言「verify 列为空」是恒真的：编排器调用崩掉（例如替身
+    # 少一个新 kwarg 导致 TypeError）时这轮什么都没写，照样满足——曾因此把一个真实
+    # 回归藏了整整一次合并。
+    assert row and row[0] == "答", "这轮没正常跑完，下面的断言不成立"
+    assert not row[1]

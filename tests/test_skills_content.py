@@ -57,17 +57,12 @@ def test_skill_does_not_instruct_asking_the_user(path: Path):
 
 _ROUTING_CASES = [
     # 用户实际说过的话 → 应命中的技能。
-    # 只覆盖 skills/ 下**现存**的技能；dev 的 4d50ee9 删过 4 个（study-plan / exam-prep /
-    # spaced-review / code-learning），增删技能时这张表要同步（下面有覆盖度断言兜着）。
+    # 只覆盖 skills/ 下**现存**的技能。dev 分两次删过 7 个（4d50ee9 与后续），下面的
+    # 覆盖度断言会强制这张表与实际技能保持同步——增删技能时它先红，不会悄悄失去保护。
     ("搜索最新的 AI 资讯，保存到知识库", "research-learning"),
     ("查一下最新进展", "research-learning"),
     ("帮我搜集最新资讯", "research-learning"),
-    ("整理这份资料，据此出题", "material-to-knowledge"),
-    ("把这份资料消化一下", "material-to-knowledge"),
-    ("讲讲我的错题", "wrong-answer-remediation"),
-    ("我哪里薄弱", "wrong-answer-remediation"),
-    ("什么是注意力机制", "concept-teaching"),
-    ("解释一下反向传播", "concept-teaching"),
+    ("联网查一下这个", "research-learning"),
 ]
 
 

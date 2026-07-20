@@ -171,6 +171,10 @@ describe("PlanBlock · 并行/依赖标注", () => {
   });
 });
 
+// 执行明细的锚点是这枚徽章。用它而不是「工具调用」等说明文字来断言：说明文字在别处也出现，
+// 匹配上了会让「不该有明细」的断言变得恒真——真坏了也不报。
+const EXEC_CHIP = /^executor智能体:/;
+
 describe("PlanBlock · 编排器计划步嵌套执行明细", () => {
   const plan = JSON.stringify([
     { id: "s1", title: "调研快排", status: "done" },
@@ -187,7 +191,8 @@ describe("PlanBlock · 编排器计划步嵌套执行明细", () => {
     // 顶部仍是计划步（总任务步骤）
     expect(screen.getAllByText("调研快排").length).toBeGreaterThanOrEqual(1);
     // 展开后：执行 agent、工具名、参数/结果都在 DOM（MUI Accordion 折叠时子节点仍挂载）
-    expect(screen.getByText("执行智能体")).toBeTruthy();
+    // 徽章带步骤 id，用户能看出这段明细属于第几步
+    expect(screen.getByText("executor智能体:s1")).toBeTruthy();
     expect(screen.getByText("web")).toBeTruthy();
     expect(screen.getByText("参数")).toBeTruthy();
     expect(screen.getByText("结果X")).toBeTruthy();
@@ -195,14 +200,14 @@ describe("PlanBlock · 编排器计划步嵌套执行明细", () => {
 
   it("无匹配明细的步（如 s2）不产生工具明细，仍是纯步骤行", () => {
     render(<PlanBlock text={plan} live={false} status="done" subItems={subItems} />);
-    // s2 没有 executor:s2 的明细 → 不出现「执行明细」小标
-    // s1 出现一次执行明细，s2 不出现（故总计恰好 1 处）
-    expect(screen.getAllByText("执行明细").length).toBe(1);
+    // s2 没有 executor:s2 的明细 → 不长出执行明细徽章
+    // s1 出现一次，s2 不出现（故总计恰好 1 处）
+    expect(screen.getAllByText(EXEC_CHIP).length).toBe(1);
   });
 
   it("无 subItems（ReAct 清单）→ 完全按纯行渲染，无展开", () => {
     render(<PlanBlock text={plan} live={false} status="done" />);
-    expect(screen.queryByText("执行明细")).toBeNull();
+    expect(screen.queryByText(EXEC_CHIP)).toBeNull();
   });
 });
 

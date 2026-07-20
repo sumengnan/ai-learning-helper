@@ -89,9 +89,12 @@ def test_skill_endpoints_require_auth(make_mock, tmp_path):
 def test_routes_absent_without_skill_registry(make_mock, tmp_path):
     """没配技能目录时不挂载这些路由（harness.skill_registry 为 None）。
 
-    不能断言 404：main.py 末尾有 SPA catch-all（GET /{full_path:path}），未注册的路径会落到
-    它并返回 index.html，状态码同样是 200。故改判「拿不到技能 JSON」。
+    判据不能只看 content-type：未注册的路径会落到 main.py 末尾的 SPA catch-all
+    （GET /{full_path:path}），而**测试环境没有前端构建产物**（web/dist/index.html 不存在），
+    catch-all 因此抛 404、由 FastAPI 以 JSON 返回错误——content-type 同样是 application/json。
+    真正该判的是「拿到的不是一份技能详情」。
     """
     c = _client(make_mock, tmp_path, with_skills=False)
     r = c.get("/api/skills/demo-skill", headers=_auth(c))
-    assert "application/json" not in r.headers.get("content-type", "")
+    body = r.json() if "application/json" in r.headers.get("content-type", "") else {}
+    assert "body" not in body and "description" not in body, "不该返回技能详情"
