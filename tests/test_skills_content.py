@@ -40,3 +40,38 @@ def test_study_plan_exports_stems_not_ids():
     text = (_SKILLS_DIR / "study-plan" / "SKILL.md").read_text(encoding="utf-8")
     assert "配套练习题的**题干**" in text, "导出计划表应配题干"
     assert "题目 id 绝不写进计划表或回答" in text, "缺少显式禁令"
+
+
+# ---------- 真实技能的路由：拿仓库里的 skills/ 跑，不用临时假数据 ----------
+
+_ROUTING_CASES = [
+    # 用户实际说过的话 → 应命中的技能
+    ("搜索最新的 AI 资讯，保存到知识库", "research-learning"),
+    ("查一下最新进展", "research-learning"),
+    ("帮我搜集最新资讯", "research-learning"),
+    ("整理这份资料，据此出题", "material-to-knowledge"),
+    ("把这份资料消化一下", "material-to-knowledge"),
+    ("帮我制定 7 天的 AI 学习计划", "study-plan"),
+    ("讲讲我的错题", "wrong-answer-remediation"),
+    ("什么是注意力机制", "concept-teaching"),
+    ("模考一次", "exam-prep"),
+    ("今天复习什么", "spaced-review"),
+    ("讲讲这段代码", "code-learning"),
+]
+
+
+@pytest.mark.parametrize("msg,want", _ROUTING_CASES, ids=[c[1] + "|" + c[0][:10]
+                                                          for c in _ROUTING_CASES])
+def test_real_skills_route_as_expected(msg, want):
+    """用仓库里真实的 skills/ 做路由回归。
+
+    触发词是纯子串匹配，改一个词就可能把别的技能的流量抢走——而这类回归在单元测试里
+    用临时假技能是测不出来的。这张表就是「哪句话该走哪个技能」的事实基准。
+    """
+    from harness.skills.matcher import SkillMatcher
+    from harness.skills.registry import SkillRegistry
+
+    m = SkillMatcher(SkillRegistry(str(_SKILLS_DIR)))
+    got = m.match(msg)
+    assert got is not None and got.name == want, \
+        f"「{msg}」命中 {got.name if got else '（无）'}，期望 {want}"
