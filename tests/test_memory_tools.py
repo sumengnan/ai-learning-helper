@@ -93,3 +93,49 @@ async def test_search_uses_default_k_when_k_omitted(mock_embedder):
     assert r.is_error is False
     # default_k=1 → 只有一行结果
     assert len([ln for ln in r.content.splitlines() if ln.strip()]) == 1
+
+
+# ---------- 检索条数下限 ----------
+
+async def test_knowledge_search_raises_tiny_k_to_floor(mock_embedder):
+    """回归：模型自作主张传 k=3，几条片段覆盖不住知识库，回答就变成「资料里没提到」。
+    光调默认值没用——显式传参会盖掉默认值，故设下限兜底。"""
+    mem = _mem(mock_embedder)
+    await mem.add_texts([f"AI 资料第 {i} 段" for i in range(30)], "knowledge")
+    reg = ToolRegistry(); reg.register(SearchKnowledgeTool(mem))
+    ex = ToolExecutor(reg)
+    r = await ex.execute(ToolCall(id="c1", name="search_knowledge",
+                                  arguments={"query": "AI", "k": 3}))
+    assert len([ln for ln in r.content.splitlines() if ln.strip()]) == 10
+
+
+async def test_knowledge_search_honours_larger_k(mock_embedder):
+    mem = _mem(mock_embedder)
+    await mem.add_texts([f"AI 资料第 {i} 段" for i in range(60)], "knowledge")
+    reg = ToolRegistry(); reg.register(SearchKnowledgeTool(mem))
+    ex = ToolExecutor(reg)
+    r = await ex.execute(ToolCall(id="c1", name="search_knowledge",
+                                  arguments={"query": "AI", "k": 40}))
+    assert len([ln for ln in r.content.splitlines() if ln.strip()]) == 40
+
+
+async def test_knowledge_search_caps_at_fifty(mock_embedder):
+    """上限防止把上下文撑爆。"""
+    mem = _mem(mock_embedder)
+    await mem.add_texts([f"AI 资料第 {i} 段" for i in range(80)], "knowledge")
+    reg = ToolRegistry(); reg.register(SearchKnowledgeTool(mem))
+    ex = ToolExecutor(reg)
+    r = await ex.execute(ToolCall(id="c1", name="search_knowledge",
+                                  arguments={"query": "AI", "k": 999}))
+    assert len([ln for ln in r.content.splitlines() if ln.strip()]) == 50
+
+
+async def test_memory_search_keeps_small_k(mock_embedder):
+    """记忆检索不设下限：它是 AI 自己记的零散条目，不是作答依据，多取无益。"""
+    mem = _mem(mock_embedder)
+    await mem.add_texts([f"偏好 {i}" for i in range(20)], "memory")
+    reg = ToolRegistry(); reg.register(SearchMemoryTool(mem))
+    ex = ToolExecutor(reg)
+    r = await ex.execute(ToolCall(id="c1", name="search_memory",
+                                  arguments={"query": "偏好", "k": 3}))
+    assert len([ln for ln in r.content.splitlines() if ln.strip()]) == 3
