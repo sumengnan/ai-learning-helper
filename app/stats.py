@@ -37,8 +37,8 @@ _CN_TZ = timezone(timedelta(hours=8))
 _ABILITY_GROUPS: list[tuple[str, str, set[str]]] = [
     ("🌐", "联网查资料", {"http_request", "browse"}),
     ("💻", "运行代码", {"run_shell", "run_python", "run_java", "run_node"}),
-    ("🧠", "记住你的偏好", {"remember", "recall_episodes"}),
-    ("🔍", "检索长期记忆", {"search_memory"}),
+    ("🧠", "记住你的偏好", {"remember", "recall_episodes", "search_memory"}),
+    ("🔍", "检索知识库", {"search_knowledge"}),
     ("🧩", "拆解复杂任务", {"dispatch"}),
     ("✍️", "生成文件产物", {"write_file", "save_download"}),
     ("✏️", "出练习题", {"sample_questions"}),

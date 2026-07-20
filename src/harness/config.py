@@ -84,7 +84,7 @@ class HarnessConfig(BaseSettings):
     retrieval_multi_query_n: int = 3
     retrieval_query_plan_timeout_s: float = 2.0  # 规划 LLM 超时（首字关键路径，超时即降级）
     # 精排（rerank）：默认关=维持现状（NoOpReranker）。开启且配了端点+模型才生效，
-    # 全局作用于所有检索路径（知识库/题库/对话记忆/search_memory）。端点须为
+    # 全局作用于所有检索路径（知识库/题库/对话记忆/长期记忆）。端点须为
     # OpenAI/Cohere/Jina 兼容的 POST {base}/rerank。失败自动降级为原序，不打断检索。
     enable_rerank: bool = False
     rerank_style: str = "openai"         # openai（Cohere/Jina/SiliconFlow 兼容）| dashscope（千问 qwen）

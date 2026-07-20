@@ -258,11 +258,11 @@ class AnswerVerifier:
             def _live(entries):
                 return [g["content"] for g in entries if not g.get("is_error")
                         and g.get("content") and _NO_HIT not in g["content"]]
-            kb = _live([g for g in grounding if g.get("tool") == "search_memory"])
+            kb = _live([g for g in grounding if g.get("tool") == "search_knowledge"])
             web = _live([g for g in grounding
-                         if g.get("retrieval") and g.get("tool") != "search_memory"])
+                         if g.get("retrieval") and g.get("tool") != "search_knowledge"])
             # 本轮经 read_attachment/read_file 读入的文档正文：整理成笔记/总结时模型据以作答的
-            # 依据，也纳入核查资料——否则「整理知识库成笔记」会因笔记内容不在本轮 top-k search_memory
+            # 依据，也纳入核查资料——否则「整理知识库成笔记」会因笔记内容不在本轮 top-k search_knowledge
             # 片段里而被误判缺依据。不带 retrieval 标记，故不单独触发 grounding，仅在本轮另有知识库
             # 命中时作为核查上下文。
             docs = _live([g for g in grounding

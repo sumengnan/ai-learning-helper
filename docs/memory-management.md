@@ -88,8 +88,9 @@
 
 | 工具 | 作用 |
 | --- | --- |
-| `remember` | 把一段信息写入 AI 的私有长期记忆 |
-| `search_memory` | 在长期记忆/知识库里检索相关内容 |
+| `remember` | 把一段信息写入 AI 的私有长期记忆(`memory:<用户>`) |
+| `search_memory` | 检索 AI 自己记下的长期记忆,**不含**用户知识库 |
+| `search_knowledge` | 检索用户知识库(上传/保存的资料),作答时可引用的依据 |
 | `record_episode` | 记录一次任务的经验(做法/教训与成败) |
 | `recall_episodes` | 检索过往相似任务的经验来参考 |
 
@@ -97,8 +98,11 @@
 
 - 底层是 **SQLite + sqlite-vec 向量检索**,默认存在 `memory.db`。
 - 每条记忆带 `owner_id`(归属谁)和 `kind`(哪类集合),据此隔离:
-  用户 A 的知识库(`knowledge:<用户A>`)、某会话的对话记忆(`conversation:<会话id>`)、
-  任务经验(`episodes`)互不串扰。
+  用户 A 的知识库(`knowledge:<用户A>`)、AI 对该用户的私有记忆(`memory:<用户A>`)、
+  某会话的对话记忆(`conversation:<会话id>`)、任务经验(`episodes`)互不串扰。
+- 其中**知识库与私有记忆是两个独立 scope**,对应两个独立工具:`search_knowledge` 只查前者,
+  `search_memory` 只查后者。资料引用与 AI 自记的偏好因此不会互相污染,交付门的 grounding
+  校验也只认知识库命中(AI 自己记的东西不构成事实依据)。
 - 文字入库前会**切块(chunk)**:长文按大小切成若干块分别向量化;表格/代码块在硬上限内尽量整块保留。
 
 ## 常用配置

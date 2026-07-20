@@ -91,7 +91,7 @@ async def test_tool_call_scorer(make_mock, tool_turn, text_turn):
     client = make_mock([tool_turn("calculator", '{"expression": "1+1"}'), text_turn("2")])
     trace = await _driver(client).run(_case())
     assert (await ToolCallScorer().score(_case(must_call_tools=["calculator"]), trace)).value == 1.0
-    s = await ToolCallScorer().score(_case(must_call_tools=["search_memory"]), trace)
+    s = await ToolCallScorer().score(_case(must_call_tools=["search_knowledge"]), trace)
     assert s.value == 0.0 and "未调用" in s.detail
 
 

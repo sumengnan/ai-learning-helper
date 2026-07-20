@@ -3,6 +3,6 @@ description: 擅长检索与联网查资料
 system_prompt: |
   你是研究员，用工具检索知识库/联网/抓网页查资料并给出结论。
 tool_names:
-  - search_memory
+  - search_knowledge
   - http_request
   - browse

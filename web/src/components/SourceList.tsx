@@ -25,7 +25,9 @@ const META: Record<SourceType, { name: string; color: ChipProps["color"];
   web: { name: "网络", color: "info", Icon: PublicIcon },
   question: { name: "题库", color: "secondary", Icon: QuizIcon },
   attachment: { name: "附件", color: "warning", Icon: AttachFileIcon },
-  memory: { name: "对话记忆", color: "success", Icon: HistoryIcon },
+  // 涵盖 AI 的长期记忆与历史经验片段；不叫「对话记忆」是因为真正的对话记忆走上下文
+  // 自动注入、不产生来源条目，用那个名字会指向一个用户点不到的东西。
+  memory: { name: "AI 记忆", color: "success", Icon: HistoryIcon },
   code: { name: "沙箱执行", color: "default", Icon: TerminalIcon },
   mcp: { name: "MCP", color: "secondary", Icon: ExtensionIcon },
 };

@@ -51,14 +51,14 @@ async def test_grounding_fail_when_unsupported():
     complete = _fake_complete({"事实核查": {"grounded": False, "feedback": "X 无依据"},
                                "质检": {"score": 95, "feedback": ""}})
     v = AnswerVerifier(complete, _cfg(gate_check_code=False))
-    grounding = [{"tool": "search_memory", "content": "[1]（来源：a）光合作用相关资料", "is_error": False}]
+    grounding = [{"tool": "search_knowledge", "content": "[1]（来源：a）光合作用相关资料", "is_error": False}]
     verdict = await v.verify("问", "答案含臆造论断。", grounding, None)
     assert verdict.ok is False and "grounding" in verdict.failed
     assert "无依据" in verdict.critique
 
 
 async def test_grounding_skipped_when_no_retrieval():
-    # 本轮没有 search_memory 命中 → grounding 跳过（N/A 视为通过）
+    # 本轮没有 search_knowledge 命中 → grounding 跳过（N/A 视为通过）
     complete = _fake_complete({"事实核查": {"grounded": False, "feedback": "不该被调用"},
                                "质检": {"score": 95, "feedback": ""}})
     v = AnswerVerifier(complete, _cfg(gate_check_code=False))
@@ -79,7 +79,7 @@ async def test_grounding_includes_web_retrieval_context():
 
     v = AnswerVerifier(complete, _cfg(gate_check_code=False))
     grounding = [
-        {"tool": "search_memory", "content": "知识库：光合作用发生在叶绿体",
+        {"tool": "search_knowledge", "content": "知识库：光合作用发生在叶绿体",
          "is_error": False, "retrieval": True},
         {"tool": "mcp__websearch__bailian_web_search",
          "content": "联网：2026 年 Spring AI 发布 2.0", "is_error": False, "retrieval": True},
@@ -102,7 +102,7 @@ async def test_grounding_includes_read_document_context():
 
     v = AnswerVerifier(complete, _cfg(gate_check_code=False))
     grounding = [
-        {"tool": "search_memory", "content": "知识库片段：光合作用", "is_error": False, "retrieval": True},
+        {"tool": "search_knowledge", "content": "知识库片段：光合作用", "is_error": False, "retrieval": True},
         {"tool": "read_attachment", "content": "文档正文：叶绿体是光合作用的场所", "is_error": False},
     ]
     verdict = await v.verify("问", "整理的笔记内容。", grounding, None)
@@ -126,7 +126,7 @@ async def test_grounding_skipped_on_no_hit_sentinel():
     complete = _fake_complete({"事实核查": {"grounded": False, "feedback": "不该被调用"},
                                "质检": {"score": 95, "feedback": ""}})
     v = AnswerVerifier(complete, _cfg(gate_check_code=False))
-    grounding = [{"tool": "search_memory", "content": "（未在知识库中检索到相关内容）", "is_error": False}]
+    grounding = [{"tool": "search_knowledge", "content": "（未在知识库中检索到相关内容）", "is_error": False}]
     verdict = await v.verify("问", "答", grounding, None)
     assert verdict.ok is True
 
@@ -261,7 +261,7 @@ async def test_grounding_unsupported_listed_in_critique():
         "事实核查": {"grounded": False, "unsupported": ["地球是平的", "水往高处流"], "feedback": ""},
         "质检": {"score": 95}})
     v = AnswerVerifier(complete, _cfg(gate_check_code=False))
-    grounding = [{"tool": "search_memory", "content": "[1] 资料", "is_error": False}]
+    grounding = [{"tool": "search_knowledge", "content": "[1] 资料", "is_error": False}]
     verdict = await v.verify("问", "答", grounding, None)
     assert "grounding" in verdict.failed and "地球是平的" in verdict.critique
 
@@ -347,7 +347,7 @@ async def test_facts_still_passes_on_infra_flake():
 
 async def test_trajectory_judge_parses_scores():
     complete = _fake_complete({"过程质检": {"plan": 80, "steps": 70, "final": 90, "feedback": "不错"}})
-    s = await TrajectoryJudge(complete, _cfg()).score("问", "拆分", "✓ search_memory", "答案")
+    s = await TrajectoryJudge(complete, _cfg()).score("问", "拆分", "✓ search_knowledge", "答案")
     assert (s.plan, s.steps, s.final, s.feedback) == (80, 70, 90, "不错")
 
 

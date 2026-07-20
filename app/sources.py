@@ -80,7 +80,7 @@ def _no_real_content(result: str) -> bool:
 
 # ---- 各工具的来源 builder：入参 (args, result)，出参 dict|None（不含 index）----
 
-def _b_search_memory(args: dict, result: str) -> dict | None:
+def _b_search_knowledge(args: dict, result: str) -> dict | None:
     if not result or result.startswith("（未在知识库"):
         return None
     files: list[str] = []
@@ -170,6 +170,14 @@ def _b_recall_episodes(args: dict, result: str) -> dict | None:
     return {"type": "memory", "label": "历史经验片段"}
 
 
+def _b_search_memory(args: dict, result: str) -> dict | None:
+    """AI 自己记下的长期记忆。与知识库同为「检索到的东西」，但不是可引用的资料来源，
+    故归 type=memory（前端另一种配色/图标），不与 knowledge 混淆。"""
+    if not result or result.startswith("（未检索到相关的长期记忆"):
+        return None
+    return {"type": "memory", "label": "长期记忆"}
+
+
 _CODE_LABEL = {"run_python": "Python 代码执行",
                "run_node": "Node 代码执行",
                "run_java": "Java 代码执行"}
@@ -183,6 +191,7 @@ def _b_code(tool_name: str):
 
 
 _BUILDERS = {
+    "search_knowledge": _b_search_knowledge,
     "search_memory": _b_search_memory,
     "browse": _b_browse,
     "http_request": _b_http,
