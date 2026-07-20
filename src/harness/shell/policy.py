@@ -22,6 +22,12 @@ class Danger:
 _RULES: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"\brm\s+(?:-\w*[rf]\w*\s+)+"), "rm -rf", "递归/强制删除文件"),
     (re.compile(r"\brm\s+[^|;&]*(?:\s/\s*$|\s/\s|~|\*)"), "rm 危险目标", "删除根目录/家目录/通配目标"),
+    # 兜底：任何 rm 调用都要人工确认，不止上面那两种危险形态——`rm 某文件` 一样是不可逆的
+    # 删除。放在两条专用规则之后，让 `rm -rf /` 仍报更具体的理由。
+    # 前缀 [;&|/] 是为了堵两个绕过：管道/串联后的 `... ; rm x`，以及绝对路径 `/bin/rm x`。
+    # 刻意不匹配 `-` 前缀，故 `docker run --rm` 不会误报；结尾用 (?:\s|$) 才能接住
+    # `find . | xargs rm` 这种 rm 位于命令末尾的写法。
+    (re.compile(r"(?:^|[;&|/]|\s)rm(?:\s|$)"), "rm", "删除文件"),
     (re.compile(r"\bmkfs(?:\.\w+)?\b"), "mkfs", "格式化文件系统"),
     (re.compile(r"\bdd\b[^|;&]*\bof=/dev/"), "dd->设备", "直写块设备"),
     (re.compile(r">\s*/dev/(?:sd|nvme|hd|xvd)"), "写块设备", "覆盖磁盘设备"),
