@@ -117,8 +117,18 @@ def _doc_text(candidate) -> str:
     return candidate if isinstance(candidate, str) else str(candidate)
 
 
+RERANK_SCORE_KEY = "rerank"
+
+
 def _reorder(candidates: list, results: list) -> list:
-    """按 results 的 relevance_score 降序重排：命中的排前，未命中的按原序接尾（不丢候选）。"""
+    """按 results 的 relevance_score 降序重排：命中的排前，未命中的按原序接尾（不丢候选）。
+
+    顺带把分数记进 candidate.components[RERANK_SCORE_KEY]。这个分是整条检索链上**唯一**
+    的绝对相关性信号：RRF 只用排名、_minmax 又在候选集内归一化（最好的那条永远得 1.0），
+    绝对相似度到打分阶段已经荡然无存。早先这里把 relevance_score 用完即弃，于是
+    「查厨具」在一个只有 AI 资料的知识库里也能返回满满一屏——没有任何一处能说出
+    「都不够相关」。留下它，供 Retriever 按下限过滤（见 RetrievalConfig.rerank_min_score）。
+    """
     scored: list[tuple[int, float]] = []
     for r in results:
         idx = r.get("index")
@@ -126,6 +136,10 @@ def _reorder(candidates: list, results: list) -> list:
             scored.append((idx, r.get("relevance_score", 0.0)))
     if not scored:                        # 端点未给可用结果 → 原序
         return candidates
+    for idx, s in scored:
+        comp = getattr(candidates[idx], "components", None)
+        if isinstance(comp, dict):
+            comp[RERANK_SCORE_KEY] = s
     scored.sort(key=lambda t: t[1], reverse=True)
     seen = {idx for idx, _ in scored}
     ordered = [candidates[idx] for idx, _ in scored]

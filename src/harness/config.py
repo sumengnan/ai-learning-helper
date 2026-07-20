@@ -93,6 +93,12 @@ class HarnessConfig(BaseSettings):
     rerank_model: str = ""               # 如 BAAI/bge-reranker-v2-m3 或 qwen3-rerank
     rerank_timeout: float = 30.0
     rerank_top_n: int = 0                # 0=送全部候选精排；>0 只精排前 N（省调用成本）
+    # 相关性下限：精排分低于它的候选直接丢弃（0=关闭）。这是整条检索链上唯一的绝对相关性
+    # 信号——RRF 只看排名、加权前又做了候选集内 min-max 归一化（最好的那条永远得 1.0），
+    # 所以不靠它就没有任何一处能表达「都不够相关」，小知识库会被任意 query 整个倒出来。
+    # 量纲随精排模型而变（[0,1] 概率 vs 未归一化 logit），故默认关闭，按实测配置。
+    # qwen3-rerank 实测：无关 query 最高 0.26，相关 query 最低 0.43 → 0.35 落在间隔中央。
+    rerank_min_score: float = 0.0
     # 容器沙箱
     sandbox_backend: str = "local"          # local | docker
     sandbox_docker_host: str = ""           # tcp://host:2376（Docker daemon 的 TLS 端口）

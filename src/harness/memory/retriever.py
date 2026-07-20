@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 from .query_planner import QueryPlanner
 from .record import MemoryFilter, MemoryRecord
+from .reranker import RERANK_SCORE_KEY
 
 log = logging.getLogger("harness.memory.retriever")
 
@@ -80,6 +81,10 @@ class RetrievalConfig:
     use_hyde: bool = False
     multi_query_n: int = 3
     query_plan_timeout_s: float = 2.0
+    # 相关性下限：精排分低于它的候选直接丢弃（<=0 关闭）。默认关闭——分数的量纲由具体
+    # 精排模型决定（有的输出 [0,1] 概率，有的是未归一化 logit），跨模型套同一个数只会
+    # 误伤。装了校准过的精排模型再按实测开启，见 docs/rag-retrieval.md。
+    rerank_min_score: float = 0.0
 
 
 def _age_days(created_at_iso: str, now: datetime) -> float:
@@ -188,8 +193,20 @@ class Retriever:
         hits = [ScoredHit(record=records[i], score=scored[i][0], components=scored[i][1])
                 for i in order]
         hits = await self._reranker.rerank(query_text, hits)
-        log.info("检索 query=%d字 路数=%d 候选=%d 返回=%d 增强(改写=%d hyde=%s 实体=%d) 耗时%dms",
-                 len(query_text or ""), len(ranked_lists), len(records), min(k, len(hits)),
+        dropped = 0
+        if cfg.rerank_min_score > 0:
+            # 只筛「精排真给过分」的候选：端点故障时 rerank 降级为原序返回、components 里
+            # 没有分数，此时一条都不该丢——宁可放行不相关的，也不能因精排挂了就把知识库
+            # 整个判空，那会让用户以为资料没存进去。
+            kept = [h for h in hits
+                    if h.components.get(RERANK_SCORE_KEY) is None
+                    or h.components[RERANK_SCORE_KEY] >= cfg.rerank_min_score]
+            dropped = len(hits) - len(kept)
+            hits = kept
+        log.info("检索 query=%d字 路数=%d 候选=%d 低相关丢弃=%d 返回=%d "
+                 "增强(改写=%d hyde=%s 实体=%d) 耗时%dms",
+                 len(query_text or ""), len(ranked_lists), len(records), dropped,
+                 min(k, len(hits)),
                  len(plan.variants), bool(plan.hypothetical), len(plan.entity_keys),
                  round((time.time() - _t0) * 1000))
         return hits[:k]
