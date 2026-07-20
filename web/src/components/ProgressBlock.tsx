@@ -165,9 +165,10 @@ export function ProgressBlock({ title, kind, items, status }: {
                 {p.text}
                 {stopped && i === rows.length - 1 && lastCancelled ? "（已取消）" : ""}
               </Typography>
+              {/* ml:auto 把展开箭头顶到行尾，与外层 CollapsibleBlock 头部的箭头对齐成一列 */}
               {skill ? (expanded
-                ? <ExpandLessIcon sx={{ fontSize: 14, color: "text.disabled" }} />
-                : <ExpandMoreIcon sx={{ fontSize: 14, color: "text.disabled" }} />) : null}
+                ? <ExpandLessIcon sx={{ fontSize: 14, color: "text.disabled", ml: "auto", flexShrink: 0 }} />
+                : <ExpandMoreIcon sx={{ fontSize: 14, color: "text.disabled", ml: "auto", flexShrink: 0 }} />) : null}
             </Box>
             {expanded ? <SkillDetail name={skill!} /> : null}
           </Box>
