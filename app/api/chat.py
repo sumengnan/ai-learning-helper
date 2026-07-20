@@ -883,6 +883,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     parts.append(ev.text)
                     if len(parts) % 25 == 0:   # 去抖 flush：仅为服务重启后能看到断点前部分
                         store.flush_partial(req.conversation_id, turn_run_id, "".join(parts))
+                # 编排器校验未过、重答前会发 scope=reset 让前端清屏（考试轮）：落库缓冲必须
+                # 跟着清，否则最终存的是「被否那版 + 新版」的拼接，与用户屏幕所见不一致。
+                # 交付门那条路径由调用方自己 clear（见下方 gate 分支），此处只管编排器发的。
+                elif isinstance(ev, Progress) and ev.scope == "reset":
+                    parts.clear()
+                    store.flush_partial(req.conversation_id, turn_run_id, "")
                 return ev
 
             def _emit_verify(text, status=None, key=None):

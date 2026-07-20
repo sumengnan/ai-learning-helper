@@ -285,3 +285,50 @@ def test_approval_required_reaches_sse_on_orchestrator_path(make_mock, monkeypat
     # 无人应答 → 超时自动拒绝，而不是放行
     fin = next(e for e in events if e["type"] == "RunFinished")
     assert fin["data"]["message"]["content"] == "approved=False"
+
+
+class RedoOrchestrator:
+    """模拟考试轮校验未过 → 清屏重答。两版都发够 25+ 个 TextDelta，以触发去抖 flush_partial。"""
+    async def run(self, message, verify=True, *, context=None, registry=None,
+                  recent_dialogue="", force_simple=False, run_id=None):
+        from harness.events import RunStarted, Progress, TextDelta, RunFinished
+        from harness.types import Message, Role
+        yield RunStarted(run_id="r1")
+        for _ in range(30):
+            yield TextDelta(text="甲")
+        yield Progress("verify", "结果校验中…", status="running")
+        yield Progress("verify", "判定与系统结论相反", status="error")
+        yield Progress("reset", "")
+        for _ in range(30):
+            yield TextDelta(text="乙")
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content="乙" * 30))
+
+
+def test_orchestrator_reset_clears_streaming_partial(make_mock, monkeypatch):
+    """编排器发 scope=reset 后，写进 streaming 占位的文本不得再含被否那版。
+
+    最终态由 RunFinished 决定，与本条无关；本条锁的是**在途中间态**：flush_partial 每 25 个
+    TextDelta 写一次库，用户在重答期间刷新（或服务重启对账）读到的就是它。不清缓冲写出去的
+    就是「第一版 + 第二版」的拼接——而前端已按 reset 把屏幕清成只有第二版，两边对不上。
+
+    直接监视 flush_partial 的调用序列：TestClient 的 SSE 消费与后台任务不是真并发，
+    轮到测试查库时该轮早已收尾，中间态只能这样捕获。
+    """
+    c, store = _client(make_mock, monkeypatch, orchestrator=RedoOrchestrator())
+    writes = []
+    orig = store.flush_partial
+
+    def spy(conv_id, run_id, content):
+        writes.append(content)
+        return orig(conv_id, run_id, content)
+
+    store.flush_partial = spy
+    h = _auth(c)
+    cid, _events = _chat(c, h)
+
+    assert any("甲" in w for w in writes), "第一版本就该在途落过盘（否则用例没打到点上）"
+    assert "" in writes, "reset 应触发一次清空写入"
+    assert not any("甲" in w and "乙" in w for w in writes), (
+        f"写出了两版拼接的在途文本：{[w for w in writes if '甲' in w and '乙' in w][:1]}")
+    # 清空之后再没写回过第一版
+    assert "甲" not in (writes[-1] or "")

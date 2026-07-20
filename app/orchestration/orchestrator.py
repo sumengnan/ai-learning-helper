@@ -33,7 +33,7 @@ from harness.types import Message, Role
 from .critic import Critic
 from .executor import CLARIFY_GUIDE, Executor, HidingRegistry, StepArtifact
 from .planner import Planner, PlannerError, render_tool_roster
-from .plan import _KB_REQUESTED_RE, Artifact, Plan, has_pending, ready_steps
+from .plan import _KB_REQUESTED_RE, Artifact, Plan, PlanStep, has_pending, ready_steps
 from .usage_ctx import (
     UsageAcc, record_usage, reset_acc, reset_reason_sink, set_acc, set_reason_sink,
 )
@@ -61,6 +61,27 @@ def _obvious_simple(message: str) -> bool:
     """启发式短路：纯寒暄/致谢/短应答无需 LLM triage。高精度优先，宁可漏判（回退 LLM）不可误判。"""
     m = (message or "").strip()
     return bool(m) and len(m) <= 20 and _GREETING_RE.match(m) is not None
+
+
+def _one_step_plan(goal: str, answer: str) -> tuple[Plan, dict]:
+    """把简单直答的一问一答包成单步计划 + 产出，好喂给按多步设计的 Critic.review。
+
+    review 只拿 plan 渲染一份「[id] description：summary」清单（见 critic._review_user），
+    单步同样成立——无需为此另造一套评审接口。
+    """
+    step = PlanStep(id="1", description=goal, expected="直接答复用户", status="done")
+    return Plan(goal=goal, steps=[step]), {"1": Artifact(summary=answer)}
+
+
+def _redo_message(message: str, feedback: str) -> str:
+    """重答指令：带上 Critic 的具体意见，并说明无需再调工具。
+
+    考试轮所需的一切（判定结论、正确答案、解析、下一题题面）都在上下文的
+    「[考试系统判定]…」提示里，重答只是重新组织文字。
+    """
+    return (f"{message}\n\n[结果校验] 你上一版答复未通过校验：{feedback or '未说明原因'}。"
+            f"请针对该问题重新完整作答。所需信息上文均已给出，据此重新组织即可，"
+            f"本次无需调用任何工具。")
 
 SYNTH_SYSTEM = (
     "你是汇总员。根据用户目标和各步骤的产出，写出面向用户的最终答复。"
@@ -204,6 +225,53 @@ class Orchestrator:
                 continue
             yield ev
 
+    async def _simple_answer_verified(self, message: str, budget=None, *, context=None,
+                                      registry=None, skill_hint: str = ""):
+        """带终局校验的简单直答。用于考试轮（force_simple + 前端结果校验开）。
+
+        与多步路径的区别是**不重规划**：考试是有状态流程，重新拆解会打乱逐题推进。
+        校验不过就地重答一次，且重答给空工具表——考试轮的原料（判定结论、正确答案、
+        解析、下一题题面）已由服务端在「[考试系统判定]…」提示里给全，模型只需重新
+        组织文字；留着工具反而可能让它再调一次 start_exam，把考试进度整个重置。
+
+        第一版的 RunFinished 必须压住不发：它是终结信号，先发出去前端立刻标「已完成」，
+        而这一版随时可能被重答顶掉（与交付门 passthrough=False 的处理同理）。
+        """
+        draft, finished_ev = "", None
+        async for ev in self._simple_answer(message, budget, context=context,
+                                            registry=registry, prefer_main=True,
+                                            skill_hint=skill_hint):
+            if isinstance(ev, TextDelta):
+                draft += ev.text
+            if isinstance(ev, RunFinished):
+                finished_ev = ev          # 压住，等校验有结论再决定发不发
+                continue
+            yield ev
+
+        if not draft.strip():             # 空产出：没什么可校验的，原样收尾
+            if finished_ev is not None:
+                yield finished_ev
+            return
+
+        yield Progress(scope="verify", text="结果校验中…", status="running")
+        plan, arts = _one_step_plan(message, draft)
+        review = await self._critic.review(message, plan, arts)
+        if review.accept:
+            yield Progress(scope="verify", text="结果校验通过", status="ok")
+            if finished_ev is not None:
+                yield finished_ev
+            return
+
+        yield Progress(scope="verify",
+                       text=review.feedback or "存在缺口，重答一次", status="error")
+        # 清屏：第一版已逐字流给用户，重答前清空，让新版从头打字机输出。
+        # chat 路由据此同步清掉落库缓冲，否则最终落库的是「被否那版 + 新版」的拼接。
+        yield Progress(scope="reset", text="")
+        async for ev in self._simple_answer(_redo_message(message, review.feedback),
+                                            budget, context=context,
+                                            registry=ToolRegistry(), prefer_main=True):
+            yield ev
+
     # ---- synthesize ----
     async def _synthesize(self, goal: str, artifacts: dict[str, Artifact], recent_dialogue: str = ""):
         """流式汇总最终答复。yield TextDelta（run() 累加得最终文本）+ ReasoningDelta（开思考模式时
@@ -294,10 +362,22 @@ class Orchestrator:
             exec_reg = HidingRegistry(registry, _hidden) if registry is not None else None
 
             if force_simple or _obvious_simple(user_message) or await self._is_simple(user_message):
-                async for ev in self._simple_answer(user_message, budget, context=context,
-                                                    registry=registry, prefer_main=force_simple,
-                                                    skill_hint=skill_hint):
-                    yield ev
+                # 考试轮（force_simple）且开了结果校验 → 补一道终局校验 + 就地重答。
+                # 判分/错题入库/游标推进都是服务端确定性完成的，模型只负责讲解与呈现下一题；
+                # 讲解讲错（判定说反、漏告知「已存入错题集」、篡改下一题）此前无人兜底。
+                # 其余简单轮维持原样：校验寒暄没有意义，且每轮多一次主模型往返会显著拖慢
+                # 最快的那条路径。
+                if force_simple and verify:
+                    async for ev in self._simple_answer_verified(
+                            user_message, budget, context=context, registry=registry,
+                            skill_hint=skill_hint):
+                        yield ev
+                else:
+                    async for ev in self._simple_answer(user_message, budget, context=context,
+                                                        registry=registry,
+                                                        prefer_main=force_simple,
+                                                        skill_hint=skill_hint):
+                        yield ev
                 return
 
             # 规划器必须看到执行子步真正拿得到的那份工具视图（exec_reg，非裸 registry）：
