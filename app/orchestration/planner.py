@@ -137,17 +137,17 @@ class Planner:
                    tools_desc: str = "") -> Plan:
         # skill_hint 保持位置参数（dev 的技能路由按位置传），tools_desc 只收关键字
         steps = await self._generate(
-            PLANNER_SYSTEM, _plan_user(goal, recent_dialogue, tools_desc, skill_hint))
+            PLANNER_SYSTEM, _plan_user(goal, recent_dialogue, tools_desc, skill_hint), goal)
         return Plan(goal=goal, steps=steps, version=1)
 
     async def replan(self, goal: str, plan: Plan, feedback: str, skill_hint: str = "", *,
                      tools_desc: str = "") -> Plan:
         done = [s for s in plan.steps if s.status == "done"]
         steps = await self._generate(
-            PLANNER_SYSTEM, _replan_user(goal, done, feedback, tools_desc, skill_hint))
+            PLANNER_SYSTEM, _replan_user(goal, done, feedback, tools_desc, skill_hint), goal)
         return Plan(goal=goal, steps=steps, version=plan.version + 1)
 
-    async def _generate(self, system: str, user: str) -> list[PlanStep]:
+    async def _generate(self, system: str, user: str, goal: str = "") -> list[PlanStep]:
         last_err = ""
         for _ in range(self._max_retries + 1):
             u = user if not last_err else f"{user}\n\n上次输出无效：{last_err}。请修正后重新输出。"
@@ -157,7 +157,8 @@ class Planner:
             except Exception as e:  # 解析/schema/网络任一失败 → 记错重试
                 last_err = str(e)[:200]
                 continue
-            err = validate_plan(steps)
+            # 传 goal：「未经要求写入知识库」这条约束要看用户到底要没要求过
+            err = validate_plan(steps, goal)
             if err is None:
                 return steps
             last_err = err

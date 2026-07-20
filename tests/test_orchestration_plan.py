@@ -130,3 +130,39 @@ def test_ask_user_detected_in_expected_field_too():
     """有的模型把提问藏在 expected 里（description 写得中性）。"""
     steps = [PlanStep(id="s1", description="明确学习目标", expected="询问用户后得到的目标说明")]
     assert validate_plan(steps) is not None
+
+
+# ---------- 未经要求不得写入知识库 ----------
+
+def test_rejects_unrequested_knowledge_write():
+    """回归：用户只说「制定 7 天 AI 学习计划」，计划却加了「将学习计划存入用户知识库」。
+    知识库是用户自己整理的资料库，擅自写入会污染检索结果、事后还得手动清理。
+    （提示词层已有同义约束但兜不住，故在此做确定性拦截。）"""
+    steps = [PlanStep(id="s1", description="将学习计划内容存入用户知识库，以便后续检索和参考",
+                      expected="已入库")]
+    err = validate_plan(steps, "帮我制定一份 7 天的 AI 学习计划")
+    assert err is not None and "s1" in err
+    assert "并没有要求" in err and "污染" in err
+
+
+def test_allows_knowledge_write_when_user_asked():
+    steps = [PlanStep(id="s1", description="将整理好的资料存入知识库", expected="已入库")]
+    assert validate_plan(steps, "把这些资料存进知识库") is None
+    assert validate_plan(steps, "帮我收藏这份资料") is None
+
+
+@pytest.mark.parametrize("desc", [
+    "检索知识库中已有的 AI 发展相关资料",       # 读取，不是写入
+    "从用户知识库检索资料并整理成提纲",
+    "预先为各阶段出好配套练习题入库",           # 题库入库，与知识库无关
+    "save_download 导出一份 Markdown 计划表",  # 交付物，不是往资料库塞东西
+    "根据知识库资料撰写总结",
+])
+def test_allows_non_write_knowledge_steps(desc):
+    """反向护栏：不能见到「知识库」就拦——读取与交付都是正当步骤。"""
+    assert validate_plan([PlanStep(id="s1", description=desc, expected="x")], "写个总结") is None
+
+
+def test_knowledge_rule_checks_expected_field_too():
+    steps = [PlanStep(id="s1", description="整理内容", expected="内容已保存到知识库")]
+    assert validate_plan(steps, "帮我整理") is not None
