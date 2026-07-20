@@ -2,6 +2,8 @@
 """Planner：把用户目标拆成 DAG 计划。结构化 JSON 输出 + 落地即校验 + 有界重试。"""
 from __future__ import annotations
 
+import re
+
 from pydantic import BaseModel, ValidationError
 
 from app.verify import call_json
@@ -30,7 +32,8 @@ PLANNER_SYSTEM = (
     "供质检比对）、depends_on（依赖的子任务 id 列表，无依赖填 []）。\n"
     "能并行的子任务不要人为串联（depends_on 留空）；只有真正需要前一步产出时才建立依赖。\n"
     "【必须落在可用工具范围内】给出可用工具清单时，只能规划这些工具做得到的事，"
-    "需要动用工具的步骤要在 description 里点名该用哪个工具（写工具名）。"
+    "但 description 是给用户看的，要用自然语言说这一步做什么（如「联网搜索最新资料」），"
+    "不要写工具名或函数标识符（如 save_to_knowledge、mcp__websearch__xxx）。"
     "绝不要臆想本系统没有的外部产品或服务（如 Notion、Obsidian、邮箱、日历、第三方网盘）——"
     "用户说「保存到知识库」指的就是清单里的知识库保存工具，不是外部软件。"
     "若某件事清单里没有工具能做到，就不要把它排成步骤。\n"
@@ -52,6 +55,33 @@ def render_tool_roster(registry) -> str:
         head = desc.split("。")[0].split("\n")[0][:_ROSTER_DESC_MAX]
         lines.append(f"- {t.name}：{head}" if head else f"- {t.name}")
     return "\n".join(lines)
+
+
+_ROSTER_NAME_RE = re.compile(r"^- ([A-Za-z_][A-Za-z0-9_]*)", re.M)
+
+
+def roster_names(tools_desc: str) -> set[str]:
+    """从渲染好的工具清单里取回工具名，供净化步骤描述用。"""
+    return set(_ROSTER_NAME_RE.findall(tools_desc or ""))
+
+
+def strip_tool_names(text: str, names: set[str]) -> str:
+    """从步骤描述里抹掉工具标识符——description 会被前端「任务步骤」块直接渲染给用户。
+
+    提示词已要求模型别写工具名，但这是一道兜底：模型时灵时不灵，而漏出去的
+    `mcp__websearch__bailian_web_search` 对用户是纯噪声。除清单内的工具名外，
+    含 `__` 的标识符一律视为工具名（MCP 远程工具随时增删，未必在本次清单里）。
+    连同前面的「使用/调用/通过」一起去掉，避免留下「使用 搜索资讯」这种断句。
+    """
+    if not text:
+        return text
+    alts = [re.escape(n) for n in sorted(names, key=len, reverse=True)]
+    alts.append(r"[A-Za-z_][A-Za-z0-9_]*__[A-Za-z0-9_]+")
+    tool = f"(?:{'|'.join(alts)})"
+    # 先删整段括注（如「保存到知识库（使用 save_to_knowledge）」），再删正文中的提及
+    out = re.sub(rf"[（(][^）)]*{tool}[^）)]*[）)]", "", text)
+    out = re.sub(rf"(?:使用|调用|通过|用)?\s*{tool}\s*(?:工具)?\s*", "", out)
+    return re.sub(r"\s{2,}", " ", out).strip()
 
 
 def _plan_user(goal: str, recent_dialogue: str = "", tools_desc: str = "",
@@ -84,6 +114,16 @@ def _parse_steps(raw: dict) -> list[PlanStep]:
                      depends_on=list(s.depends_on)) for s in parsed.steps]
 
 
+def _scrub(steps: list[PlanStep], tools_desc: str) -> list[PlanStep]:
+    """净化步骤描述里的工具名。抹空了就保留原文——宁可漏一个工具名，不可给用户空步骤。"""
+    names = roster_names(tools_desc)
+    for s in steps:
+        cleaned = strip_tool_names(s.description, names)
+        if cleaned:
+            s.description = cleaned
+    return steps
+
+
 class Planner:
     def __init__(self, complete, *, max_retries: int = 2) -> None:
         self._complete = complete
@@ -94,14 +134,14 @@ class Planner:
         # skill_hint 保持位置参数（dev 的技能路由按位置传），tools_desc 只收关键字
         steps = await self._generate(
             PLANNER_SYSTEM, _plan_user(goal, recent_dialogue, tools_desc, skill_hint))
-        return Plan(goal=goal, steps=steps, version=1)
+        return Plan(goal=goal, steps=_scrub(steps, tools_desc), version=1)
 
     async def replan(self, goal: str, plan: Plan, feedback: str, *,
                      tools_desc: str = "") -> Plan:
         done = [s for s in plan.steps if s.status == "done"]
         steps = await self._generate(
             PLANNER_SYSTEM, _replan_user(goal, done, feedback, tools_desc))
-        return Plan(goal=goal, steps=steps, version=plan.version + 1)
+        return Plan(goal=goal, steps=_scrub(steps, tools_desc), version=plan.version + 1)
 
     async def _generate(self, system: str, user: str) -> list[PlanStep]:
         last_err = ""
