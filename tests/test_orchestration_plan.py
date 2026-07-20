@@ -1,3 +1,5 @@
+import pytest
+
 from app.orchestration.plan import (
     Artifact, PlanStep, Plan, validate_plan, ready_steps, has_pending,
 )
@@ -81,3 +83,50 @@ def test_has_pending_failed_and_skipped_are_false():
     # failed/skipped 是终态（非成功），不算 pending
     plan = Plan(goal="g", steps=[_step("s1", status="failed"), _step("s2", status="skipped")])
     assert not has_pending(plan)
+
+
+# ---------- 不得规划「问用户」步骤 ----------
+
+def test_rejects_ask_user_step():
+    """回归：计划一口气自主跑完，执行子步没有与用户对话的通道（工具表里没有任何提问工具）。
+    排「与用户沟通」这种步骤，它问不出来也等不到回答，只会拖垮后续步，最终交出
+    「信息不足，无法生成」——用户什么都没拿到。"""
+    steps = [PlanStep(id="s1", description="与用户沟通，了解学习目标、当前水平、每天可用时间",
+                      expected="用户的目标与水平"),
+             PlanStep(id="s2", description="拆解知识点", expected="知识点列表", depends_on=["s1"])]
+    err = validate_plan(steps)
+    assert err is not None
+    assert "s1" in err
+    assert "没有与用户对话的通道" in err
+    assert "按合理默认" in err     # 错误串会被拼进下一次提示，必须指导模型怎么改
+
+
+@pytest.mark.parametrize("desc", [
+    "与用户沟通，确认需求",
+    "询问用户的学习目标",
+    "请用户提供当前水平",
+    "等待用户回复后继续",
+    "收集用户需求",
+    "了解用户的当前水平",
+])
+def test_rejects_ask_user_variants(desc):
+    assert validate_plan([PlanStep(id="s1", description=desc, expected="x")]) is not None
+
+
+@pytest.mark.parametrize("desc", [
+    "为用户生成 5 道练习题",
+    "整理用户上传的资料并入库",
+    "检索用户知识库中的 AI 相关资料",
+    "根据用户目标拆解知识点",          # 「用户目标」是名词短语，不是提问动作
+    "把总结导出为用户可下载的文件",
+    "汇总各步产出，写出面向用户的最终答复",
+])
+def test_allows_legitimate_user_facing_steps(desc):
+    """反向护栏：正则必须收窄到「交互动词 + 用户」，不能见到「用户」就拦。"""
+    assert validate_plan([PlanStep(id="s1", description=desc, expected="x")]) is None
+
+
+def test_ask_user_detected_in_expected_field_too():
+    """有的模型把提问藏在 expected 里（description 写得中性）。"""
+    steps = [PlanStep(id="s1", description="明确学习目标", expected="询问用户后得到的目标说明")]
+    assert validate_plan(steps) is not None

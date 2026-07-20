@@ -429,7 +429,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                      verifier=None, attachment_store=None, run_manager=None,
                      knowledge_service=None, quiz_service=None,
                      profile_store=None, trajectory_judge=None,
-                     exam_session_store=None, url_block_store=None) -> APIRouter:
+                     exam_session_store=None, pending_store=None,
+                     url_block_store=None) -> APIRouter:
     router = APIRouter()
     # 简答题判分用 judge completer（考试判分中间件用；客观题不需要模型）
     from ..completion import build_judge_completer
@@ -570,7 +571,10 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             _reg(SampleQuestionsTool(question_store, user_id))
             _reg(AddQuestionsTool(question_store, user_id))
             _reg(ListQuestionsTool(question_store, user_id))
-            _reg(DeleteQuestionsTool(question_store, user_id))
+            # 传 pending_store：删除改为「登记待确认」，由用户在界面确认后经 API 执行。
+            # 执行子步没有与用户对话的通道，工具描述里那句「先取得确认」在此路径上
+            # 本就无法满足——只能把确认动作挪到界面上。
+            _reg(DeleteQuestionsTool(question_store, user_id, pending_store, conv_id))
             if quiz_service is not None:
                 _reg(GenerateQuestionsTool(quiz_service, user_id))
             # 考试激活时不暴露 save_wrong_answer：判分与保存已由服务端确定性完成，防重复入库
@@ -578,7 +582,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 _reg(SaveWrongAnswerTool(question_store, wrong_store, user_id))
         if wrong_store is not None:
             _reg(SampleWrongAnswersTool(wrong_store, user_id))
-            _reg(DeleteWrongAnswersTool(wrong_store, user_id))
+            _reg(DeleteWrongAnswersTool(wrong_store, user_id, pending_store, conv_id))
         # 服务端托管考试：模型用 start_exam 开考（题源题库/错题集/即席），开考后判分与保存全自动
         if exam_session_store is not None and (question_store is not None or wrong_store is not None):
             _reg(StartExamTool(exam_session_store, user_id, conv_id,

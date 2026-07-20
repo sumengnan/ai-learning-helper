@@ -18,6 +18,7 @@ import { streamChat, attachChat, stopRun, sendDecision, api, type ModelsInfo, ty
 import { AgentProgress } from "./AgentProgress";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { SourceList } from "./SourceList";
+import { PendingActionCard } from "./PendingActionCard";
 import { MessageMeta } from "./MessageMeta";
 import { linkifyCitations, citeId } from "./citations";
 import { EmptyHint } from "./EmptyHint";
@@ -56,6 +57,19 @@ function generatedFiles(steps?: { tool: string; args?: any; result?: string }[])
     const m = s.result.match(DL_ID_RE);
     if (m && !out.some((f) => f.id === m[1])) {
       out.push({ id: m[1], filename: (s.args && s.args.filename) || "下载文件" });
+    }
+  }
+  return out;
+}
+
+// 从工具轨迹里提取待确认的破坏性操作（删除类工具结果带机读标记〔待确认:...〕）。
+// 与 generatedFiles 同源思路：基于已持久化的 steps，刷新后卡片仍在。
+const PENDING_ID_RE = /〔待确认:([0-9a-fA-F]+)〕/g;
+function pendingActionIds(steps?: { tool: string; result?: string }[]) {
+  const out: string[] = [];
+  for (const s of steps || []) {
+    for (const m of (s.result || "").matchAll(PENDING_ID_RE)) {
+      if (!out.includes(m[1])) out.push(m[1]);
     }
   }
   return out;
@@ -644,6 +658,11 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                   {m.role === "assistant" ? "…" : ""}
                 </Typography>
               )}
+              {/* 待确认的破坏性操作：AI 只登记不执行，这里给出确认/取消。
+                  不做交付门遮挡——它本身就是「尚未发生」的提示，越早看见越好。 */}
+              {m.role === "assistant" && pendingActionIds(m.steps).map((pid) => (
+                <PendingActionCard key={pid} id={pid} />
+              ))}
               {/* AI 生成的可下载文件：常驻一行，不受「展示工具调用」开关影响 */}
               {m.role === "assistant" && (() => {
                 const files = generatedFiles(m.steps);
