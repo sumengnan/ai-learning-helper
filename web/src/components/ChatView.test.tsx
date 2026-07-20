@@ -514,3 +514,32 @@ describe("ChatView", () => {
     expect(screen.queryByRole("button", { name: /旧版\.md/ })).toBeNull();
   });
 });
+
+describe("计划来源区分（ReAct 清单 vs 编排器计划）", () => {
+  // 本文件没配自动 cleanup：不清会残留上一个用例的 DOM，导致「隐藏」断言恒失败
+  beforeEach(() => cleanup());
+  const toolStep = { tool: "search_knowledge", args: { query: "x" }, result: "[1] 命中" };
+
+  it("ReAct 清单（步骤无 id）到达时，扁平工具块必须保留", async () => {
+    // 回归：两种计划同为 scope=plan。若只看 scope 就隐藏工具块，模型在简单直答里调
+    // update_plan 发的清单会把工具块吞掉，而该清单又挂不了明细（无 id）——
+    // 用户看到工具调用闪现后消失，点开步骤空空如也。
+    render(<ChatView conversationId="c1" initial={[{
+      key: "m1", role: "assistant", content: "答", status: "done",
+      steps: [toolStep],
+      progress: [{ scope: "plan", text: JSON.stringify([{ title: "查资料", status: "done" }]) }],
+    } as any]} />);
+    expect((await screen.findAllByText(/search_knowledge/)).length).toBeGreaterThan(0);
+  });
+
+  it("编排器计划（步骤带 id）到达时，扁平工具块隐藏（明细已在计划步下）", async () => {
+    render(<ChatView conversationId="c2" initial={[{
+      key: "m2", role: "assistant", content: "答", status: "done",
+      steps: [toolStep],
+      progress: [{ scope: "plan",
+                   text: JSON.stringify([{ id: "s1", title: "查资料", status: "done" }]) }],
+    } as any]} />);
+    expect((await screen.findAllByText(/查资料/)).length).toBeGreaterThan(0);
+    expect(screen.queryAllByText(/search_knowledge/)).toHaveLength(0);
+  });
+});
