@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .events import ApprovalRequired, ApprovalResolved
 from .progress import emit
@@ -30,6 +30,10 @@ _ctx: ContextVar = ContextVar("approval_ctx", default=None)   # ApprovalContext 
 class ApprovalContext:
     run_id: str
     timeout: float
+    # 本轮已被拒绝的 (工具, 命令)。用户拒绝是**人做出的决定**，同一条命令再问一遍不会有
+    # 不同答案，只会把弹窗怼到用户脸上第二次、第三次（编排器的单步重试正是这么干的）。
+    # 故记下来，后续同样的请求直接拒、不再打扰。
+    denied: set = field(default_factory=set)
 
 
 def set_context(run_id: str, timeout: float):
@@ -53,6 +57,9 @@ async def request_approval(tool: str, command: str, reason: str) -> bool:
     ctx = _ctx.get()
     if ctx is None:                       # 无人工通道 → 放行，保持内核纯净可用
         return True
+    key = (tool, command)
+    if key in ctx.denied:                 # 本轮已拒过同一条命令 → 直接拒，不再弹第二次
+        return False
     approval_id = uuid.uuid4().hex
     fut: asyncio.Future = asyncio.get_event_loop().create_future()
     _pending[approval_id] = fut
@@ -61,9 +68,12 @@ async def request_approval(tool: str, command: str, reason: str) -> bool:
     try:
         approved = await asyncio.wait_for(fut, ctx.timeout)
     except asyncio.TimeoutError:
+        ctx.denied.add(key)
         emit(ApprovalResolved(approval_id=approval_id, approved=False, reason="超时未确认"))
         return False                      # 超时自动拒绝
     else:
+        if not approved:
+            ctx.denied.add(key)
         emit(ApprovalResolved(approval_id=approval_id, approved=approved))
         return approved
     finally:

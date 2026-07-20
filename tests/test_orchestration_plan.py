@@ -122,8 +122,14 @@ def test_rejects_ask_user_variants(desc):
     "汇总各步产出，写出面向用户的最终答复",
 ])
 def test_allows_legitimate_user_facing_steps(desc):
-    """反向护栏：正则必须收窄到「交互动词 + 用户」，不能见到「用户」就拦。"""
-    assert validate_plan([PlanStep(id="s1", description=desc, expected="x")]) is None
+    """反向护栏：正则必须收窄到「交互动词 + 用户」，不能见到「用户」就拦。
+
+    这里给 s1 连上 s0：本用例只测「问用户」这条规则，而「汇总各步产出」这类描述会命中
+    另一条（引用前置产出须连依赖）。不隔离的话，两条规则会互相干扰、失败原因指向错的地方。
+    """
+    steps = [PlanStep(id="s0", description="搜集资料", expected="资料"),
+             PlanStep(id="s1", description=desc, expected="x", depends_on=["s0"])]
+    assert validate_plan(steps) is None
 
 
 def test_ask_user_detected_in_expected_field_too():
@@ -166,3 +172,44 @@ def test_allows_non_write_knowledge_steps(desc):
 def test_knowledge_rule_checks_expected_field_too():
     steps = [PlanStep(id="s1", description="整理内容", expected="内容已保存到知识库")]
     assert validate_plan(steps, "帮我整理") is not None
+
+
+# ---------- 引用前置产出必须连依赖 ----------
+
+def _two(desc, deps=()):
+    return [PlanStep(id="s0", description="搜集资料", expected="资料"),
+            PlanStep(id="s1", description=desc, expected="大纲", depends_on=list(deps))]
+
+
+def test_rejects_step_referencing_prior_output_without_depends_on():
+    """回归：步骤写「根据搜索结果整合…」却没连依赖。执行子步只收得到 depends_on 里的产出
+    （executor._build_prompt 的 `if deps:`），依赖为空它手里一条搜索结果都没有，
+    只能自己再搜一遍——多一轮往返，产出还和前一步对不上。"""
+    err = validate_plan(_two("根据搜索结果整合并制定一份 7 天 AI 学习计划大纲"), "制定学习计划")
+    assert err is not None and "s1" in err
+    assert "depends_on" in err and "自己重新检索" in err
+
+
+def test_allows_same_step_once_dependency_wired():
+    assert validate_plan(
+        _two("根据搜索结果整合并制定一份 7 天 AI 学习计划大纲", ("s0",)), "制定学习计划") is None
+
+
+@pytest.mark.parametrize("desc", [
+    "基于上一步的产出撰写总结",
+    "汇总各步产出形成报告",
+    "根据检索到的资料整理提纲",
+])
+def test_rejects_prior_output_variants(desc):
+    assert validate_plan(_two(desc), "写报告") is not None
+
+
+@pytest.mark.parametrize("desc", [
+    "搜索关于 AI 未来发展的最新报道",     # 自身即检索，不是引用前置
+    "检索知识库中的 AI 资料",
+    "根据用户目标拆解知识点",             # 依据的是用户目标，不是前面的步骤
+    "按入门水平排出 7 天日程",
+])
+def test_allows_self_contained_steps_without_deps(desc):
+    """反向护栏：不能见到「搜索」「根据」就要求连依赖——首步本就无依赖可连。"""
+    assert validate_plan(_two(desc), "制定计划") is None

@@ -410,17 +410,18 @@ class Orchestrator:
                         for nxt in plan.steps if nxt.id == d and nxt.result}
                 art = None
                 err = None
+                terminal = False
                 try:
                     async for ev in self._executor.execute(
                             step, deps, retry_hints.get(step.id, ""), registry=exec_reg):
                         if isinstance(ev, StepArtifact):
-                            art, err = ev.artifact, ev.error
+                            art, err, terminal = ev.artifact, ev.error, ev.terminal
                         else:
                             await queue.put(("ev", ev))
                 except Exception as e:  # 单步崩溃隔离
-                    await queue.put(("done", (step, None, str(e))))
+                    await queue.put(("done", (step, None, str(e), False)))
                     return
-                await queue.put(("done", (step, art, err)))
+                await queue.put(("done", (step, art, err, terminal)))
 
             tasks = [asyncio.create_task(_worker(s)) for s in ready]
             remaining = len(tasks)
@@ -430,10 +431,11 @@ class Orchestrator:
                     if kind == "ev":
                         yield payload
                         continue
-                    step, art, err = payload
+                    step, art, err, terminal = payload
                     remaining -= 1
                     if art is None or err:
-                        self._on_step_fail(step, retry_hints, err or "执行未产出结果")
+                        self._on_step_fail(step, retry_hints, err or "执行未产出结果",
+                                           terminal=terminal)
                         continue
                     verdict = await self._critic.validate(step, art)
                     if verdict.ok:
@@ -442,7 +444,10 @@ class Orchestrator:
                         step.elapsed_ms = _elapsed(step)   # 定格耗时
                         retry_hints.pop(step.id, None)
                     else:
-                        self._on_step_fail(step, retry_hints, verdict.reason)
+                        # 用户拒绝了本步里的危险操作 → 终态失败，不重试：
+                        # 重跑只会把同一个弹窗再怼给用户一次，答案不会变。
+                        self._on_step_fail(step, retry_hints, verdict.reason,
+                                           terminal=terminal)
             finally:
                 # 提前放弃迭代（客户端断连/停止 → 本生成器 aclose，GeneratorExit 抛在 yield 处）
                 # 时，同批未完成的 worker 必须取消，否则会变成继续跑 LLM 的悬挂任务。正常跑完时
@@ -459,9 +464,10 @@ class Orchestrator:
             if s.status in ("pending", "running"):
                 s.status = "skipped"
 
-    def _on_step_fail(self, step, retry_hints: dict[str, str], reason: str) -> None:
+    def _on_step_fail(self, step, retry_hints: dict[str, str], reason: str, *,
+                      terminal: bool = False) -> None:
         step.attempts += 1
-        if step.attempts < self._max_step_retry:
+        if not terminal and step.attempts < self._max_step_retry:
             step.status = "pending"        # 重试：回到就绪集
             step.started_at_ms = None      # 清计时，重跑时重新起点
             retry_hints[step.id] = reason

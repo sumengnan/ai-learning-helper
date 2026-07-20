@@ -47,15 +47,25 @@ class HidingRegistry(ToolRegistry):
         self._base.unregister(name)
 
 
+# 用户拒绝危险操作时工具回传的开头（见 harness/tools/builtins/shell_tool.py）。
+# 据此把该步判成**终态失败**：重试只对偶发故障有意义，而拒绝是人做出的决定，
+# 再跑一遍不会有不同结果，只会把同一个弹窗怼到用户脸上第二次、第三次。
+_USER_DENIED_MARK = "命令未执行：用户拒绝了该操作"
+
+
 @dataclass
 class StepArtifact:
     """内部信号：Executor 产出的最终产物。Orchestrator 消费、不外发（非 Event）。
 
     不变式：error 非空时表示该步执行失败，此时 artifact.summary 可能为空字符串，
     消费方必须先查 error 再决定是否采信 summary。
+
+    terminal=True 表示这次失败不可通过重试挽回（当前唯一来源：用户拒绝了危险操作），
+    调度器应直接判 failed，不再重跑本步。
     """
     artifact: Artifact
     error: str | None = None
+    terminal: bool = False
 
 
 # 子步默认只有裸系统提示词，缺少主聊天那套工具引导，模型会拿 http_request/浏览器乱抓网页
@@ -90,12 +100,17 @@ def _system_with_guide(base: str, sandbox_guide_text: str = "") -> str:
 def _build_prompt(step: PlanStep, deps: dict[str, Artifact], hint: str = "") -> str:
     lines = [f"你的子任务：{step.description}", f"预期产出：{step.expected}"]
     if deps:
-        lines.append("\n已知前置步骤的产出（供参考，不要重复其工作）：")
+        # 措辞刻意强硬：上面的 EXECUTOR_GUIDE 在推「优先用联网搜索工具」，两者方向相反。
+        # 原文只说「供参考」，压不过那股拉力——子步照样把前置结果晾在一边自己重搜一遍，
+        # 既多一轮往返，产出也和前一步对不上。
+        lines.append("\n前置步骤已经取得以下结果，**直接基于它们**完成本步：")
         for dep_id, art in deps.items():
             # 步骤 id 单独成行、与正文隔开：曾写成 f"[{dep_id}] {art.summary}"，前缀紧贴
             # 正文首行（如「[s2] # AI发展与应用总结」），模型复用这份内容时把「[s2] 」
             # 一起抄进产出，最终漏进用户下载的文件开头。
             lines.append(f"—— 步骤 {dep_id} 的产出 ——\n{art.summary}\n—— 以上为 {dep_id} ——")
+        lines.append("以上结果即为本步的输入，默认已经够用。不要为「再确认一遍」重复检索；"
+                     "只有当它们明显不足以完成本步时，才另行补充检索。")
     if hint:
         lines.append(f"\n上次尝试未通过质检，请改进：{hint}")
     # 节流引导：减少每步的联网/工具往返（延迟主要来自这些串行调用）
@@ -137,6 +152,7 @@ class Executor:
         scope = f"subagent:executor:{step.id}"
         final_text = ""
         error = None
+        user_denied = False
         tool_names: dict[str, str] = {}
         tool_args: dict[str, object] = {}   # 暂存入参，供完成行带全（前端按 key 合并只留最后一条）
         token = set_current_agent(f"executor:{step.id}")
@@ -164,6 +180,8 @@ class Executor:
                 elif isinstance(ev, ToolFinished):
                     r = ev.result
                     name = tool_names.get(r.tool_call_id, "工具")
+                    if r.is_error and _USER_DENIED_MARK in (r.content or ""):
+                        user_denied = True          # 本步含被用户拒绝的操作 → 不可重试
                     yield ev
                     yield Progress(scope, f"调用工具 {name}",
                                    status="error" if r.is_error else "ok", key=r.tool_call_id,
@@ -182,4 +200,5 @@ class Executor:
             if think_token is not None:
                 from harness.llm.openai_compat import reset_extra_body_override
                 reset_extra_body_override(think_token)
-        yield StepArtifact(Artifact(summary=final_text, data={}, files=[]), error=error)
+        yield StepArtifact(Artifact(summary=final_text, data={}, files=[]),
+                           error=error, terminal=user_denied)
