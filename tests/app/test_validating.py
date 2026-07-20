@@ -187,3 +187,17 @@ def test_web_check_ignores_non_page_results():
     """JSON/API 原样透传的结果没有「最终URL：」行，形态不可预期、短也正常 → 不判，免误伤。"""
     assert web_content_check('HTTP 200\n{"ok":true}').ok is True
     assert web_content_check("HTTP 200\n[]").ok is True
+
+
+def test_app_ships_a_measured_relevance_floor():
+    """应用层默认必须开着相关性下限。
+
+    内核默认 0（模型无关，不替精排模型断言量纲），但应用层推荐了具体精排模型，
+    实测值就该落在这层。若默认改回 0，「查厨具也能从 AI 知识库返回满满一屏」这个
+    bug 会原样复活，且没有任何测试会红——故在此钉死。
+    换精排模型时请重新实测再改这个数，同时更新 .env.example 里的标定说明。
+    """
+    from app.config import AppConfig
+    from harness.config import HarnessConfig
+    assert HarnessConfig().rerank_min_score == 0.0, "内核保持模型无关"
+    assert AppConfig(api_key="k").rerank_min_score > 0, "应用层必须带实测下限"

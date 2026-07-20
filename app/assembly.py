@@ -129,7 +129,8 @@ def build_harness(config) -> Harness:
             use_multi_query=config.retrieval_use_multi_query,
             use_hyde=config.retrieval_use_hyde,
             multi_query_n=config.retrieval_multi_query_n,
-            query_plan_timeout_s=config.retrieval_query_plan_timeout_s)
+            query_plan_timeout_s=config.retrieval_query_plan_timeout_s,
+            rerank_min_score=config.rerank_min_score)
         from app.completion import build_completer, build_fast_completer
         # 查询期召回增强的 LLM（三路默认关时不会被调用；开启才在检索时用）。
         # 走快速档：它卡在聊天首字的关键路径上、还带 2 秒超时，越快越好，思考链是找死。

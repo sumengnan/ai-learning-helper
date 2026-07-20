@@ -184,3 +184,24 @@ def test_emit_rerank_usage_missing_is_noop():
     finally:
         reset_emitter(tok)
     assert seen == []
+
+
+async def test_reorder_records_scores_into_components():
+    """真实精排必须把分数写进 components——否则 Retriever 的相关性下限永远不触发。
+
+    这条补的是桩测试盖不住的缺口：用 _ScoringReranker 之类的桩测下限，只证明了
+    「有分数时会过滤」，没证明「真实链路上会有分数」。
+    """
+    from harness.memory.reranker import RERANK_SCORE_KEY, _reorder
+
+    class _C:
+        def __init__(self, name):
+            self.name = name
+            self.components = {}
+
+    a, b = _C("a"), _C("b")
+    out = _reorder([a, b], [{"index": 0, "relevance_score": 0.2},
+                            {"index": 1, "relevance_score": 0.9}])
+    assert [c.name for c in out] == ["b", "a"]           # 仍按分数重排
+    assert a.components[RERANK_SCORE_KEY] == 0.2         # 分数留存，不再用完即弃
+    assert b.components[RERANK_SCORE_KEY] == 0.9

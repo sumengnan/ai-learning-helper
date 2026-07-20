@@ -208,3 +208,92 @@ async def test_complete_none_degrades_to_base(mock_embedder):
     got = [h.record.id for h in await _retriever(backend, emb, enh).retrieve("cat", filt, k=5)]
     exp = [h.record.id for h in await _retriever(backend, emb, base).retrieve("cat", filt, k=5)]
     assert got == exp
+
+
+# ---------- 相关性下限：整条链上唯一的绝对相关性信号 ----------
+
+class _ScoringReranker:
+    """按 id 给固定精排分，模拟真实端点。"""
+    def __init__(self, scores: dict):
+        self._s = scores
+
+    async def rerank(self, query, candidates):
+        from harness.memory.reranker import RERANK_SCORE_KEY
+        for c in candidates:
+            if c.record.id in self._s:
+                c.components[RERANK_SCORE_KEY] = self._s[c.record.id]
+        return sorted(candidates,
+                      key=lambda c: c.components.get(RERANK_SCORE_KEY, 0.0), reverse=True)
+
+
+async def _two_doc_backend(emb):
+    b = SqliteVecBackend(":memory:", dimension=64)
+    for rid, t in [("hi", "相关文档"), ("lo", "无关文档")]:
+        v = (await emb.embed([t]))[0]
+        b.upsert([_rec(t, v, rid)])
+    return b
+
+
+async def test_low_relevance_hits_are_dropped(mock_embedder):
+    """回归：查「厨具」在只有 AI 资料的知识库里也能返回满满一屏。
+
+    根因是绝对相似度在链上被销毁两次——RRF 只用排名，_minmax 又在候选集内归一化
+    （最好的那条永远得 1.0）。精排分是唯一幸存的绝对信号，早先却被用完即弃。
+    """
+    emb = mock_embedder(dimension=64)
+    b = await _two_doc_backend(emb)
+    cfg = RetrievalConfig(use_keyword=False, use_mmr=False, rerank_min_score=0.35)
+    hits = await _retriever(b, emb, cfg,
+                            _ScoringReranker({"hi": 0.80, "lo": 0.26})).retrieve(
+        "查询", MemoryFilter(owner_id="u1"), k=10)
+    assert [h.record.id for h in hits] == ["hi"], "低于下限的候选必须丢掉"
+
+
+async def test_all_below_floor_returns_empty(mock_embedder):
+    """全都不够相关 → 返回空，让上层如实说「知识库里没有」，而不是倒一堆无关的出来。"""
+    emb = mock_embedder(dimension=64)
+    b = await _two_doc_backend(emb)
+    cfg = RetrievalConfig(use_keyword=False, use_mmr=False, rerank_min_score=0.35)
+    hits = await _retriever(b, emb, cfg,
+                            _ScoringReranker({"hi": 0.25, "lo": 0.10})).retrieve(
+        "厨具", MemoryFilter(owner_id="u1"), k=10)
+    assert hits == []
+
+
+async def test_floor_off_by_default_keeps_everything(mock_embedder):
+    """默认关闭：分数量纲随精排模型而变，不实测就开会误伤。"""
+    emb = mock_embedder(dimension=64)
+    b = await _two_doc_backend(emb)
+    cfg = RetrievalConfig(use_keyword=False, use_mmr=False)   # 未设 rerank_min_score
+    hits = await _retriever(b, emb, cfg,
+                            _ScoringReranker({"hi": 0.25, "lo": 0.10})).retrieve(
+        "查询", MemoryFilter(owner_id="u1"), k=10)
+    assert len(hits) == 2
+
+
+async def test_rerank_failure_does_not_empty_the_library(mock_embedder):
+    """精排端点故障时降级为原序、不带分数——此时一条都不能丢。
+
+    否则一次网络抖动就会让整个知识库看起来是空的，用户会以为资料没存进去。
+    """
+    emb = mock_embedder(dimension=64)
+    b = await _two_doc_backend(emb)
+    cfg = RetrievalConfig(use_keyword=False, use_mmr=False, rerank_min_score=0.35)
+    hits = await _retriever(b, emb, cfg, NoOpReranker()).retrieve(   # 无分数 = 降级
+        "查询", MemoryFilter(owner_id="u1"), k=10)
+    assert len(hits) == 2, "精排挂掉时必须放行全部，不能整库判空"
+
+
+async def test_all_dropped_is_logged_not_silent(mock_embedder, caplog):
+    """全滤光时必须留一条警告：「查询确实无关」与「换模型后阈值失准」结果一模一样，
+    都是知识库看起来空的。不记一笔，后者会静默劣化成「资料没存进去」。"""
+    import logging
+    emb = mock_embedder(dimension=64)
+    b = await _two_doc_backend(emb)
+    cfg = RetrievalConfig(use_keyword=False, use_mmr=False, rerank_min_score=0.35)
+    with caplog.at_level(logging.WARNING, logger="harness.memory.retriever"):
+        hits = await _retriever(b, emb, cfg,
+                                _ScoringReranker({"hi": 0.25, "lo": 0.10})).retrieve(
+            "厨具", MemoryFilter(owner_id="u1"), k=10)
+    assert hits == []
+    assert any("相关性下限" in r.getMessage() for r in caplog.records), "全部滤光必须留痕"
