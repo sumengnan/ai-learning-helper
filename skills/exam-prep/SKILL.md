@@ -16,11 +16,11 @@ triggers: 考前复习, 模拟考, 模考, 组套题, 考前冲刺
    记住这批题的 id（返回末尾 `〔题目ID:...〕`）。
 3. **开考**：`start_exam(source="ids", question_ids=[...])` 用刚组的这批题精确开考（**别用 `source="bank"`**，那是全库随机、考的不是这批）。
 4. **判分与讲评**：逐题对答案，讲清每道**为什么错/为什么对**，尤其错题的坑。
-5. **归集补弱**：把错题沉淀（题库题 `save_wrong_answer(question_id=...)`），对薄弱知识点可 `generate_questions`/`add_questions` 再出几道相似题即练。
+5. **归集补弱**：`start_exam` 开考的场次，判分与「答错自动入错题集」由系统在后台完成，**不要**再调 `save_wrong_answer`（会重复入集）；只有在对话里口头出题时才需要自己调它沉淀。对薄弱知识点可 `add_questions` 再出几道相似题即练（`generate_questions` 不去重，同主题别反复调）。
 6. **导出**：`save_download` 导出一份错题本/复习提纲，方便考前再刷。
-7. **收尾**：`unload_skill("exam-prep")` 释放上下文；并可建议用户之后用「间隔重复复习」定期回顾。
+7. **收尾**：可建议用户之后用「间隔重复复习」定期回顾。
 
 ## 注意
 - 开考务必用 `source="ids"` + 刚组的 id，保证考的就是这套。
 - 判分重在讲评，不是报个分数；错题要讲「这个用户为什么会错」。
-- 出题/入库统一走 `generate_questions`/`add_questions`（自带去重）。
+- 出题/入库统一走 `generate_questions`/`add_questions`。只有 `add_questions` 与题库已有题去重；`generate_questions` 不去重，同一主题别反复调用。

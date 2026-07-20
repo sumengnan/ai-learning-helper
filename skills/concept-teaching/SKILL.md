@@ -14,7 +14,6 @@ triggers: 讲讲, 不懂, 是什么意思, 什么是, 给我讲, 解释一下, �
 3. **费曼式讲透**：按「一句话本质 → 类比/生活例子 → 拆解原理 → 常见误区/易错点」的层次讲，用最简语言，宁可多举例。涉及代码/计算的，用 `run_python` 等在沙箱跑个最小例子边跑边讲。
 4. **即时小测**：讲完出 2～3 道题当场检验理解——`sample_questions(count)` 从题库抽相关题，或 `add_questions(questions=[...])` 现编（带 explanation）入库。答错的用 `save_wrong_answer` 沉淀（题库题传 `question_id`，即席题传 `stem`+`answer`+`user_answer`）。
 5. **沉淀**：`remember` 记稳定的薄弱点/偏好（如「用户对递归还不熟」「讲解要配代码」）；用户要的话 `save_to_knowledge` 把这份讲解存入知识库、或 `save_download` 导出笔记。
-6. **收尾**：`unload_skill("concept-teaching")` 释放上下文。
 
 ## 注意
 - 目标是让用户「能自己讲出来」，不是把定义念一遍——多问「你觉得为什么」。
