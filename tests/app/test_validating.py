@@ -14,7 +14,7 @@ class _P(BaseModel):
 
 
 class _SearchStub(Tool):
-    name = "search_memory"
+    name = "search_knowledge"
     description = "d"
     Params = _P
 
@@ -127,6 +127,6 @@ async def test_exec_fail_emits_error_and_reraises():
 def test_transparent_name_params_schema():
     inner = _SearchStub("x")
     t = ValidatingTool(inner, relevance_check)
-    assert t.name == "search_memory"
+    assert t.name == "search_knowledge"
     assert t.Params is _P
     assert t.schema() == inner.schema()

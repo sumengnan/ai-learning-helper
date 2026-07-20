@@ -24,7 +24,7 @@ def test_core_tools_registered_heavy_gated_off():
     assert isinstance(h, Harness)
     assert h.registry.get("calculator") is not None
     assert h.registry.get("http_request") is not None
-    assert h.registry.get("search_memory") is not None    # api_key 有 → 记忆注册
+    assert h.registry.get("search_knowledge") is not None    # api_key 有 → 记忆注册
     assert h.registry.get("browse") is None                # 未启用
     assert h.registry.get("run_python") is None             # 未启用沙箱
     assert h.registry.get("dispatch") is None               # 未启用派发
@@ -63,10 +63,10 @@ def _agents_dir(tmp_path, fname, content):
 
 
 def test_dispatch_gated_on(tmp_path):
-    # api_key 有 → search_memory 在池；http_request 恒在 → researcher 有可用工具
+    # api_key 有 → search_knowledge 在池；http_request 恒在 → researcher 有可用工具
     d = _agents_dir(tmp_path, "researcher.yaml",
                     "name: researcher\ndescription: 检索\nsystem_prompt: 你是研究员\n"
-                    "tool_names: [search_memory, http_request]\n")
+                    "tool_names: [search_knowledge, http_request]\n")
     h = build_harness(_cfg(enable_dispatch=True, agents_dir=d))
     assert h.registry.get("dispatch") is not None
 

@@ -91,7 +91,8 @@ def build_harness(config) -> Harness:
         from harness.memory.sqlite_backend import SqliteVecBackend
         from harness.memory.memory import Memory
         from harness.memory.episodic import EpisodicMemory
-        from harness.tools.builtins.memory_search import SearchMemoryTool
+        from harness.tools.builtins.memory_search import (
+            SearchKnowledgeTool, SearchMemoryTool)
         from harness.tools.builtins.memory_write import RememberTool
         from harness.tools.builtins.episode_tools import RecallEpisodesTool
         embedder = OpenAICompatibleEmbeddingClient(
@@ -160,9 +161,12 @@ def build_harness(config) -> Harness:
                 extract_complete=build_fast_completer(client, config),
                 candidate_k=config.memory_write_candidate_k,
                 ttl_by_type=_ttl_by_type)
-        _search_tool = SearchMemoryTool(mem, default_k=config.search_top_k)
+        # 知识库检索包 relevance_check：空命中意味着「本轮没有可引用依据」，要驱动模型自纠正。
+        _search_tool = SearchKnowledgeTool(mem, default_k=config.search_top_k)
         _reg(ValidatingTool(_search_tool, relevance_check)
              if config.enable_step_check else _search_tool)
+        # 记忆检索不包校验：记忆为空是常态（新用户本就没记过什么），不是失败。
+        _reg(SearchMemoryTool(mem, default_k=config.search_top_k))
         _reg(RememberTool(mem))
         _reg(RecallEpisodesTool(EpisodicMemory(mem), default_k=config.episode_recall_k))
 

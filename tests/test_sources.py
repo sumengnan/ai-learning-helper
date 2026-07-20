@@ -12,20 +12,31 @@ from harness.types import ToolOutput
 
 # ---------- build_source：各类型工具 ----------
 
-def test_search_memory_extracts_filenames_deduped():
+def test_search_knowledge_extracts_filenames_deduped():
     result = "[1]（来源：bio.pdf） 光合作用……\n[2]（来源：bio.pdf） 又一段\n[3]（来源：chem.md） 化学"
-    d = build_source("search_memory", {"query": "光合"}, result)
+    d = build_source("search_knowledge", {"query": "光合"}, result)
     assert d["type"] == "knowledge"
     assert d["label"] == "bio.pdf、chem.md"   # 去重且保序
 
 
-def test_search_memory_empty_is_none():
-    assert build_source("search_memory", {}, "（未在知识库中检索到相关内容）") is None
+def test_search_knowledge_empty_is_none():
+    assert build_source("search_knowledge", {}, "（未在知识库中检索到相关内容）") is None
 
 
-def test_search_memory_hits_without_source_metadata():
-    d = build_source("search_memory", {}, "[1] 一段没有来源标注的文本")
+def test_search_knowledge_hits_without_source_metadata():
+    d = build_source("search_knowledge", {}, "[1] 一段没有来源标注的文本")
     assert d["type"] == "knowledge" and d["label"] == "知识库检索"
+
+
+def test_search_memory_is_typed_memory_not_knowledge():
+    """记忆检索归 memory，不能混进 knowledge——前端据此分色、且 knowledge 会跳知识库页。"""
+    d = build_source("search_memory", {"query": "偏好"}, "[1] 用户偏好简洁回答")
+    assert d["type"] == "memory"
+    assert d["label"] == "长期记忆"
+
+
+def test_search_memory_empty_is_none():
+    assert build_source("search_memory", {}, "（未检索到相关的长期记忆）") is None
 
 
 def test_browse_extracts_title_and_url():
@@ -110,7 +121,7 @@ def test_non_source_tool_is_none():
 
 
 def test_is_source_tool():
-    assert is_source_tool("search_memory")
+    assert is_source_tool("search_knowledge")
     assert is_source_tool("mcp__x__y")
     assert not is_source_tool("calculator")
 
@@ -138,7 +149,7 @@ def test_sink_reset_clears():
 # ---------- wrap_tool：接地标注 + 记源 + 报错不记源 ----------
 
 class _FakeSearch(Tool):
-    name = "search_memory"
+    name = "search_knowledge"
     description = "fake"
 
     class Params(BaseModel):

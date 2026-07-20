@@ -23,7 +23,7 @@ from harness.types import ToolOutput
 
 _log = logging.getLogger("app.validating")
 
-# 与 SearchMemoryTool 的空命中文案、verify.py 的 _NO_HIT 保持一致
+# 与 SearchKnowledgeTool 的空命中文案、verify.py 的 _NO_HIT 保持一致
 NO_HIT_MARK = "（未在知识库中检索到相关内容）"
 
 

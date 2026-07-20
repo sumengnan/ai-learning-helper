@@ -79,7 +79,7 @@ RAG = **检索增强生成**(Retrieval-Augmented Generation)。一句话:
 
 - **上传文档到知识库**:在知识库页上传,即完成"建库"。
 - **聊天里"保存到知识库"**:把有用的回答/资料一键存入,后续可被检索。
-- **提问**:问到与资料相关的问题时,AI 会(自动或通过 `search_memory` 工具)检索知识库并据此回答。
+- **提问**:问到与资料相关的问题时,AI 会(自动或通过 `search_knowledge` 工具)检索知识库并据此回答。
 - **片段预览**:知识库页可分页浏览、按分类筛选、查看单个片段全文。
 
 ## 和"记忆管理"的关系
@@ -121,5 +121,5 @@ RAG 检索和[记忆管理](memory-management.md)**共用同一套底层向量�
 | `src/harness/memory/retriever.py` | 检索流水线:多路召回 → RRF → 打分 → MMR → 重排 |
 | `src/harness/memory/reranker.py` | 重排模型(可选) |
 | `src/harness/memory/sqlite_backend.py` | 向量 + 关键词存储/检索后端 |
-| `src/harness/tools/builtins/memory_search.py` | AI 检索工具 `search_memory` |
+| `src/harness/tools/builtins/memory_search.py` | AI 检索工具 `search_knowledge` & `search_memory` |
 | `app/verify.py` | grounding 校验(答案是否有资料依据) |

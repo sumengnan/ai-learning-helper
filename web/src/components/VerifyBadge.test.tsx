@@ -64,7 +64,7 @@ describe("VerifyBadge 状态机", () => {
   it("检索命中（成功）不作为校验状态展示；无其它信号则不渲染", () => {
     const { container } = render(<VerifyBadge message={msg({
       status: "done",
-      checks: [{ tool: "search_memory", status: "ok", text: "检索命中" }],
+      checks: [{ tool: "search_knowledge", status: "ok", text: "检索命中" }],
     })} />);
     expect(container.firstChild).toBeNull();   // 唯一信号是检索命中 ok → 被过滤 → 不渲染
   });
@@ -355,10 +355,10 @@ describe("刷新后从 progress 重建每步校验", () => {
     expect(screen.getByText("步骤校验未通过")).toBeTruthy();
   });
 
-  it("search_memory 命中仍被过滤（重建不绕过既有过滤）", () => {
+  it("search_knowledge 命中仍被过滤（重建不绕过既有过滤）", () => {
     render(<VerifyBadge message={msg({
-      progress: [ck("search_memory 命中 3 条", "ok", "search_memory")],
+      progress: [ck("search_knowledge 命中 3 条", "ok", "search_knowledge")],
     })} />);
-    expect(screen.queryByText("search_memory 命中 3 条")).toBeNull();
+    expect(screen.queryByText("search_knowledge 命中 3 条")).toBeNull();
   });
 });

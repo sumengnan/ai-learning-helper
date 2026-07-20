@@ -874,8 +874,8 @@ def test_is_retrieval_tool_covers_web_and_mcp_search():
                 "mcp__websearch__bailian_web_search", "mcp__search__foo", "mcp__x__web_lookup"):
         assert _is_retrieval_tool(yes) is True, yes
     for no in ("run_python", "run_shell", "save_download", "remember",
-               "sample_questions", "calculator", "search_memory", ""):
-        # 注：search_memory 单独在收集处标 retrieval，不经本谓词
+               "sample_questions", "calculator", "search_knowledge", ""):
+        # 注：search_knowledge 单独在收集处标 retrieval，不经本谓词
         assert _is_retrieval_tool(no) is False, no
 
 
@@ -885,7 +885,7 @@ def test_recent_dialogue_skips_tool_noise_and_keeps_order():
     from harness.types import Message, Role, ToolCall
     hist = [
         Message(role=Role.USER, content="帮我做个方案"),
-        Message(role=Role.ASSISTANT, tool_calls=[ToolCall(id="c", name="search_memory", arguments={})]),
+        Message(role=Role.ASSISTANT, tool_calls=[ToolCall(id="c", name="search_knowledge", arguments={})]),
         Message(role=Role.TOOL, tool_call_id="c", content="检索结果…"),
         Message(role=Role.ASSISTANT, content="请回复 A / B / C 选择方案"),
     ]

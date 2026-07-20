@@ -28,7 +28,8 @@ from opentelemetry.trace import Status, StatusCode
 from harness.reliability.budget import BudgetTracker
 from harness.telemetry.tracer import get_tracer
 from harness.tools.base import ToolRegistry
-from harness.tools.builtins.memory_search import SearchMemoryTool
+from harness.tools.builtins.memory_search import SearchKnowledgeTool, SearchMemoryTool
+from harness.tools.builtins.memory_write import RememberTool
 from harness.types import Message, Role
 from harness.usage import reset_pricing, set_pricing
 
@@ -542,16 +543,21 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         if dstore is not None:
             _reg(SaveDownloadTool(
                 dstore, config.download_max_mb * 1024 * 1024, user_id))
-        # 知识库检索：必须按用户覆盖全局那个。assembly 里构造的是默认 collection="knowledge"
-        # （无冒号 → collection_to_scope 判成 owner=_global），而知识库写入的是
-        # knowledge:{user_id} —— 两个 owner 永不相交，不覆盖的话模型在聊天里永远搜不到
-        # 用户上传的文档，还会连带让交付门的 grounding 校验因「检索恒无命中」而形同虚设。
-        # 保持与 assembly.py 同款的 ValidatingTool 包装，别把每步校验弄丢了。
+        # 记忆/知识库检索：都必须按用户覆盖全局那个。assembly 里构造的是无冒号的默认
+        # collection（collection_to_scope 判成 owner=_global），而真实数据写在
+        # knowledge:{user_id} / memory:{user_id} —— 两个 owner 永不相交，不覆盖的话模型
+        # 在聊天里永远搜不到东西，还会连带让交付门的 grounding 校验因「检索恒无命中」而形同虚设。
+        # 保持与 assembly.py 同款的包装策略：知识库包每步校验，记忆不包（空记忆是常态）。
         _mem = getattr(harness, "memory", None)
         if _mem is not None:
-            _st = SearchMemoryTool(_mem, collection=f"knowledge:{user_id}",
-                                   default_k=config.search_top_k)
+            _st = SearchKnowledgeTool(_mem, collection=f"knowledge:{user_id}",
+                                      default_k=config.search_top_k)
             _reg(ValidatingTool(_st, relevance_check) if config.enable_step_check else _st)
+            _reg(SearchMemoryTool(_mem, collection=f"memory:{user_id}",
+                                  default_k=config.search_top_k))
+            # remember 同样按用户覆盖：否则写入落到 _global/memory，而检索查的是
+            # memory:{user_id}，写进去的记忆永远召不回来（拆分前就是这个 bug）。
+            _reg(RememberTool(_mem, collection=f"memory:{user_id}"))
         # 知识库保存：按用户隔离，写入 knowledge:{user_id} 并建立文档记录，
         # 使内容出现在「知识库」菜单（区别于 remember 写入的私有记忆）。
         if knowledge_service is not None:
@@ -780,17 +786,19 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             log.info("工具完成 %s 耗时%dms error=%s 输出%d字",
                                      st["tool"], _dur, ev.result.is_error,
                                      len(ev.result.content or ""))
-                            if st["tool"] in ("search_memory", "run_python", "run_node", "run_java"):
+                            # 只收 search_knowledge：search_memory 查的是 AI 自己记的偏好，
+                            # 不是可引用的资料依据，不该参与 grounding 判定。
+                            if st["tool"] in ("search_knowledge", "run_python", "run_node", "run_java"):
                                 collect["grounding"].append(
                                     {"tool": st["tool"], "content": ev.result.content,
                                      "is_error": ev.result.is_error,
                                      # 联网检索与知识库同为「检索到的依据」；标 retrieval=True 供
                                      # grounding 校验一并纳入——否则联网来的事实会被判「不在知识库」。
-                                     "retrieval": st["tool"] == "search_memory"})
+                                     "retrieval": st["tool"] == "search_knowledge"})
                             elif st["tool"] in ("read_attachment", "read_file"):
                                 # 读入的用户文档/附件正文：整理成笔记/总结时的作答依据，纳入
                                 # grounding 核查资料（不标 retrieval，故不单独触发 grounding，
-                                # 仅当本轮另有 search_memory 命中时作为核查上下文）。
+                                # 仅当本轮另有 search_knowledge 命中时作为核查上下文）。
                                 collect["grounding"].append(
                                     {"tool": st["tool"], "content": ev.result.content,
                                      "is_error": ev.result.is_error})

@@ -22,7 +22,7 @@ HARNESS_MODEL=gpt-4o-mini
 HARNESS_ENABLE_BROWSER=false     # true 则注册 browse 工具；若同时启用沙箱则在容器内跑 Chromium（镜像须含 Playwright+curl、可出网、非只读），否则回退宿主 Playwright
 HARNESS_ENABLE_SANDBOX=false     # true 且配了 HARNESS_SANDBOX_DOCKER_HOST 才注册代码执行工具
 HARNESS_ENABLE_DISPATCH=false    # 多 agent 编排（App-1 暂不使用）
-HARNESS_EMBEDDING_API_KEY=       # 留空则回退用 HARNESS_API_KEY；配了才注册 search_memory/remember
+HARNESS_EMBEDDING_API_KEY=       # 留空则回退用 HARNESS_API_KEY；配了才注册 search_knowledge/search_memory/remember
 HARNESS_CONVERSATIONS_DB_PATH=conversations.db
 HARNESS_CORS_ORIGINS=["http://localhost:5173"]
 HARNESS_APP_MAX_UPLOAD_MB=20             # 知识库上传大小上限（MB）
@@ -33,7 +33,7 @@ HARNESS_DOCUMENTS_DB_PATH=documents.db   # 文档登记表存储位置
 
 知识库页（前端 `/knowledge`）支持上传 **PDF / docx / txt / md** 文件：解析正文后
 分块 embedding 写入 harness `Memory` 的 `knowledge` collection，agent 聊天时可通过
-`search_memory` 工具检索到；文档管理页可查看已上传文档（文件名/块数/时间）并删除
+`search_knowledge` 工具检索到；文档管理页可查看已上传文档（文件名/块数/时间）并删除
 （删除会同时清掉对应的 embedding chunk）。
 
 - **需要 embedding 端点**：`HARNESS_API_KEY`/`HARNESS_EMBEDDING_API_KEY` 未配置时，
@@ -87,7 +87,7 @@ cd web && npm run test        # 前端：Vitest（drainSSE 纯函数单测）
 3. 再发一条消息：应能延续上一轮上下文。
 4. 侧栏新建/切换/删除对话应正常工作。
 5. 切到知识库页，上传一个 txt/pdf：列表出现该文档（含块数）；回聊天页问该文档
-   内容：agent 应通过 `search_memory` 召回并作答；回知识库页删除该文档：再问
+   内容：agent 应通过 `search_knowledge` 召回并作答；回知识库页删除该文档：再问
    同样内容应召回不到。
 
 ## 题库 / 模拟考试 / 错题集（App-3）

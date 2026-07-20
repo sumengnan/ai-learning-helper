@@ -1,7 +1,7 @@
 from harness.memory.memory import Memory
 from harness.memory.sqlite_backend import SqliteVecBackend
 from harness.tools.base import ToolRegistry, ToolExecutor
-from harness.tools.builtins.memory_search import SearchMemoryTool
+from harness.tools.builtins.memory_search import SearchKnowledgeTool, SearchMemoryTool
 from harness.tools.builtins.memory_write import RememberTool
 from harness.types import ToolCall
 
@@ -12,6 +12,7 @@ def _mem(mock_embedder):
 
 
 async def test_remember_then_search_roundtrip(mock_embedder):
+    """remember 写入必须能被 search_memory 召回——两者默认 scope 成对，改一个必须改另一个。"""
     mem = _mem(mock_embedder)
     reg = ToolRegistry()
     reg.register(RememberTool(mem))
@@ -29,14 +30,50 @@ async def test_remember_then_search_roundtrip(mock_embedder):
     assert "the cat sat on the mat" in r.content
 
 
-async def test_search_no_hits_message(mock_embedder):
+async def test_remember_is_invisible_to_knowledge_search(mock_embedder):
+    """记忆与知识库是两个 scope：AI 私记的东西不该混进用户资料的检索结果。"""
     mem = _mem(mock_embedder)
+    reg = ToolRegistry()
+    reg.register(RememberTool(mem))
+    reg.register(SearchKnowledgeTool(mem))
+    ex = ToolExecutor(reg)
+
+    await ex.execute(ToolCall(id="w1", name="remember",
+                              arguments={"text": "用户偏好简洁的回答"}))
+    r = await ex.execute(ToolCall(id="c1", name="search_knowledge",
+                                  arguments={"query": "偏好", "k": 3}))
+    assert "用户偏好" not in r.content
+    assert "未在知识库" in r.content
+
+
+async def test_knowledge_is_invisible_to_memory_search(mock_embedder):
+    """反向：用户上传的资料不该被当成 AI 自己的记忆召回。"""
+    mem = _mem(mock_embedder)
+    await mem.add_texts(["光合作用把二氧化碳转化为葡萄糖"], "knowledge")
     reg = ToolRegistry()
     reg.register(SearchMemoryTool(mem))
     ex = ToolExecutor(reg)
     r = await ex.execute(ToolCall(id="c1", name="search_memory",
+                                  arguments={"query": "光合作用", "k": 3}))
+    assert "光合作用" not in r.content
+    assert "长期记忆" in r.content
+
+
+async def test_no_hit_messages_are_distinct(mock_embedder):
+    """两个工具的空命中文案必须可区分：知识库那句被 validating/verify 逐字匹配当哨兵。"""
+    mem = _mem(mock_embedder)
+    reg = ToolRegistry()
+    reg.register(SearchKnowledgeTool(mem))
+    reg.register(SearchMemoryTool(mem))
+    ex = ToolExecutor(reg)
+
+    k = await ex.execute(ToolCall(id="c1", name="search_knowledge",
                                   arguments={"query": "anything", "k": 3}))
-    assert "未在知识库" in r.content
+    assert k.content == "（未在知识库中检索到相关内容）"
+
+    m = await ex.execute(ToolCall(id="c2", name="search_memory",
+                                  arguments={"query": "anything", "k": 3}))
+    assert m.content == "（未检索到相关的长期记忆）"
 
 
 async def test_search_uses_default_k_when_k_omitted(mock_embedder):
@@ -44,14 +81,12 @@ async def test_search_uses_default_k_when_k_omitted(mock_embedder):
     mem = _mem(mock_embedder)
     reg = ToolRegistry()
     reg.register(SearchMemoryTool(mem, default_k=1))
-    ex = ToolExecutor(reg)
-    await ex.execute(ToolCall(id="w1", name="search_memory", arguments={"query": "seed"}))  # noqa
-    # 先写入两条含相同词的记忆
-    from harness.tools.builtins.memory_write import RememberTool
     reg.register(RememberTool(mem))
-    await ex.execute(ToolCall(id="w2", name="remember",
+    ex = ToolExecutor(reg)
+    # 先写入两条含相同词的记忆
+    await ex.execute(ToolCall(id="w1", name="remember",
                               arguments={"text": "cat one"}))
-    await ex.execute(ToolCall(id="w3", name="remember",
+    await ex.execute(ToolCall(id="w2", name="remember",
                               arguments={"text": "cat two"}))
     r = await ex.execute(ToolCall(id="c1", name="search_memory",
                                   arguments={"query": "cat"}))
