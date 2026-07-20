@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, cleanup, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import QuestionBankView from "./QuestionBankView";
@@ -61,7 +61,12 @@ describe("QuestionBankView", () => {
     fireEvent.click(screen.getByLabelText("删除题目"));
     // 弹出确认框，提示对应错题数
     await waitFor(() => expect(screen.getByText("删除题目并清理错题？")).toBeTruthy());
-    expect(screen.getByText(/3/)).toBeTruthy();
+    // 断言锚在弹框内，且只认「错题条数」这一处数字。
+    // 原来写的是全页 getByText(/3/)：题目卡片上的时间戳（超过 7 天会渲染成
+    // 「2026-07-13 09:00」这种绝对日期）同样含 "3"，命中多个节点直接报错——
+    // 而且这取决于**跑测试当天的日期**，本地某天绿、CI 另一天红。
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("3")).toBeTruthy();
     // 确认 → 以 force 再次调用
     (api.questions.remove as any).mockResolvedValueOnce({ deleted: true, related_wrong: 3 });
     fireEvent.click(screen.getByText("删除题目和错题"));
