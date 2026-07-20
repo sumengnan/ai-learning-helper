@@ -354,9 +354,12 @@ class Orchestrator:
                 _matched = _matcher.match(user_message)
                 if _matched is not None:
                     skill_hint = _matched.body
-                    # 命中即发 skill 进度事件：前端「技能」块据此展示（与 load_skill 同 scope，复用渲染）
+                    # 命中即发 skill 进度事件：前端「技能」块据此展示（与 load_skill 同 scope，复用渲染）。
+                    # detail 带技能名（不带正文）：前端据此点开时去 /api/skills/{name} 取 md 正文——
+                    # 正文是静态资源，随事件下发会在每条命中技能的消息里各存一份 2-3KB。
+                    # 从 text 里反解技能名太脆弱（文案一改就断），故走 detail 这条稳定通道。
                     yield Progress("skill", f"已启用技能「{_matched.name}」：{_matched.description}",
-                                   status="ok")
+                                   status="ok", detail={"skill": _matched.name})
 
 
             # 执行子步的工具视图。恒隐藏 update_plan（子步调它会覆盖总计划）。
