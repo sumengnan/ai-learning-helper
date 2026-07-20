@@ -339,7 +339,8 @@ def test_orchestrator_reset_clears_streaming_partial(make_mock, monkeypatch):
 class VerifyTraceOrchestrator:
     """模拟编排器收尾时发的结构化留痕。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
-                  recent_dialogue="", force_simple=False, run_id=None):
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False,
+                  run_id=None):
         from harness.events import Progress, RunStarted, RunFinished
         from harness.types import Message, Role
         from app.orchestration.orchestrator import VERIFY_TRACE_KEY
@@ -352,10 +353,6 @@ class VerifyTraceOrchestrator:
         yield RunFinished(message=Message(role=Role.ASSISTANT, content="答"))
 
 
-@pytest.mark.xfail(reason="合并 dev 后回归：编排器发出的 verify 留痕未进 progress 列，"
-                          "根因未定位（提取逻辑与常量均已核对无误），待单独排查。"
-                          "标 xfail 而非删除：这条断言本身是对的，问题在实现侧。",
-                   strict=False)
 def test_orchestrator_verify_trace_lands_in_verify_column(make_mock, monkeypatch):
     """回归：编排器每轮都做终局校验，但结论只以中文文案落进 progress，没有结构化落点——
     verify 列恒为 NULL，统计页的一次过率/重答次数/「哪一层拦下的」整块恒为 0，
@@ -388,6 +385,10 @@ def test_no_verify_trace_when_verify_off(make_mock, monkeypatch):
                   headers=h) as r:
         list(r.iter_lines())
     row = store._conn.execute(
-        "SELECT verify FROM conversation_messages WHERE conv_id=? AND role='assistant'"
+        "SELECT content, verify FROM conversation_messages WHERE conv_id=? AND role='assistant'"
         " ORDER BY seq DESC LIMIT 1", (cid,)).fetchone()
-    assert row and not row[0]
+    # 先确认这轮真的跑通了。只断言「verify 列为空」是恒真的：编排器调用崩掉（例如替身
+    # 少一个新 kwarg 导致 TypeError）时这轮什么都没写，照样满足——曾因此把一个真实
+    # 回归藏了整整一次合并。
+    assert row and row[0] == "答", "这轮没正常跑完，下面的断言不成立"
+    assert not row[1]
