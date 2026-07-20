@@ -8,6 +8,18 @@ function citeNumber(href?: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
+// 死链降级：模型手上没有下载地址，却常出于「给个入口」的好意自己编一个 markdown 链接
+// （实测编出 [下载 xx.md](#)，点了停在当前页）。真正的下载入口是消息下方那排按钮。
+// 这类链接一律渲染成纯文本——点不动的链接比没有链接更糟，用户会以为功能坏了。
+// 判定只认「必然无效」的形态：空、纯 #（锚点 #cite-… 是来源角标，另有分支先行处理）、
+// javascript: 伪协议。外站链接与真实锚点不受影响。
+function isDeadLink(href?: string): boolean {
+  const h = (href || "").trim();
+  if (!h || h === "#") return true;
+  if (h.startsWith("javascript:")) return true;
+  return false;
+}
+
 // 段内单换行渲染为 <br>：模型常用单个 \n 表示换行（如逐行列出选项 A./B./C./D.），
 // 但 CommonMark/GFM 会把段内单换行折叠成空格，导致选项挤成一行。这里在 mdast 层把
 // text 节点里的 \n 拆成 break 节点。只动 text 节点，代码块/表格结构/列表项均不受影响
@@ -86,6 +98,7 @@ export function Markdown({ children, onCitationClick }: {
                 </Box>
               );
             }
+            if (isDeadLink(href)) return <>{children}</>;   // 死链降级为纯文本
             return (
               <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>
             );
