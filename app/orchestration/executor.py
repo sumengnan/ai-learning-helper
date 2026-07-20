@@ -47,15 +47,25 @@ class HidingRegistry(ToolRegistry):
         self._base.unregister(name)
 
 
+# 用户拒绝危险操作时工具回传的开头（见 harness/tools/builtins/shell_tool.py）。
+# 据此把该步判成**终态失败**：重试只对偶发故障有意义，而拒绝是人做出的决定，
+# 再跑一遍不会有不同结果，只会把同一个弹窗怼到用户脸上第二次、第三次。
+_USER_DENIED_MARK = "命令未执行：用户拒绝了该操作"
+
+
 @dataclass
 class StepArtifact:
     """内部信号：Executor 产出的最终产物。Orchestrator 消费、不外发（非 Event）。
 
     不变式：error 非空时表示该步执行失败，此时 artifact.summary 可能为空字符串，
     消费方必须先查 error 再决定是否采信 summary。
+
+    terminal=True 表示这次失败不可通过重试挽回（当前唯一来源：用户拒绝了危险操作），
+    调度器应直接判 failed，不再重跑本步。
     """
     artifact: Artifact
     error: str | None = None
+    terminal: bool = False
 
 
 # 子步默认只有裸系统提示词，缺少主聊天那套工具引导，模型会拿 http_request/浏览器乱抓网页
@@ -139,6 +149,7 @@ class Executor:
         scope = f"subagent:executor:{step.id}"
         final_text = ""
         error = None
+        user_denied = False
         tool_names: dict[str, str] = {}
         tool_args: dict[str, object] = {}   # 暂存入参，供完成行带全（前端按 key 合并只留最后一条）
         token = set_current_agent(f"executor:{step.id}")
@@ -166,6 +177,8 @@ class Executor:
                 elif isinstance(ev, ToolFinished):
                     r = ev.result
                     name = tool_names.get(r.tool_call_id, "工具")
+                    if r.is_error and _USER_DENIED_MARK in (r.content or ""):
+                        user_denied = True          # 本步含被用户拒绝的操作 → 不可重试
                     yield ev
                     yield Progress(scope, f"调用工具 {name}",
                                    status="error" if r.is_error else "ok", key=r.tool_call_id,
@@ -184,4 +197,5 @@ class Executor:
             if think_token is not None:
                 from harness.llm.openai_compat import reset_extra_body_override
                 reset_extra_body_override(think_token)
-        yield StepArtifact(Artifact(summary=final_text, data={}, files=[]), error=error)
+        yield StepArtifact(Artifact(summary=final_text, data={}, files=[]),
+                           error=error, terminal=user_denied)

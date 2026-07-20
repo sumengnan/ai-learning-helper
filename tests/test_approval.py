@@ -57,3 +57,46 @@ async def test_timeout_denies():
     finally:
         approval.reset_context(ctoken)
         progress.reset_emitter(etoken)
+
+
+async def test_denied_command_is_not_asked_twice():
+    """拒绝是人做出的决定，同一条命令不该再问第二次。
+
+    回归：编排器的单步重试会重跑整个子步，工具随之再次 request_approval——用户刚拒绝完，
+    同一个弹窗立刻又怼上来，连续几次。"""
+    import harness.approval as ap
+    from harness.events import ApprovalRequired
+    from harness import progress
+
+    got = []
+    etoken = progress.set_emitter(got.append)
+    ctoken = ap.set_context(run_id="r1", timeout=0.05)   # 无人应答 → 超时拒绝
+    try:
+        first = await ap.request_approval("run_shell", "rm -rf /workspace", "危险")
+        second = await ap.request_approval("run_shell", "rm -rf /workspace", "危险")
+        assert first is False and second is False
+        asks = [e for e in got if isinstance(e, ApprovalRequired)]
+        assert len(asks) == 1, "同一条命令只该弹一次"
+    finally:
+        ap.reset_context(ctoken)
+        progress.reset_emitter(etoken)
+
+
+async def test_denial_is_scoped_per_run():
+    """拒绝只在本轮有效：换一轮（新上下文）用户仍有机会重新决定。"""
+    import harness.approval as ap
+    from harness.events import ApprovalRequired
+    from harness import progress
+
+    got = []
+    etoken = progress.set_emitter(got.append)
+    try:
+        t1 = ap.set_context(run_id="r1", timeout=0.05)
+        await ap.request_approval("run_shell", "rm -rf /x", "危险")
+        ap.reset_context(t1)
+        t2 = ap.set_context(run_id="r2", timeout=0.05)
+        await ap.request_approval("run_shell", "rm -rf /x", "危险")
+        ap.reset_context(t2)
+        assert len([e for e in got if isinstance(e, ApprovalRequired)]) == 2
+    finally:
+        progress.reset_emitter(etoken)

@@ -836,3 +836,39 @@ async def test_replan_receives_skill_hint():
     import inspect
     from app.orchestration.planner import Planner
     assert "skill_hint" in inspect.signature(Planner.replan).parameters
+
+
+# ---------- 用户拒绝 = 终态失败，不重试 ----------
+
+class _DenyingExecutor:
+    """模拟子步里的操作被用户拒绝：产出终态失败标记。"""
+    def __init__(self, order):
+        self._order = order
+
+    async def execute(self, step, deps, hint="", *, registry=None):
+        from app.orchestration.executor import StepArtifact
+        self._order.append(step.id)
+        yield Progress(f"subagent:executor:{step.id}", "开始")
+        yield StepArtifact(Artifact(summary="命令未执行：用户拒绝了该操作"), terminal=True)
+
+
+async def test_user_denial_is_terminal_no_retry():
+    """回归：拒绝后步骤校验失败 → 编排器按普通失败重试，把同一个弹窗又怼给用户几次。
+    重试只对偶发故障有意义；人已经说了不，重跑不会有不同答案。"""
+    order = []
+    orch = _mk(FakePlanner([_plan(_s("s1"))]),
+               FakeCritic(validate_ok=False, reviews=(True,)), order)
+    orch._executor = _DenyingExecutor(order)
+    events = await _run(orch)
+
+    assert order == ["s1"], f"被拒的步骤不该重跑，实际执行了 {len(order)} 次"
+    assert isinstance(events[-1], RunFinished)      # 仍正常收尾，不硬崩
+
+
+async def test_ordinary_failure_still_retries():
+    """反向：普通失败照旧重试——别把这条护栏做成全局禁用重试。"""
+    order = []
+    orch = _mk(FakePlanner([_plan(_s("s1"))]),
+               FakeCritic(validate_ok=False, reviews=(True,)), order)
+    await _run(orch)
+    assert order.count("s1") == 2      # 初次 + 1 次重试（max_step_retry=2）
