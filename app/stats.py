@@ -34,16 +34,46 @@ _CN_TZ = timezone(timedelta(hours=8))
 
 # 原始工具名 → 面向学习者的「能力」分组（图标, 标签, 归入的工具名集合）。
 # 未列出的工具归入「其他能力」。顺序即展示顺序的兜底（实际按调用次数倒排）。
+#
+# 这张表会随工具集演进自然腐化，且腐化时不报错——只是所有调用悄悄堆进「其他能力」，
+# 产品叙事失效。曾漏掉全部应用层工具（知识库/题库/考试）与全部 MCP 远程工具，
+# 而 EXECUTOR_GUIDE 恰恰引导模型优先用 MCP 搜索工具，「联网查资料」因此注定接近 0。
+# tests/app/test_stats_ability_groups.py 有护栏：表里的名字必须真实注册、且真实注册的
+# 主要工具不得大面积落进「其他能力」。
 _ABILITY_GROUPS: list[tuple[str, str, set[str]]] = [
     ("🌐", "联网查资料", {"http_request", "browse"}),
     ("💻", "运行代码", {"run_shell", "run_python", "run_java", "run_node"}),
     ("🧠", "记住你的偏好", {"remember", "recall_episodes", "search_memory"}),
     ("🔍", "检索知识库", {"search_knowledge"}),
-    ("🧩", "拆解复杂任务", {"dispatch"}),
+    ("📥", "整理进知识库", {"save_to_knowledge"}),
+    ("✏️", "出练习题", {"sample_questions", "generate_questions", "add_questions"}),
+    ("📝", "考试与错题", {"start_exam", "save_wrong_answer", "sample_wrong_answers",
+                      "delete_wrong_answers", "list_questions", "delete_questions"}),
+    ("🧩", "拆解复杂任务", {"dispatch", "update_plan"}),
     ("✍️", "生成文件产物", {"write_file", "save_download"}),
-    ("✏️", "出练习题", {"sample_questions"}),
     ("📄", "读你的资料", {"read_attachment", "list_attachments", "read_file", "list_files"}),
+    ("🔢", "做计算", {"calculator"}),
 ]
+
+# MCP 远程工具名形如 mcp__<server>__<tool>，由外部服务器决定、无法枚举，只能按名字里的
+# 动作关键词归类。命中不了的仍进「其他能力」——那是诚实的，好过硬塞进某一类。
+_MCP_KEYWORD_GROUPS: list[tuple[tuple[str, ...], str]] = [
+    (("search", "搜索", "web_search"), "联网查资料"),
+    (("fetch", "browse", "crawl", "抓取"), "联网查资料"),
+]
+
+
+def _ability_label(name: str) -> str | None:
+    """工具名 → 能力标签；归不了类返回 None（调用方计入「其他能力」）。"""
+    for _icon, label, names in _ABILITY_GROUPS:
+        if name in names:
+            return label
+    if name.startswith("mcp__"):
+        low = name.lower()
+        for keys, label in _MCP_KEYWORD_GROUPS:
+            if any(k in low for k in keys):
+                return label
+    return None
 
 
 def _percentile(values: list[float], p: float) -> float:
@@ -371,8 +401,11 @@ class StatsService:
                 day = _cn_day(created_at)
                 if day:
                     daily[day]["tokens"] += tok
+                # 只收真实测过的耗时：embedding（memory/embeddings.py）与 rerank
+                # （memory/reranker.py）上报的 ModelUsage 把 latency_ms 硬编码成 0.0，
+                # 收进来会把均值/p95 系统性拉低——检索用得越多显得越快，与直觉相反。
                 lat = d.get("latency_ms")
-                if isinstance(lat, (int, float)):
+                if isinstance(lat, (int, float)) and lat > 0:
                     latencies.append(float(lat))
                 if (d.get("attempts") or 1) > 1:
                     retries += 1
@@ -451,13 +484,19 @@ class StatsService:
 
     def _abilities(self, tool_counts: Counter) -> list[dict]:
         out = []
-        grouped: set[str] = set()
-        for icon, label, names in _ABILITY_GROUPS:
-            c = sum(tool_counts.get(n, 0) for n in names)
-            grouped |= names
+        # 先按工具名逐个归类（含 MCP 关键词兜底），再按标签汇总——这样 MCP 工具也能进组
+        by_label: Counter = Counter()
+        other = 0
+        for name, cnt in tool_counts.items():
+            label = _ability_label(name)
+            if label is None:
+                other += cnt
+            else:
+                by_label[label] += cnt
+        for icon, label, _names in _ABILITY_GROUPS:
+            c = by_label.get(label, 0)
             if c > 0:
                 out.append({"icon": icon, "label": label, "count": c})
-        other = sum(v for k, v in tool_counts.items() if k not in grouped)
         if other > 0:
             out.append({"icon": "🛠️", "label": "其他能力", "count": other})
         out.sort(key=lambda x: x["count"], reverse=True)

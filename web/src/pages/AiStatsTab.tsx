@@ -27,7 +27,7 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
       <Eyebrow note={rangeLabel(days)}>运行概览</Eyebrow>
       <Box sx={{ display: "grid", gap: 1.75,
         gridTemplateColumns: { xs: "1fr 1fr", sm: "repeat(3,1fr)", md: "repeat(6,1fr)" } }}>
-        <StatTile label="运行次数" value={String(ops.totals.runs)} hint={`今日事件 ${learn.activity[learn.activity.length - 1]?.runs ?? 0}`} stripe={theme.palette.primary.main} />
+        <StatTile label="运行次数" value={String(ops.totals.runs)} stripe={theme.palette.primary.main} />
         <StatTile label="总 Token（所有模型）" value={fmtTokens(ops.totals.total_tokens)} hint={`${ops.totals.model_calls} 次调用 · 合计各模型`} stripe={theme.palette.primary.main} />
         <StatTile label="估算成本（所有模型）"
           value={ops.totals.cost_usd == null ? `${cur} —` : `${cur}${ops.totals.cost_usd}`}
@@ -108,12 +108,11 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
           <CardContent>
             <Typography sx={{ fontSize: 14, fontWeight: 650 }}>每 run 步数分布</Typography>
             <Typography sx={{ fontSize: 12, color: "text.secondary" }}>
-              识别"绕圈跑飞"的运行 · 平均 {learn.effort.avg_steps} 步
+              识别"绕圈跑飞"的运行
             </Typography>
             <StepsHistogram data={ops.steps_histogram} />
             <Stack direction="row" sx={{ justifyContent: "space-between", fontSize: 12, color: "text.secondary", mt: 1.5 }}>
               <span>成功 {ops.totals.runs_finished} · 失败 {ops.totals.runs_error}</span>
-              <span>最长 <b style={{ color: theme.palette.text.primary }}>{learn.effort.max_steps}</b> 步</span>
             </Stack>
           </CardContent>
         </Card>
