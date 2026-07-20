@@ -206,3 +206,48 @@ async def test_fast_tier_sites_all_declare_thinking_off():
     await build_completer(_Probe("bare"), cfg.model)("s", "u")
     assert seen["fast"] is False, "快速档须显式关思考"
     assert seen["bare"] == "未声明", "主模型裸调仍不声明（对照组：证明上面那条不是白测）"
+
+
+def test_terminal_review_honors_judge_model():
+    """编排器的终局校验（用户看到的「结果校验」）必须吃 judge 配置。
+
+    回归：review 曾写死主模型，而 judge 只接在交付门 AnswerVerifier 上——编排器成为
+    唯一主流程后那条分支永不进入，HARNESS_JUDGE_MODEL 于是对结果校验完全不起作用，
+    且不报错、不留痕。这类「配置静默失效」没有测试就发现不了。
+    """
+    h = build_harness(_cfg(judge_model="judge-x", judge_base_url="https://judge.example/v1",
+                           judge_api_key="jk"))
+    # completer 是闭包，从绑定的 client/模型上取证：judge 配了独立端点则该 client 不是主 client
+    critic = h.orchestrator._critic
+    assert critic._complete is not critic._validate, "终局 review 与单步 validate 不该是同一个"
+    assert "judge-x" in _closure_values(critic._complete), "终局 review 没走 judge 模型"
+    # 反证：单步 validate 走快速档，不该被这条改动带偏
+    assert "judge-x" not in _closure_values(critic._validate)
+
+
+def _closure_values(fn, depth=6) -> set:
+    """收集嵌套闭包里绑定的所有字符串值。
+
+    completer 是层层包裹的闭包（build_judge_completer → _with_thinking → build_completer），
+    模型名藏在最内层，只看一层拿不到。
+    """
+    import inspect
+    out, seen = set(), set()
+    stack = [(fn, 0)]
+    while stack:
+        f, d = stack.pop()
+        if d > depth or id(f) in seen:
+            continue
+        seen.add(id(f))
+        try:
+            vals = inspect.getclosurevars(f).nonlocals.values()
+        except TypeError:
+            continue
+        for v in vals:
+            if isinstance(v, str):
+                out.add(v)
+            elif callable(v):
+                stack.append((v, d + 1))
+            else:
+                out.add(getattr(v, "model", None) or getattr(v, "_model", None) or "")
+    return out

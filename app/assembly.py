@@ -257,7 +257,8 @@ def build_harness(config) -> Harness:
     # 会话上下文（历史+全部指引+记忆）与每请求工具表（用户级工具）注入其 run()，故它可作为唯一
     # 主流程而不丢失多轮对话/附件/考试/引用/个性化。简单问答仍在其内部短路成单个 ReAct 直答，
     # 复杂任务才拆分并行执行，不额外增加简单场景开销。
-    from app.completion import build_completer, build_fast_completer, build_fast_client
+    from app.completion import (build_completer, build_fast_completer, build_fast_client,
+                                build_judge_completer)
     from app.orchestration.orchestrator import Orchestrator
     from app.orchestration.planner import Planner
     from app.orchestration.critic import Critic
@@ -265,15 +266,21 @@ def build_harness(config) -> Harness:
     from harness.skills.matcher import SkillMatcher
     from app.sandbox_manager import sandbox_guide
     from harness.reliability.budget import BudgetTracker
-    _plan_complete = build_completer(client, config.model)     # 规划 + 终局 review 用主模型（判断质量要求高）
+    _plan_complete = build_completer(client, config.model)     # 规划用主模型（判断质量要求高）
     _fast_complete = build_fast_completer(client, config)      # triage + 单步 validate 用快速档（频繁，提速）
+    # 终局 review 就是「裁判」这个角色，理应吃 judge 配置。此前它写死主模型，而 judge 只接在
+    # 交付门 AnswerVerifier 上——编排器成为唯一主流程后那条分支永不进入（chat.py 里
+    # `if orchestrator is not None` 在前短路），于是 HARNESS_JUDGE_MODEL 对用户看到的
+    # 「结果校验」完全不起作用，且不报错。未配 judge_model 时 build_judge_completer 回退
+    # 主 client/主模型，故对没配的人零行为变更。
+    _review_complete = build_judge_completer(client, config)
     _exec_client, _exec_model = build_fast_client(client, config)   # 执行子步走快速档模型（占大头往返，提速）
     # 装配期回退用的执行子步工具视图（隐藏 update_plan）；实际运行时由 chat 路由传入每请求 registry 覆盖。
     _exec_reg = HidingRegistry(reg, {"update_plan"})
     orchestrator = Orchestrator(
         client=client, registry=reg, model=config.model,
         planner=Planner(_plan_complete, max_retries=config.orchestrator_planner_max_retries),
-        critic=Critic(_plan_complete, validate_complete=_fast_complete),
+        critic=Critic(_review_complete, validate_complete=_fast_complete),
         executor=Executor(_exec_client, _exec_reg, config.app_system_prompt, _exec_model,
                           max_steps=config.orchestrator_step_max_steps,
                           loop_detect_window=config.loop_detect_window,
