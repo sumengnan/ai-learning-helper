@@ -29,22 +29,47 @@ PLANNER_SYSTEM = (
     "每个子任务含：id（如 s1，全局唯一）、description（要做什么）、expected（应产出什么，"
     "供质检比对）、depends_on（依赖的子任务 id 列表，无依赖填 []）。\n"
     "能并行的子任务不要人为串联（depends_on 留空）；只有真正需要前一步产出时才建立依赖。\n"
+    "【必须落在可用工具范围内】给出可用工具清单时，只能规划这些工具做得到的事，"
+    "需要动用工具的步骤要在 description 里点名该用哪个工具（写工具名）。"
+    "绝不要臆想本系统没有的外部产品或服务（如 Notion、Obsidian、邮箱、日历、第三方网盘）——"
+    "用户说「保存到知识库」指的就是清单里的知识库保存工具，不是外部软件。"
+    "若某件事清单里没有工具能做到，就不要把它排成步骤。\n"
     '只输出一个 JSON 对象：{"steps":[{"id":...,"description":...,"expected":...,"depends_on":[...]}]}，'
     "不要多余文字。"
 )
 
+# 工具清单的裁剪上限：描述只取首句、并截断，避免几十个工具（含 MCP 远程工具）把规划
+# 提示词撑爆——规划器只需要知道"有什么、大致能干什么"，细节由执行子步自己看完整 schema。
+_ROSTER_DESC_MAX = 60
 
-def _plan_user(goal: str, recent_dialogue: str = "", skill_hint: str = "") -> str:
+def render_tool_roster(registry) -> str:
+    """把 registry 渲染成紧凑的工具清单，供规划器知悉自己在为什么样的工具集做计划。"""
+    if registry is None:
+        return ""
+    lines = []
+    for t in registry.tools():
+        desc = (t.description or "").strip()
+        head = desc.split("。")[0].split("\n")[0][:_ROSTER_DESC_MAX]
+        lines.append(f"- {t.name}：{head}" if head else f"- {t.name}")
+    return "\n".join(lines)
+
+
+def _plan_user(goal: str, recent_dialogue: str = "", tools_desc: str = "",
+               skill_hint: str = "") -> str:
     ctx = f"最近对话（供理解上下文相关的请求，如指代/追问）：\n{recent_dialogue}\n\n" if recent_dialogue else ""
+    # 工具清单在技能剧本之前：剧本是「怎么做」的蓝本，清单是「能做什么」的边界，
+    # 边界先立，剧本里若提到本系统没有的手段也不至于被照抄成步骤。
+    tools = f"可用工具清单：\n{tools_desc}\n\n" if tools_desc else ""
     # 路由命中的技能剧本：作为拆解蓝本注入（方向2），让 planner 按其步骤确定子任务与顺序
     hint = (f"参考以下技能流程来拆解计划（据此确定子任务与顺序，仍要贴合用户目标）：\n{skill_hint}\n\n"
             if skill_hint else "")
-    return f"{ctx}{hint}用户目标：\n{goal}\n\n请拆成 DAG 计划。"
+    return f"{ctx}{tools}{hint}用户目标：\n{goal}\n\n请拆成 DAG 计划。"
 
 
-def _replan_user(goal: str, done: list[PlanStep], feedback: str) -> str:
+def _replan_user(goal: str, done: list[PlanStep], feedback: str, tools_desc: str = "") -> str:
     done_txt = "\n".join(f"- [{s.id}] {s.description}（已完成）" for s in done) or "（无）"
-    return (f"用户目标：\n{goal}\n\n已完成的步骤：\n{done_txt}\n\n"
+    tools = f"可用工具清单：\n{tools_desc}\n\n" if tools_desc else ""
+    return (f"{tools}用户目标：\n{goal}\n\n已完成的步骤：\n{done_txt}\n\n"
             f"质检反馈（上一版计划的不足）：\n{feedback}\n\n"
             "请只为尚未完成的部分重新规划，输出新的 DAG 计划（不要重复已完成步骤）。")
 
@@ -64,13 +89,18 @@ class Planner:
         self._complete = complete
         self._max_retries = max_retries
 
-    async def plan(self, goal: str, recent_dialogue: str = "", skill_hint: str = "") -> Plan:
-        steps = await self._generate(PLANNER_SYSTEM, _plan_user(goal, recent_dialogue, skill_hint))
+    async def plan(self, goal: str, recent_dialogue: str = "", skill_hint: str = "", *,
+                   tools_desc: str = "") -> Plan:
+        # skill_hint 保持位置参数（dev 的技能路由按位置传），tools_desc 只收关键字
+        steps = await self._generate(
+            PLANNER_SYSTEM, _plan_user(goal, recent_dialogue, tools_desc, skill_hint))
         return Plan(goal=goal, steps=steps, version=1)
 
-    async def replan(self, goal: str, plan: Plan, feedback: str) -> Plan:
+    async def replan(self, goal: str, plan: Plan, feedback: str, *,
+                     tools_desc: str = "") -> Plan:
         done = [s for s in plan.steps if s.status == "done"]
-        steps = await self._generate(PLANNER_SYSTEM, _replan_user(goal, done, feedback))
+        steps = await self._generate(
+            PLANNER_SYSTEM, _replan_user(goal, done, feedback, tools_desc))
         return Plan(goal=goal, steps=steps, version=plan.version + 1)
 
     async def _generate(self, system: str, user: str) -> list[PlanStep]:

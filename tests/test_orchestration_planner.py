@@ -1,7 +1,7 @@
 import json
 import pytest
 
-from app.orchestration.planner import Planner, PlannerError
+from app.orchestration.planner import Planner, PlannerError, render_tool_roster
 from app.orchestration.plan import Plan
 
 
@@ -103,3 +103,60 @@ async def test_replan_exhausts_and_raises():
     with pytest.raises(PlannerError):
         await Planner(complete, max_retries=1).replan("g", plan, "fb")
     assert calls["n"] == 2
+
+
+# ---------- 工具清单注入：规划器必须知道自己在为什么样的工具集做计划 ----------
+
+class _FakeTool:
+    def __init__(self, name, description):
+        self.name = name
+        self.description = description
+
+
+class _FakeRegistry:
+    def __init__(self, tools):
+        self._tools = tools
+
+    def tools(self):
+        return self._tools
+
+
+def test_render_tool_roster_takes_first_sentence_and_truncates():
+    reg = _FakeRegistry([
+        _FakeTool("save_to_knowledge", "把内容作为「可检索的知识素材」存入用户知识库。"
+                                       "注意：这不是生成给用户的成品文档。"),
+        _FakeTool("calculator", "四则运算"),
+    ])
+    roster = render_tool_roster(reg)
+    assert "- save_to_knowledge：" in roster
+    assert "存入用户知识库" in roster
+    assert "这不是生成给用户的成品文档" not in roster   # 只取首句
+    assert "- calculator：四则运算" in roster
+
+
+def test_render_tool_roster_none_registry_is_empty():
+    assert render_tool_roster(None) == ""
+
+
+async def test_plan_prompt_carries_tool_roster():
+    """回归：不给工具清单，规划器会编出系统没有的外部产品（如 Notion/Obsidian），
+    执行子步读到那种描述就不会调 save_to_knowledge。"""
+    payload = json.dumps({"steps": [
+        {"id": "s1", "description": "用 save_to_knowledge 存入知识库",
+         "expected": "已入库", "depends_on": []}]})
+    complete, calls = _complete_capturing(payload)
+    roster = render_tool_roster(_FakeRegistry([
+        _FakeTool("save_to_knowledge", "把内容存入用户知识库。")]))
+    await Planner(complete).plan("搜索最新 AI 资讯并保存到知识库", tools_desc=roster)
+    prompt = calls["users"][0]
+    assert "可用工具清单" in prompt
+    assert "save_to_knowledge" in prompt
+
+
+async def test_replan_prompt_carries_tool_roster():
+    payload = json.dumps({"steps": [
+        {"id": "s1", "description": "a", "expected": "b", "depends_on": []}]})
+    complete, calls = _complete_capturing(payload)
+    plan = Plan(goal="g", steps=[], version=1)
+    await Planner(complete).replan("g", plan, "反馈", tools_desc="- save_to_knowledge：存知识库")
+    assert "save_to_knowledge" in calls["users"][0]

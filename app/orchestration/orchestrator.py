@@ -32,7 +32,7 @@ from harness.types import Message, Role
 
 from .critic import Critic
 from .executor import CLARIFY_GUIDE, Executor, HidingRegistry, StepArtifact
-from .planner import Planner, PlannerError
+from .planner import Planner, PlannerError, render_tool_roster
 from .plan import Artifact, Plan, has_pending, ready_steps
 from .usage_ctx import (
     UsageAcc, record_usage, reset_acc, reset_reason_sink, set_acc, set_reason_sink,
@@ -284,9 +284,14 @@ class Orchestrator:
                     yield ev
                 return
 
+            # 规划器必须看到执行子步真正拿得到的那份工具视图（exec_reg，非裸 registry）：
+            # 否则它会凭常识编出系统做不到的步骤（如「保存到 Notion/Obsidian」），执行子步
+            # 读到这种描述就只会答「请手动保存」，不去调 save_to_knowledge。
+            tools_desc = render_tool_roster(exec_reg if exec_reg is not None else registry)
             out: dict = {}   # 边规划边流式发规划思考（顶部"任务计划思考"块），先于计划
             async for ev in self._plan_streaming(
-                    self._planner.plan(user_message, recent_dialogue, skill_hint), out):
+                    self._planner.plan(user_message, recent_dialogue, skill_hint,
+                                       tools_desc=tools_desc), out):
                 yield ev
             if "error" in out:
                 async for ev in self._simple_answer(user_message, budget,   # 降级
@@ -335,7 +340,8 @@ class Orchestrator:
                         s.status = "skipped"
                 out2: dict = {}   # 重规划思考也流式发，在新计划之前
                 async for ev in self._plan_streaming(
-                        self._planner.replan(user_message, plan, review.feedback), out2):
+                        self._planner.replan(user_message, plan, review.feedback,
+                                             tools_desc=tools_desc), out2):
                     yield ev
                 if "error" in out2:
                     break

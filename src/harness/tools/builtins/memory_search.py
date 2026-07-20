@@ -14,8 +14,10 @@ class _CollectionSearchTool(Tool):
     可传的参数——scope 由构造方按用户注入，模型不该也不能跨用户检索。
     """
 
-    _default_collection = "knowledge"
-    _empty = "（未检索到相关内容）"
+    # 子类必须各自定义：空命中文案会被 app/sources.py 的 builder 用前缀判空、被
+    # validating/verify 当哨兵匹配，给个兜底默认值只会让漏定义的子类静默记出假来源。
+    _default_collection: str
+    _empty: str
 
     class Params(BaseModel):
         query: str

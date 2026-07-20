@@ -1,7 +1,7 @@
 # 端到端 agent 质量（慢层）。跑真实 AgentLoop + 真实模型 + LLM judge —— 会花钱、会慢、
 # 分数天生有方差。永不当 PR 门禁，只手动跑 + 与基线对比看趋势：
 #   uv run python -m evals run --suite agent
-# 默认注册的工具：calculator / http_request / search_knowledge / remember / recall_episodes
+# 默认注册的工具：calculator / http_request / search_knowledge / search_memory / remember / recall_episodes
 #   / recall_episodes / save_download / update_plan（sandbox/browser/dispatch/mcp 刻意不开）
 #
 # 写 case 的原则：先用 must_contain / must_call_tools 这类确定性断言兜底，judge 只负责

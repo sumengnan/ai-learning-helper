@@ -9,11 +9,14 @@ class FakePlanner:
     def __init__(self, plans, raise_on_plan=False):
         self._plans = list(plans); self._i = 0
         self._raise_on_plan = raise_on_plan
-    async def plan(self, goal, recent_dialogue="", skill_hint=""):
+        self.seen_tools = []          # 记录每次收到的工具清单，供断言编排器确实传了
+    async def plan(self, goal, recent_dialogue="", skill_hint="", *, tools_desc=""):
+        self.seen_tools.append(tools_desc)
         if self._raise_on_plan:
             raise PlannerError("boom")
         p = self._plans[0]; return p
-    async def replan(self, goal, plan, feedback):
+    async def replan(self, goal, plan, feedback, *, tools_desc=""):
+        self.seen_tools.append(tools_desc)
         self._i += 1
         return self._plans[min(self._i, len(self._plans) - 1)]
 
@@ -209,10 +212,10 @@ async def test_planner_reasoning_emitted_before_plan():
     from app.orchestration.usage_ctx import record_reasoning
 
     class RPlanner:
-        async def plan(self, goal, recent_dialogue="", skill_hint=""):
+        async def plan(self, goal, recent_dialogue="", skill_hint="", *, tools_desc=""):
             record_reasoning("先分析怎么拆")
             return _plan(_s("s1"))
-        async def replan(self, g, p, f):
+        async def replan(self, g, p, f, *, tools_desc=""):
             return _plan(_s("s1"))
 
     orch = _mk(RPlanner(), FakeCritic(reviews=(True,)), [])
@@ -251,9 +254,9 @@ async def test_run_aggregates_all_usage_incl_planner_critic():
             record_usage(Usage(0, 0, 20), 0.002); return Review(accept=True, feedback="")
 
     class UPlanner:
-        async def plan(self, goal, recent_dialogue="", skill_hint=""):
+        async def plan(self, goal, recent_dialogue="", skill_hint="", *, tools_desc=""):
             record_usage(Usage(0, 0, 30), 0.003); return _plan(_s("s1"), _s("s2"))
-        async def replan(self, g, p, f):
+        async def replan(self, g, p, f, *, tools_desc=""):
             return _plan(_s("s1"))
 
     async def usynth(goal, arts, recent_dialogue=""):
@@ -553,10 +556,10 @@ async def test_run_passes_recent_dialogue_to_planner_and_synth():
     """最近对话应喂给 Planner（上下文相关拆分）与最终汇总。"""
     seen = {}
     class CapPlanner:
-        async def plan(self, goal, recent_dialogue="", skill_hint=""):
+        async def plan(self, goal, recent_dialogue="", skill_hint="", *, tools_desc=""):
             seen["plan_rd"] = recent_dialogue
             return _plan(_s("s1"))
-        async def replan(self, g, p, f):
+        async def replan(self, g, p, f, *, tools_desc=""):
             return _plan(_s("s1"))
     async def cap_synth(goal, artifacts, recent_dialogue=""):
         seen["synth_rd"] = recent_dialogue
@@ -635,10 +638,10 @@ async def test_force_simple_bypasses_triage_and_planning():
     order = []
 
     class SpyPlanner:
-        async def plan(self, goal, recent_dialogue="", skill_hint=""):
+        async def plan(self, goal, recent_dialogue="", skill_hint="", *, tools_desc=""):
             calls["plan"] += 1
             return _plan(_s("s1"))
-        async def replan(self, goal, plan, feedback):
+        async def replan(self, goal, plan, feedback, *, tools_desc=""):
             return _plan(_s("s1"))
 
     async def counting_triage(msg):
@@ -731,9 +734,9 @@ async def test_run_emits_per_model_usage():
             record_usage(Usage(0, 0, 20), 0.002, "main-model"); return Review(accept=True, feedback="")
 
     class MPlanner:
-        async def plan(self, goal, recent_dialogue="", skill_hint=""):
+        async def plan(self, goal, recent_dialogue="", skill_hint="", *, tools_desc=""):
             record_usage(Usage(0, 0, 30), 0.003, "main-model"); return _plan(_s("s1"))
-        async def replan(self, g, p, f):
+        async def replan(self, g, p, f, *, tools_desc=""):
             return _plan(_s("s1"))
 
     async def msynth(goal, arts, recent_dialogue=""):
@@ -758,3 +761,33 @@ async def test_run_emits_per_model_usage():
     assert agg["main-model"]["tok"] == 100      # plan 30 + review 20 + synth 50
     assert abs(agg["fast-model"]["cost"] - 0.011) < 1e-9
     assert abs(agg["main-model"]["cost"] - 0.010) < 1e-9
+
+
+# ---------- 工具清单下发：规划器必须看到执行子步真正拿得到的工具 ----------
+
+async def test_planner_receives_exec_registry_roster_without_update_plan():
+    """回归：规划器看不到工具清单时会编出系统做不到的步骤（如「保存到 Notion」），
+    执行子步读到那种描述便不会调真实工具。清单须取执行子步视图——update_plan 被隐藏，
+    规划器不该把它排进计划。"""
+    from harness.tools.base import Tool, ToolRegistry
+    from pydantic import BaseModel
+
+    class _T(Tool):
+        class Params(BaseModel):
+            x: str = ""
+        def __init__(self, name, desc):
+            self.name = name; self.description = desc
+        async def run(self, params):
+            return ""
+
+    reg = ToolRegistry()
+    reg.register(_T("save_to_knowledge", "把内容存入用户知识库。"))
+    reg.register(_T("update_plan", "更新计划。"))
+    planner = FakePlanner([_plan(PlanStep(id="s1", description="a", expected="b"))])
+    orch = _mk(planner, FakeCritic(), [])
+    orch._registry = reg
+    [ev async for ev in orch.run("搜索最新 AI 资讯并保存到知识库", registry=reg)]
+
+    roster = planner.seen_tools[0]
+    assert "save_to_knowledge" in roster
+    assert "update_plan" not in roster        # 执行子步看不到它，规划器也不该看到
