@@ -118,7 +118,7 @@
 | `HARNESS_MEMORY_WRITE_SAMPLE_RATE` | `1.0` | 智能写入的采样率(1.0=每轮都写) |
 | `HARNESS_MEMORY_CONSOLIDATE_AFTER` | `20` | 会话情景记忆攒到这么多条就触发整合;0=关 |
 | `HARNESS_TTL_EPISODIC_DAYS` 等 | `0` | 各类型记忆保质期(天);0=永不过期 |
-| `HARNESS_SEARCH_TOP_K` | `5` | 检索默认返回条数 |
+| `HARNESS_SEARCH_TOP_K` | `10` | 检索默认返回条数 |
 | `HARNESS_CHUNK_SIZE` / `HARNESS_CHUNK_OVERLAP` | `1000` / `200` | 入库切块大小与重叠 |
 | `HARNESS_RERANK_MODEL` | 空 | 配了才启用重排精排;空则不重排 |
 | `HARNESS_RETRIEVAL_USE_HYDE` 等 | `false` | 召回增强(多查询/HyDE/实体),默认关 |
