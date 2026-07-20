@@ -182,6 +182,17 @@ export type ExamStatus = {
   mode?: string; type?: string | null;
 };
 
+// 待确认的破坏性操作。labels 是给人看的题干，count 是将影响的条数（不外泄内部 id）
+export type PendingAction = {
+  id: string;
+  kind: "delete_questions" | "delete_wrong_answers" | string;
+  status: "pending" | "confirmed" | "rejected" | "expired";
+  count: number;
+  labels: string[];
+  created_at: string;
+  expires_at: string;
+};
+
 export const api = {
   // 各角色当前模型名，供聊天区展示「当前模型」
   models: (): Promise<ModelsInfo> => authFetch("/api/models").then((r) => r.json()),
@@ -190,6 +201,26 @@ export const api = {
     status: (conversationId: string): Promise<ExamStatus> =>
       authFetch(`/api/exam/status?conversation_id=${encodeURIComponent(conversationId)}`)
         .then((r) => r.json()),
+  },
+  // 待确认的破坏性操作（删题库/删错题）：AI 只登记，确认后由服务端执行
+  pendingActions: {
+    get: (id: string): Promise<PendingAction> =>
+      authFetch(`/api/pending-actions/${encodeURIComponent(id)}`).then(async (r) => {
+        if (!r.ok) throw new Error(await detail(r, "待确认操作不存在"));
+        return r.json();
+      }),
+    confirm: (id: string): Promise<{ ok: boolean; deleted: number }> =>
+      authFetch(`/api/pending-actions/${encodeURIComponent(id)}/confirm`, { method: "POST" })
+        .then(async (r) => {
+          if (!r.ok) throw new Error(await detail(r, "确认失败"));
+          return r.json();
+        }),
+    reject: (id: string): Promise<{ ok: boolean }> =>
+      authFetch(`/api/pending-actions/${encodeURIComponent(id)}/reject`, { method: "POST" })
+        .then(async (r) => {
+          if (!r.ok) throw new Error(await detail(r, "取消失败"));
+          return r.json();
+        }),
   },
   list: (): Promise<Conversation[]> => authFetch("/api/conversations").then((r) => r.json()),
   create: (title?: string): Promise<{ id: string }> =>
