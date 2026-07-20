@@ -54,7 +54,7 @@ class SampleQuestionsTool(Tool):
     description = (
         "从当前用户的题库中随机抽取题目用于模拟考试。返回的题目含答案与解析，"
         "仅供你出题与判分：在『打分式』考试中，作答完成前不要向用户透露答案。"
-        "count 常用 10-30（上限 50）：抽太少覆盖面不够，用户刷两下就没题了。")
+        "count 常用 10-50（即上限）：抽太少覆盖面不够，用户刷两下就没题了。")
 
     class Params(BaseModel):
         count: int = 10
@@ -253,7 +253,7 @@ class SampleWrongAnswersTool(Tool):
     description = (
         "从用户的「错题集」随机抽取题目用于重考/复习。返回题目快照（含答案与解析）"
         "及错题 id，仅供你出题与判分：在『打分式』考试中作答完成前不要透露答案。"
-        "count 常用 10-30（上限 50）：复习要有量才见效，抽太少不解决问题。")
+        "count 常用 10-50（即上限）：复习要有量才见效，抽太少不解决问题。")
 
     class Params(BaseModel):
         count: int = 10
