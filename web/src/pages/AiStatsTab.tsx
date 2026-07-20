@@ -27,16 +27,72 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
       <Eyebrow note={rangeLabel(days)}>运行概览</Eyebrow>
       <Box sx={{ display: "grid", gap: 1.75,
         gridTemplateColumns: { xs: "1fr 1fr", sm: "repeat(3,1fr)", md: "repeat(6,1fr)" } }}>
-        <StatTile label="运行次数" value={String(ops.totals.runs)} hint={`今日事件 ${learn.activity[learn.activity.length - 1]?.runs ?? 0}`} stripe={theme.palette.primary.main} />
-        <StatTile label="总 Token" value={fmtTokens(ops.totals.total_tokens)} hint={`${ops.totals.model_calls} 次调用`} stripe={theme.palette.primary.main} />
-        <StatTile label="估算成本"
+        <StatTile label="总聊天次数" value={String(ops.totals.runs)} hint={`总聊天会话 ${ops.totals.conversations}`}  stripe={theme.palette.primary.main} />
+        <StatTile label="总 Token（所有模型）" value={fmtTokens(ops.totals.total_tokens)} hint={`${ops.totals.model_calls} 次调用 · 合计各模型`} stripe={theme.palette.primary.main} />
+        <StatTile label="估算成本（所有模型）"
           value={ops.totals.cost_usd == null ? `${cur} —` : `${cur}${ops.totals.cost_usd}`}
-          hint={ops.totals.cost_usd == null ? "待配置单价" : "按 token 分层估算"}
+          hint={ops.totals.cost_usd == null ? "待配置单价" : "各模型按各自单价合计"}
           stripe={theme.palette.warning.main} />
         <StatTile label="成功率" value={fmtPct(ops.totals.success_rate)} hint={`${ops.totals.runs_finished} / ${ops.totals.runs}`} stripe={theme.palette.success.main} />
         <StatTile label="P95 延迟" value={fmtLatency(ops.totals.p95_latency_ms)} hint={`均值 ${fmtLatency(ops.totals.avg_latency_ms)}`} stripe={theme.palette.warning.main} />
-        <StatTile label="重试次数" value={String(ops.totals.retries)} hint={`全站会话 ${ops.totals.conversations}`} stripe={theme.palette.primary.main} />
+        <StatTile label="LLM 网络重试次数" value={String(ops.totals.retries)} hint={"主/快速/judge模型总和"} stripe={theme.palette.primary.main} />
       </Box>
+
+      {/* 分模型用量：总 token/调用次数/成本按不同模型（主/快速/judge…）拆开，及汇总 */}
+      <Eyebrow note={rangeLabel(days)}>分模型用量</Eyebrow>
+      <Card sx={cardSx}>
+        <CardContent>
+          <Typography sx={{ fontSize: 14, fontWeight: 650 }}>各模型 Token / 调用次数 / 成本</Typography>
+          <Typography sx={{ fontSize: 12, color: "text.secondary", mb: 2 }}>
+            主/快速/judge 等各档模型按各自单价计费 · 底部为所有模型汇总
+            {ops.by_model.length === 0 ? "" : " · 悬停查看输入/输出"}
+          </Typography>
+          {ops.by_model.length === 0 ? (
+            <Typography sx={{ fontSize: 13, color: "text.disabled" }}>本区间还没有模型调用记录</Typography>
+          ) : (
+            <Stack spacing={0.75}>
+              <Box sx={{ display: "grid", gridTemplateColumns: "1fr 88px 96px 108px", alignItems: "center",
+                gap: 1.5, fontSize: 11, color: "text.disabled", fontWeight: 600 }}>
+                <span>模型</span>
+                <Box component="span" sx={{ textAlign: "right" }}>调用次数</Box>
+                <Box component="span" sx={{ textAlign: "right" }}>Token</Box>
+                <Box component="span" sx={{ textAlign: "right" }}>成本</Box>
+              </Box>
+              {ops.by_model.map((m) => (
+                <Tooltip key={m.model} arrow followCursor placement="top"
+                  title={`${m.model} · 输入 ${m.prompt} / 输出 ${m.completion} tokens · 调用 ${m.calls} 次`}>
+                  <Box sx={{ display: "grid", gridTemplateColumns: "1fr 88px 96px 108px",
+                    alignItems: "center", gap: 1.5, cursor: "pointer", py: 0.4 }}>
+                    <Typography sx={{ fontFamily: "monospace", fontSize: 12.5, whiteSpace: "nowrap",
+                      overflow: "hidden", textOverflow: "ellipsis" }}>{m.model}</Typography>
+                    <Typography sx={{ textAlign: "right", fontFamily: "monospace", fontSize: 12,
+                      color: "text.secondary", fontVariantNumeric: "tabular-nums" }}>{m.calls}</Typography>
+                    <Typography sx={{ textAlign: "right", fontFamily: "monospace", fontSize: 12,
+                      color: "text.secondary", fontVariantNumeric: "tabular-nums" }}>{fmtTokens(m.total_tokens)}</Typography>
+                    <Typography sx={{ textAlign: "right", fontFamily: "monospace", fontSize: 12,
+                      color: "text.secondary", fontVariantNumeric: "tabular-nums" }}>
+                      {m.cost_usd == null ? `${cur} —` : `${cur}${m.cost_usd}`}
+                    </Typography>
+                  </Box>
+                </Tooltip>
+              ))}
+              {/* 汇总行 */}
+              <Box sx={{ display: "grid", gridTemplateColumns: "1fr 88px 96px 108px", alignItems: "center",
+                gap: 1.5, pt: 0.75, mt: 0.25, borderTop: 1, borderColor: "divider" }}>
+                <Typography sx={{ fontSize: 12.5, fontWeight: 700 }}>汇总（所有模型）</Typography>
+                <Typography sx={{ textAlign: "right", fontFamily: "monospace", fontSize: 12, fontWeight: 700,
+                  fontVariantNumeric: "tabular-nums" }}>{ops.totals.model_calls}</Typography>
+                <Typography sx={{ textAlign: "right", fontFamily: "monospace", fontSize: 12, fontWeight: 700,
+                  fontVariantNumeric: "tabular-nums" }}>{fmtTokens(ops.totals.total_tokens)}</Typography>
+                <Typography sx={{ textAlign: "right", fontFamily: "monospace", fontSize: 12, fontWeight: 700,
+                  fontVariantNumeric: "tabular-nums" }}>
+                  {ops.totals.cost_usd == null ? `${cur} —` : `${cur}${ops.totals.cost_usd}`}
+                </Typography>
+              </Box>
+            </Stack>
+          )}
+        </CardContent>
+      </Card>
 
       {/* 趋势 + 步数 */}
       <Eyebrow>运行趋势</Eyebrow>
@@ -52,12 +108,11 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
           <CardContent>
             <Typography sx={{ fontSize: 14, fontWeight: 650 }}>每 run 步数分布</Typography>
             <Typography sx={{ fontSize: 12, color: "text.secondary" }}>
-              识别"绕圈跑飞"的运行 · 平均 {learn.effort.avg_steps} 步
+              识别"绕圈跑飞"的运行
             </Typography>
             <StepsHistogram data={ops.steps_histogram} />
             <Stack direction="row" sx={{ justifyContent: "space-between", fontSize: 12, color: "text.secondary", mt: 1.5 }}>
               <span>成功 {ops.totals.runs_finished} · 失败 {ops.totals.runs_error}</span>
-              <span>最长 <b style={{ color: theme.palette.text.primary }}>{learn.effort.max_steps}</b> 步</span>
             </Stack>
           </CardContent>
         </Card>

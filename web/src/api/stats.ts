@@ -5,7 +5,7 @@ export interface DailyPoint { date: string; runs: number; tokens: number }
 export interface ToolStat { name: string; count: number; errors: number; success_rate: number }
 export interface StepBucket { bucket: string; count: number }
 export interface RecentDownload { id: string; filename: string; content_type: string; size: number; created_at: string }
-export interface MemoryItem { id: string; text: string; collection: string; created_at: string }
+export interface MemoryItem { id: string; text: string; collection: string; mem_type: string; created_at: string }
 export interface GateLayer { layer: string; zh: string; count: number }
 /** 交付门重答统计（读 conversation_messages.verify 列）。
  *  注意 retries 与 ops.totals.retries 是两回事：那个是 LLM 网络重试。 */
@@ -60,6 +60,10 @@ export interface StatsOverview {
       cost_currency: string;
       conversations: number; messages: number;
     };
+    // 分模型明细：token/调用次数/成本按模型拆开（totals 是所有模型的汇总）。
+    // 含 embedding/rerank：其 emit 用量已并入主流落 trajectory，进历史分模型统计。
+    by_model: { model: string; calls: number; prompt: number; completion: number;
+                total_tokens: number; cost_usd: number | null }[];
     daily: DailyPoint[];
     tools: ToolStat[];
     steps_histogram: StepBucket[];
@@ -85,5 +89,20 @@ export const statsApi = {
   deleteMemory: (id: string): Promise<void> =>
     authFetch(`/api/stats/memory/${encodeURIComponent(id)}`, { method: "DELETE" }).then((r) => {
       if (!r.ok) throw new Error(`删除失败：${r.status}`);
+    }),
+  // 批量删除：返回实际删除的 id 列表（非本人/不存在的后端会跳过）
+  deleteMemories: (ids: string[]): Promise<{ deleted: string[] }> =>
+    authFetch(`/api/stats/memory/delete`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    }).then((r) => {
+      if (!r.ok) throw new Error(`删除失败：${r.status}`);
+      return r.json();
+    }),
+  // 手动「整理相似偏好」：把同主题的多条偏好合并成一条，返回合并统计
+  consolidateMemory: (): Promise<{ clusters: number; merged: number; created: number }> =>
+    authFetch(`/api/stats/memory/consolidate`, { method: "POST" }).then((r) => {
+      if (!r.ok) throw new Error(`整理失败：${r.status}`);
+      return r.json();
     }),
 };

@@ -223,3 +223,69 @@ async def test_add_questions_dedups_against_bank():
     fresh = {"type": "single", "stem": "新题", "options": ["A", "B"], "answer": 1}
     out = await tool.run(tool.Params(questions=[dup, fresh]))
     assert "1" in out and len(qs.list("u1")) == 2      # 只新增「新题」
+
+
+# ---------- 题目 id 不外露：结果里要给出题干，模型才有名字可写 ----------
+
+async def test_add_questions_result_lists_stems():
+    """回归：工具只回 id 时，模型写学习计划就只能罗列一串哈希——对用户毫无意义。
+    结果里必须带题干，模型才有「名字」可用。"""
+    store = QuestionStore(":memory:")
+    t = AddQuestionsTool(store, "u1")
+    out = await t.run(t.Params(questions=[
+        {"type": "single", "stem": "什么是自注意力机制？", "options": ["A", "B"], "answer": 0},
+        {"type": "truefalse", "stem": "Transformer 摒弃了循环结构", "answer": True}]))
+    assert "1. 什么是自注意力机制？" in out
+    assert "2. Transformer 摒弃了循环结构" in out
+    assert "不要写进给用户的回答" in out      # 最贴近的一次提醒，就在 id 前面
+    assert "〔题目ID:" in out                  # 机读标记仍在（交付门清理 + start_exam 要用）
+
+
+async def test_add_questions_stem_order_matches_id_order():
+    """题干顺序必须与 id 顺序一致：start_exam(source=ids) 按传入顺序出题，
+    错位会导致「就考刚才第 2 道」考出另一道。"""
+    store = QuestionStore(":memory:")
+    t = AddQuestionsTool(store, "u1")
+    out = await t.run(t.Params(questions=[
+        {"type": "single", "stem": "第一题", "options": ["A", "B"], "answer": 0},
+        {"type": "single", "stem": "坏题无选项", "answer": 0},          # 非法，会被跳过
+        {"type": "single", "stem": "第三题", "options": ["A", "B"], "answer": 1}]))
+    ids = out.split("〔题目ID:")[1].rstrip("〕").split(",")
+    assert len(ids) == 2                       # 非法题不入库
+    lines = [ln for ln in out.splitlines() if ln[:2] in ("1.", "2.")]
+    assert lines[0].endswith("第一题") and lines[1].endswith("第三题")
+
+
+def test_exam_guide_forbids_exposing_question_ids():
+    """EXAM_GUIDE 此前只教了怎么用 id（传 start_exam），从没说过别写给用户看。"""
+    from app.api.chat import EXAM_GUIDE
+    assert "题目 id 绝不出现在给用户的回答里" in EXAM_GUIDE
+    assert "用题干" in EXAM_GUIDE
+
+
+# ---------- 采样量 ----------
+
+def test_sample_tools_default_to_ten():
+    """默认 5 太少：题库/错题集抽两下就没了，复习也不见效。上限 50 不变。"""
+    assert SampleQuestionsTool.Params().count == 10
+    assert SampleWrongAnswersTool.Params().count == 10
+
+
+async def test_sample_questions_honours_larger_count():
+    store = QuestionStore(":memory:")
+    for i in range(40):
+        store.create("u1", {"type": "single", "stem": f"题{i}",
+                            "options": ["A", "B"], "answer": 0})
+    t = SampleQuestionsTool(store, "u1")
+    out = json.loads(await t.run(t.Params(count=30)))
+    assert len(out) == 30
+
+
+async def test_sample_questions_clamps_to_fifty():
+    store = QuestionStore(":memory:")
+    for i in range(60):
+        store.create("u1", {"type": "single", "stem": f"题{i}",
+                            "options": ["A", "B"], "answer": 0})
+    t = SampleQuestionsTool(store, "u1")
+    out = json.loads(await t.run(t.Params(count=999)))
+    assert len(out) == 50

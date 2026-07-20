@@ -2,23 +2,28 @@ import { useEffect, useRef, useState } from "react";
 import {
   Box, Paper, TextField, Button, Typography, FormControlLabel, Switch,
   Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions,
-  IconButton, Tooltip, Snackbar, Alert, CircularProgress,
+  IconButton, Tooltip, Snackbar, Alert, CircularProgress, Chip,
 } from "@mui/material";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import DownloadIcon from "@mui/icons-material/Download";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 import StopCircleIcon from "@mui/icons-material/StopCircle";
+import SmartToyOutlinedIcon from "@mui/icons-material/SmartToyOutlined";
+import QuizOutlinedIcon from "@mui/icons-material/QuizOutlined";
+import { alpha } from "@mui/material/styles";
 import { motion } from "framer-motion";
 import type { ChatMessage } from "../types";
-import { streamChat, attachChat, stopRun, sendDecision, api } from "../api/client";
+import { streamChat, attachChat, stopRun, sendDecision, api, type ModelsInfo, type ExamStatus } from "../api/client";
 import { AgentProgress } from "./AgentProgress";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { SourceList } from "./SourceList";
+import { PendingActionCard } from "./PendingActionCard";
 import { MessageMeta } from "./MessageMeta";
 import { linkifyCitations, citeId } from "./citations";
 import { EmptyHint } from "./EmptyHint";
 import { ProgressBlock } from "./ProgressBlock";
+import { SubagentProgress } from "./SubagentProgress";
 import { VerifyBadge, isGateOpen } from "./VerifyBadge";
 import { PlanBlock } from "./PlanBlock";
 import { Markdown } from "./Markdown";
@@ -27,6 +32,9 @@ import { AttachmentChips, type AttachmentItem } from "./Attachments";
 import { bubbleVariants } from "./motion";
 
 const MotionBox = motion(Box);
+
+// 当前模型信息缓存：全站不变，避免每次切换对话（ChatView 按 key 重挂载）重复请求
+let _modelsCache: ModelsInfo | null = null;
 
 const SHOW_TOOLS_KEY = "chat_show_tools";
 const SHOW_SOURCES_KEY = "chat_show_sources";
@@ -52,6 +60,36 @@ function generatedFiles(steps?: { tool: string; args?: any; result?: string }[])
     }
   }
   return out;
+}
+
+// 从工具轨迹里提取待确认的破坏性操作（删除类工具结果带机读标记〔待确认:...〕）。
+// 与 generatedFiles 同源思路：基于已持久化的 steps，刷新后卡片仍在。
+const PENDING_ID_RE = /〔待确认:([0-9a-fA-F]+)〕/g;
+function pendingActionIds(steps?: { tool: string; result?: string }[]) {
+  const out: string[] = [];
+  for (const s of steps || []) {
+    for (const m of (s.result || "").matchAll(PENDING_ID_RE)) {
+      if (!out.includes(m[1])) out.push(m[1]);
+    }
+  }
+  return out;
+}
+
+// 判断本轮的计划块是不是**编排器**发的。编排器的计划步带 id（见 orchestrator._plan_progress），
+// 工具明细靠 id 挂到步下；而简单直答路径里模型自己调 update_plan 发的 ReAct 清单只有
+// title/status、没有 id，明细永远挂不上去。
+// 两者都用 scope="plan"，若不加区分就会出事：ReAct 清单一到，下面的扁平工具块被隐藏，
+// 而清单本身又展不开明细——用户看到工具块闪现后消失、点开步骤空空如也。
+function isOrchestratorPlan(progress?: { scope: string; text?: string }[]) {
+  const items = (progress || []).filter((p) => p.scope === "plan");
+  const last = items[items.length - 1];
+  if (!last?.text) return false;
+  try {
+    const steps = JSON.parse(last.text);
+    return Array.isArray(steps) && steps.some((s: any) => s && s.id);
+  } catch {
+    return false;
+  }
 }
 
 // 等待 AI 回复时的“正在输入”三点动画（framer-motion 循环，风格与全站统一）
@@ -82,6 +120,11 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
   const [showTools, setShowTools] = useState(() => readBool(SHOW_TOOLS_KEY, true));
   const [showSources, setShowSources] = useState(() => readBool(SHOW_SOURCES_KEY, true));
   const [think, setThink] = useState(() => readBool(THINK_KEY, false));  // 思考模式默认关
+  const [models, setModels] = useState<ModelsInfo | null>(null);   // 各角色当前模型名（展示用）
+  const [exam, setExam] = useState<ExamStatus | null>(null);       // 考试状态：进行中时显示「考试中」标识
+  // 本轮 run 句柄是否已拿到（镜像 turnRunIdRef，用于驱动「停止」按钮的可用态）。拿到 X-Run-Id
+  // 前不允许停止——否则只断本地流、杀不掉后端后台任务，任务会继续跑到完。
+  const [turnRunId, setTurnRunId] = useState<string | null>(null);
   const [verify, setVerify] = useState(() => readBool(VERIFY_KEY, true));
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
@@ -128,6 +171,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
       : ps.map((p) => (p.id === tmpId ? { ...p, ...patch } : p)));
 
   async function addFiles(files: FileList | File[]) {
+    if (busyRef.current) { setErr("AI 回复中，暂不能添加附件"); return; }  // 拖拽/粘贴/选择统一挡在这
     const list = Array.from(files);
     if (list.length === 0) return;
     for (const file of list) {
@@ -191,6 +235,25 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
     return () => { mountedRef.current = false; abortRef.current?.abort(); };
   }, []);
 
+  // 拉取当前模型名（带模块级缓存）；防御式：取不到就不显示，绝不因此崩溃
+  useEffect(() => {
+    if (_modelsCache) { setModels(_modelsCache); return; }
+    Promise.resolve(api.models?.())
+      .then((m) => { if (m) { _modelsCache = m; setModels(m); } })
+      .catch(() => {});
+  }, []);
+
+  // 考试状态：进入/切换对话时拉一次（刷新可续考），每轮结束后再拉一次——开考/答题推进/结束
+  // 都会改变它。取不到就保持原状，绝不因此崩溃或误清标识。
+  async function refreshExam() {
+    try { setExam(await api.exam?.status(conversationId)); }
+    catch { /* 忽略：不影响聊天 */ }
+  }
+  useEffect(() => {
+    void refreshExam();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId]);
+
   // 跟随滚动：AI 回复流式更新时自动滚到底部；用户主动上滑离开底部则暂停跟随
   useEffect(() => {
     const el = scrollRef.current;
@@ -232,7 +295,27 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
       const s = a.steps![a.steps!.length - 1];
       if (s) { s.result = e.data.result.content; s.isError = e.data.result.is_error; }
     });
-    else if (e.type === "ModelUsage") upd((a) => { a.usage = { tokens: e.data.usage.total, cost: e.data.cost_usd }; });
+    else if (e.type === "ModelUsage") upd((a) => {
+      // 所有 ModelUsage 都是逐模型增量：按模型累加，合计所有模型即本轮总额（含 embedding/rerank）。
+      const m: string = e.data.model || "";
+      const bm = { ...(a.usageByModel || {}) };
+      const prev = bm[m] || { tokens: 0, cost: 0 };
+      bm[m] = { tokens: prev.tokens + e.data.usage.total,
+                cost: (prev.cost ?? 0) + (e.data.cost_usd ?? 0) };
+      a.usageByModel = bm;
+      const vals = Object.values(bm);
+      a.usage = {
+        tokens: vals.reduce((s, x) => s + x.tokens, 0),
+        cost: vals.reduce((s, x) => s + (x.cost ?? 0), 0),
+      };
+    });
+    // 任务计划思考（scope=plan_reasoning）：流式累积成单独的"任务计划思考"块，不入 progress 列。
+    // 末尾带 detail.elapsed_ms 的是耗时标记（后端权威），据此冻结耗时。
+    else if (e.type === "Progress" && e.data.scope === "plan_reasoning") upd((a) => {
+      if (e.data.detail?.elapsed_ms != null) { a.planReasoningMs = e.data.detail.elapsed_ms; return; }
+      if (a.planReasoningStartedAt == null) a.planReasoningStartedAt = Date.now();
+      a.planReasoning = (a.planReasoning || "") + e.data.text;
+    });
     // 来源借 Progress 通道传（scope=sources，text 为 JSON）：特判解析成 sources，不入 progress 列
     else if (e.type === "Progress" && e.data.scope === "sources") upd((a) => {
       try { a.sources = JSON.parse(e.data.text); } catch { /* 忽略坏 JSON */ }
@@ -272,7 +355,13 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
     // 让新版从头打字机输出。只清正文，不动 steps/progress/校验历史（那是过程轨迹，另有 purged
     // 事件处理失效产物）。特判、不入 progress 列。
     else if (e.type === "Progress" && e.data.scope === "reset") upd((a) => { a.content = ""; });
-    else if (e.type === "Progress") upd((a) => { (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text, status: e.data.status, key: e.data.key, agent: e.data.agent }); });
+    else if (e.type === "Progress") upd((a) => {
+      // 计划快照出现 = 规划思考结束，冻结"任务计划思考"耗时
+      if (e.data.scope === "plan" && a.planReasoningStartedAt != null && a.planReasoningMs == null) {
+        a.planReasoningMs = Date.now() - a.planReasoningStartedAt;
+      }
+      (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text, status: e.data.status, key: e.data.key, agent: e.data.agent, detail: e.data.detail });
+    });
     else if (e.type === "RunStarted") runIdRef.current = e.data.run_id;
     else if (e.type === "ApprovalRequired") setApproval({ approvalId: e.data.approval_id, command: e.data.command, reason: e.data.reason });
     else if (e.type === "ApprovalResolved") setApproval(null);
@@ -303,6 +392,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
     }
     let outcome: "done" | "error" | "stopped" | null = "done";
     userStoppedRef.current = false;
+    turnRunIdRef.current = null; setTurnRunId(null);   // 新一轮：清空上轮句柄，拿到本轮的才允许停止
     setInput(""); setPending([]); setBusy(true); busyRef.current = true;
     const controller = new AbortController();
     abortRef.current = controller;
@@ -310,7 +400,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
     try {
       await streamChat(conversationId, msg, onEvent, controller.signal,
         attachments.map((a) => a.id),
-        (rid) => { turnRunIdRef.current = rid; upd((a) => { a.runId = rid; }); },
+        (rid) => { turnRunIdRef.current = rid; setTurnRunId(rid); upd((a) => { a.runId = rid; }); },
         thinkRef.current, verifyRef.current);
     } catch (err: any) {
       // 用户点停止 → 已停止；非用户 abort（卸载/重挂载）→ null：不落终态，保留 streaming 待重连
@@ -347,14 +437,18 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
           if (base != null) a.reasoningMs = Date.now() - base;
         }
       });
+      void refreshExam();   // 本轮结束：可能刚开考/推进一题/答完结束，刷新「考试中」标识
     }
   }
 
   // 停止本轮生成：显式取消后端后台任务（断开已不再取消它）+ 断开本地流。
+  // 前提是已拿到本轮 run 句柄——没有句柄就只能断本地流、杀不掉后端任务，故直接不允许停止
+  // （按钮此时禁用，这里再做一道防御）。
   function stop() {
-    userStoppedRef.current = true;   // 标记为用户主动停止：本次 abort 才落「已停止」终态
     const tid = turnRunIdRef.current;
-    if (tid) void stopRun(tid);
+    if (!tid) return;                // 未拿到句柄不停止：否则后端任务照跑，前后端会不一致
+    userStoppedRef.current = true;   // 标记为用户主动停止：本次 abort 才落「已停止」终态
+    void stopRun(tid);
     abortRef.current?.abort();
   }
 
@@ -374,7 +468,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
   async function reattach(runId: string) {
     if (busyRef.current) return;
     userStoppedRef.current = false;
-    turnRunIdRef.current = runId;
+    turnRunIdRef.current = runId; setTurnRunId(runId);   // 接回即已知句柄，可停止
     setBusy(true); busyRef.current = true;
     upd((a) => { a.content = ""; a.steps = []; a.progress = undefined; a.sources = undefined;
       a.startedAt = a.startedAt ?? Date.now(); a.elapsedMs = undefined; });
@@ -426,6 +520,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
           if (base != null) a.reasoningMs = Date.now() - base;
         }
       });
+      void refreshExam();   // 本轮结束：可能刚开考/推进一题/答完结束，刷新「考试中」标识
     }
   }
 
@@ -465,7 +560,11 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
             <Paper
               elevation={0}
               sx={{
-                maxWidth: "80%", px: 1.5, py: 1, borderRadius: 2,
+                // 助手气泡固定占满列宽（80%），一有内容就展到最右，不随正文长短忽宽忽窄；
+                // 用户气泡仍按内容自适应（右对齐的短消息更自然）。
+                maxWidth: "80%",
+                ...(m.role === "assistant" && { width: "80%" }),
+                px: 1.5, py: 1, borderRadius: 2,
                 bgcolor: m.role === "user" ? "primary.main" : "action.hover",
                 color: m.role === "user" ? "primary.contrastText" : "text.primary",
               }}
@@ -475,28 +574,58 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                   <AttachmentChips items={m.attachments} />
                 </Box>
               )}
-              {/* 思考过程：置于最顶（工具调用等过程块之上），先于正文展示推理内容 */}
-              {m.role === "assistant" && m.reasoning && (() => {
+              {(() => {
+                const hasPlan = m.role === "assistant"
+                  && !!m.progress?.some((p) => p.scope === "plan");
                 const streamingLast = busy && i === messages.length - 1 && m.status === "streaming";
-                // 思考进行中 = 本轮仍在流式 且 正文尚未开始（首字一到即视为思考结束）
                 const thinking = streamingLast && !m.content;
                 return (
-                  <ThinkingBlock reasoning={m.reasoning} thinking={thinking}
-                    startedAt={m.reasoningStartedAt ?? m.startedAt} elapsedMs={m.reasoningMs} />
+                  <>
+                    {/* 顶部：编排器"任务计划思考"（规划前思考）；计划未出现前视为思考中，可读秒 */}
+                    {m.role === "assistant" && m.planReasoning && (
+                      <ThinkingBlock reasoning={m.planReasoning} thinking={thinking && !hasPlan}
+                        title="任务计划思考"
+                        startedAt={m.planReasoningStartedAt} elapsedMs={m.planReasoningMs} />
+                    )}
+                    {/* 顶部：非编排器（ReAct/简单问答，无计划）的思考——保持原样 */}
+                    {m.role === "assistant" && m.reasoning && !hasPlan && (
+                      <ThinkingBlock reasoning={m.reasoning} thinking={thinking}
+                        startedAt={m.reasoningStartedAt ?? m.startedAt} elapsedMs={m.reasoningMs} />
+                    )}
+                  </>
                 );
               })()}
+              {/* 技能块：置于任务步骤块之上，让「用了什么技能」最先可见 */}
+              {showTools && m.role === "assistant" && m.progress && m.progress.length > 0 && (
+                <ProgressBlock title="技能" kind="skill"
+                  items={m.progress.filter((p) => p.scope === "skill")} status="ok" />
+              )}
               {m.role === "assistant" && m.progress && (() => {
                 const planItems = m.progress.filter((p) => p.scope === "plan");
                 const plan = planItems[planItems.length - 1];
                 const live = busy && i === messages.length - 1 && m.status === "streaming";
-                return plan ? (
-                  <PlanBlock text={plan.text} live={live} status={m.status} />
-                ) : null;
+                // 编排器 executor 的执行明细挂到对应计划步下（计划步 → agent+工具 → 入参/返回）
+                const execSubs = m.progress.filter((p) => p.scope.startsWith("subagent:executor:"));
+                if (!plan) return null;
+                const streamingLast = busy && i === messages.length - 1 && m.status === "streaming";
+                const thinking = streamingLast && !m.content;
+                return (
+                  <>
+                    <PlanBlock text={plan.text} live={live} status={m.status} subItems={execSubs} />
+                    {/* 任务步骤块下面：编排器"结果思考"（最终答复的思考） */}
+                    {m.reasoning && (
+                      <ThinkingBlock reasoning={m.reasoning} thinking={thinking}
+                        title="结果思考"
+                        startedAt={m.reasoningStartedAt ?? m.startedAt} elapsedMs={m.reasoningMs} />
+                    )}
+                  </>
+                );
               })()}
               {showTools && m.role === "assistant" && m.progress && m.progress.length > 0 && (() => {
                 const sandbox = m.progress.filter((p) => p.scope === "sandbox");
-                const sub = m.progress.filter((p) => p.scope.startsWith("subagent:"));
-                const skill = m.progress.filter((p) => p.scope === "skill");
+                // executor 子代理已并入 PlanBlock 的计划树；这里只留 dispatch 派发的子代理，避免与顶部计划步重复
+                const sub = m.progress.filter(
+                  (p) => p.scope.startsWith("subagent:") && !p.scope.startsWith("subagent:executor:"));
                 const live = busy && i === messages.length - 1 && m.status === "streaming";
                 const stopped = m.status === "stopped";
                 // 进行中的块：生成中转圈；用户停止→stopped（已取消）；否则收尾为 ok
@@ -514,13 +643,16 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                 // 校验状态改由常驻 VerifyBadge 展示（脱离本 showTools 分支）
                 return (
                   <>
-                    <ProgressBlock title="技能" kind="skill" items={skill} status="ok" />
                     <ProgressBlock title="沙箱执行" kind="sandbox" items={sandbox} status={sbStatus} />
-                    <ProgressBlock title="子代理执行" kind="subagent" items={sub} status={subStatus} />
+                    <SubagentProgress items={sub} live={live} stopped={stopped} status={subStatus} />
                   </>
                 );
               })()}
-              {showTools && m.role === "assistant" && m.steps && m.steps.length > 0 && (
+              {/* 扁平工具步骤列表：只有**编排器**的计划树才隐藏它（工具明细已挂在计划步下，
+                  再平铺一份是重复）。简单直答里模型调 update_plan 发的 ReAct 清单没有 id、
+                  挂不了明细，此时必须保留本列表——否则工具调用会凭空消失且无处可看。*/}
+              {showTools && m.role === "assistant" && m.steps && m.steps.length > 0
+                && !isOrchestratorPlan(m.progress) && (
                 <AgentProgress steps={m.steps}
                   live={busy && i === messages.length - 1 && m.status === "streaming"}
                   stopped={m.status === "stopped"} />
@@ -544,6 +676,11 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                   {m.role === "assistant" ? "…" : ""}
                 </Typography>
               )}
+              {/* 待确认的破坏性操作：AI 只登记不执行，这里给出确认/取消。
+                  不做交付门遮挡——它本身就是「尚未发生」的提示，越早看见越好。 */}
+              {m.role === "assistant" && pendingActionIds(m.steps).map((pid) => (
+                <PendingActionCard key={pid} id={pid} />
+              ))}
               {/* AI 生成的可下载文件：常驻一行，不受「展示工具调用」开关影响 */}
               {m.role === "assistant" && (() => {
                 const files = generatedFiles(m.steps);
@@ -599,7 +736,8 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                     {hasVerify && <VerifyBadge message={m} live={live} />}
                     {showMetaRow && (
                       <MessageMeta status={m.status} live={live} startedAt={m.startedAt}
-                        elapsedMs={m.elapsedMs} usage={m.usage} showMeta={showTools} />
+                        elapsedMs={m.elapsedMs} usage={m.usage} usageByModel={m.usageByModel}
+                        showMeta={showTools} />
                     )}
                     {hasSources && (
                       <SourceList sources={m.sources!} msgKey={String(i)} flashId={flashId} />
@@ -613,29 +751,75 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
       </Box>
       <Box sx={{ px: 1.5, pt: 1, borderTop: 1, borderColor: "divider",
         display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+        {/* AI 回复中封住所有开关（只留停止按钮可用）——避免中途改设置/干扰本轮 */}
         <FormControlLabel
-          control={<Switch size="small" checked={think}
+          control={<Switch size="small" checked={think} disabled={busy}
             onChange={(e) => toggleThink(e.target.checked)} />}
           label={<Typography variant="caption">思考模式</Typography>}
         />
         <FormControlLabel
-          control={<Switch size="small" checked={verify}
+          control={<Switch size="small" checked={verify} disabled={busy}
             onChange={(e) => toggleVerify(e.target.checked)} />}
           label={<Typography variant="caption">结果校验</Typography>}
         />
         <FormControlLabel
-          control={<Switch size="small" checked={showTools}
+          control={<Switch size="small" checked={showTools} disabled={busy}
             onChange={(e) => toggleShowTools(e.target.checked)} />}
           label={<Typography variant="caption">展示工具调用和 Token</Typography>}
         />
         <FormControlLabel
-          control={<Switch size="small" checked={showSources}
+          control={<Switch size="small" checked={showSources} disabled={busy}
             onChange={(e) => toggleShowSources(e.target.checked)} />}
           label={<Typography variant="caption">展示数据来源和引用</Typography>}
         />
+        {/* 当前模型：主模型常驻显示，hover 看各角色（快速/judge/向量/重排）用的哪个模型 */}
+        {models && (
+          <Tooltip placement="top" title={
+            <Box sx={{ whiteSpace: "pre-line", fontSize: 12 }}>
+              {[`主模型：${models.main}`,
+                `快速模型：${models.fast}`,
+                `校验(judge)：${models.judge}`,
+                models.embedding ? `向量(embedding)：${models.embedding}` : "",
+                models.rerank ? `重排(rerank)：${models.rerank}` : ""].filter(Boolean).join("\n")}
+            </Box>
+          }>
+            <Chip size="small" color="primary" clickable
+              icon={<SmartToyOutlinedIcon />} label={models.main}
+              sx={{
+                ml: "auto", alignSelf: "center", maxWidth: 260, height: 24, fontWeight: 700,
+                borderRadius: 1.5,
+                color: "primary.main",
+                bgcolor: (t) => alpha(t.palette.primary.main, 0.12),
+                border: (t) => `1px solid ${alpha(t.palette.primary.main, 0.4)}`,
+                "&:hover": { bgcolor: (t) => alpha(t.palette.primary.main, 0.2) },
+                "& .MuiChip-icon": { color: "primary.main", fontSize: 15, ml: 0.5 },
+                "& .MuiChip-label": { fontSize: 12, px: 0.75, overflow: "hidden", textOverflow: "ellipsis" },
+              }} />
+          </Tooltip>
+        )}
       </Box>
+      {/* 考试中标识：告知用户当前处于考试状态、只应作答考试内容；显示进度与模式，及退出方式 */}
+      {exam?.active && (
+        <Box sx={{
+          mx: 1.5,mt:1, mb: 0.3, px: 1.5, py: 0.75, borderRadius: 1.5,
+          display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap",
+          bgcolor: (t) => alpha(t.palette.warning.main, 0.12),
+          border: (t) => `1px solid ${alpha(t.palette.warning.main, 0.5)}`,
+        }}>
+          <QuizOutlinedIcon sx={{ fontSize: 18, color: "warning.main" }} />
+          <Typography variant="body2" sx={{ fontWeight: 700, color: "warning.main" }}>
+            考试进行中
+          </Typography>
+          <Chip size="small" variant="outlined" color="warning"
+            label={`第 ${(exam.cursor ?? 0) + 1}/${exam.total ?? "?"} 题 · ${exam.mode === "graded" ? "打分式" : "即时式"}`}
+            sx={{ height: 20, "& .MuiChip-label": { fontSize: 12, px: 0.75 } }} />
+          <Typography variant="caption" sx={{ color: "text.secondary" }}>
+            请作答本题，此时只回答考试相关内容；想退出请说「结束考试」。
+          </Typography>
+        </Box>
+      )}
       <Box
-        onDragOver={(e) => { e.preventDefault(); if (!dragOver) setDragOver(true); }}
+        onDragOver={(e) => { e.preventDefault(); if (!busy && !dragOver) setDragOver(true); }}
         onDragLeave={(e) => { e.preventDefault(); setDragOver(false); }}
         onDrop={onDrop}
         sx={{
@@ -655,7 +839,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
           <Tooltip title="上传文件（也可拖拽/粘贴）">
             <span>
               <IconButton aria-label="上传文件" onClick={() => fileRef.current?.click()}
-                disabled={pending.length >= MAX_ATTACHMENTS} sx={{ mb: 0.25 }}>
+                disabled={busy || pending.length >= MAX_ATTACHMENTS} sx={{ mb: 0.25 }}>
                 <AttachFileIcon />
               </IconButton>
             </span>
@@ -663,16 +847,24 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
           <TextField
             fullWidth size="small" value={input}
             multiline minRows={1} maxRows={6}
+            disabled={busy}   // AI 回复中封住输入框
             onChange={(e) => setInput(e.target.value)}
             onPaste={onPaste}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
             }}
-            placeholder="问点什么…"
+            placeholder={busy ? "AI 正在回复…（可点停止）"
+              : exam?.active ? "作答本题…（或说「结束考试」退出）" : "问点什么…"}
           />
           {busy ? (
-            <Button variant="outlined" color="error" onClick={stop}
-              sx={{ flexShrink: 0, mb: 0.25 }}>停止</Button>
+            // 拿到本轮 run 句柄前禁用停止：没有句柄停不掉后端后台任务（只断本地流），故先禁用、
+            // 句柄到达（通常瞬间）后再亮起。禁用按钮不触发 Tooltip，需用 span 包裹。
+            <Tooltip title={turnRunId ? "停止本轮生成" : "正在建立连接…可停止时按钮亮起"}>
+              <span style={{ display: "inline-flex" }}>
+                <Button variant="outlined" color="error" onClick={stop} disabled={!turnRunId}
+                  sx={{ flexShrink: 0, mb: 0.25 }}>停止</Button>
+              </span>
+            </Tooltip>
           ) : (
             <Button variant="contained" onClick={() => send()}
               sx={{ flexShrink: 0, mb: 0.25 }}>发送</Button>

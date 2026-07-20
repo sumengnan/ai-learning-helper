@@ -1,0 +1,65 @@
+from app.assembly import build_harness
+from app.config import AppConfig
+
+
+def test_orchestrator_always_built(monkeypatch):
+    """编排器已是唯一主流程，无开关 → build_harness 恒构建它。
+    注：build_harness 会立即构造 AsyncOpenAI 客户端，空 api_key 且环境无 OPENAI_API_KEY 回退时
+    会在构造期报错，故用非空占位 key（与 tests/app/test_assembly.py 的 api_key="k" 惯例一致）。"""
+    monkeypatch.setenv("HARNESS_API_KEY", "sk-test")
+    from app.orchestration.orchestrator import Orchestrator
+    assert isinstance(build_harness(AppConfig()).orchestrator, Orchestrator)
+
+
+def test_executor_registry_excludes_update_plan(monkeypatch):
+    """执行子步不该拿到 update_plan：否则子步一调它就发 scope=plan 覆盖编排器的总计划（bug）。"""
+    monkeypatch.setenv("HARNESS_API_KEY", "sk-test")
+    o = build_harness(AppConfig()).orchestrator
+    assert o._executor._registry.get("update_plan") is None      # 执行步无 update_plan
+    assert o._registry.get("update_plan") is not None            # 主 registry 仍有（simple 直答走 ReAct 可用）
+
+
+def test_executor_registry_sees_tools_registered_after_build(monkeypatch):
+    """MCP 工具是 startup（build 之后）才注册进 reg 的；执行子步的 registry 是活视图，应能看到。"""
+    from harness.tools.base import Tool
+    from pydantic import BaseModel
+    monkeypatch.setenv("HARNESS_API_KEY", "sk-test")
+    h = build_harness(AppConfig())
+
+    class _Fake(Tool):
+        name = "mcp__websearch__bailian_web_search"
+        description = "联网搜索"
+        class Params(BaseModel):
+            pass
+        async def run(self, params):
+            return "ok"
+    h.registry.register(_Fake())   # 模拟 startup 注册 MCP 工具
+
+    exec_reg = h.orchestrator._executor._registry
+    assert exec_reg.get("mcp__websearch__bailian_web_search") is not None  # 活视图能看到晚注册的工具
+    assert any(t.name == "mcp__websearch__bailian_web_search" for t in exec_reg.tools())
+
+
+def test_orchestrator_speed_wiring(monkeypatch):
+    """A 组提速接线生效：执行子步默认关思考、Critic.validate 与 review 用不同 completer、
+    预算工厂已挂（每 run 独立封顶）。"""
+    monkeypatch.setenv("HARNESS_API_KEY", "sk-test")
+    o = build_harness(AppConfig()).orchestrator
+    assert o._executor._disable_thinking is True                 # 子步关思考
+    assert o._critic._validate is not o._critic._complete        # validate 走独立(快速档)completer
+    # 简单直答走快速档 client/model（与执行子步同源）；未配 fast_model 时回退主 client/主模型
+    assert o._fast_client is o._executor._client
+    assert o._fast_model == o._executor._model
+    assert o._fast_max_prompt_tokens == 0                        # 快速上下文上限默认关（0）
+
+
+def test_orchestrator_fast_prompt_cap_wired(monkeypatch):
+    """配了 context_max_prompt_tokens_fast → 传进编排器，供简单直答按快速模型口径重裁。"""
+    monkeypatch.setenv("HARNESS_API_KEY", "sk-test")
+    monkeypatch.setenv("HARNESS_CONTEXT_MAX_PROMPT_TOKENS_FAST", "32000")
+    o = build_harness(AppConfig()).orchestrator
+    assert o._fast_max_prompt_tokens == 32000
+    assert o._budget_factory is not None                         # 预算工厂已挂
+    b = o._budget_factory()
+    from harness.reliability.budget import BudgetTracker
+    assert isinstance(b, BudgetTracker) and o._budget_factory() is not b  # 每次新建独立实例

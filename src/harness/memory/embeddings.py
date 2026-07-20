@@ -33,5 +33,25 @@ class OpenAICompatibleEmbeddingClient:
         # （如默认 1024），不指定就会与向量表 float[dimension] 不符。
         resp = await self._client.embeddings.create(
             model=self._model, input=texts, dimensions=self.dimension)
+        # 用量按模型上报：端点返回 usage 时经进度旁路发一条 ModelUsage（model=embedding_model），
+        # 让 embedding 也进本轮合计与分模型统计。emitter 未设（如上下文组装、后台记忆写入不在本轮
+        # 用量上下文内）时是 no-op，故只捕获「loop 内工具检索」触发的 embedding，是尽力而为。
+        _emit_embedding_usage(getattr(resp, "usage", None), self._model)
         # 第三方兼容端点未必保证顺序，按 index 归位
         return [d.embedding for d in sorted(resp.data, key=lambda d: d.index)]
+
+
+def _emit_embedding_usage(usage, model: str) -> None:
+    if usage is None:
+        return
+    try:
+        from harness.events import ModelUsage
+        from harness.progress import emit
+        from harness.usage import Usage, effective_cost
+        prompt = int(getattr(usage, "prompt_tokens", 0) or getattr(usage, "total_tokens", 0) or 0)
+        total = int(getattr(usage, "total_tokens", 0) or prompt)
+        u = Usage(prompt_tokens=prompt, completion_tokens=0, total_tokens=total)
+        emit(ModelUsage(usage=u, cost_usd=effective_cost(u, model, {}),
+                        attempts=1, latency_ms=0.0, model=model))
+    except Exception:   # 用量上报绝不能影响 embedding 本职
+        pass

@@ -71,7 +71,7 @@ def event_to_dict(ev) -> dict:
         data = {"error": ev.error}
     elif isinstance(ev, Progress):
         data = {"scope": ev.scope, "text": ev.text, "status": ev.status, "key": ev.key,
-                "agent": ev.agent}
+                "agent": ev.agent, "detail": ev.detail}
     elif isinstance(ev, ApprovalRequired):
         data = {"run_id": ev.run_id, "approval_id": ev.approval_id,
                 "tool": ev.tool, "command": ev.command, "reason": ev.reason}
@@ -80,7 +80,8 @@ def event_to_dict(ev) -> dict:
     elif isinstance(ev, ModelUsage):
         u = ev.usage
         data = {"usage": {"prompt": u.prompt_tokens, "completion": u.completion_tokens, "total": u.total_tokens},
-                "cost_usd": ev.cost_usd, "attempts": ev.attempts, "latency_ms": ev.latency_ms}
+                "cost_usd": ev.cost_usd, "attempts": ev.attempts, "latency_ms": ev.latency_ms,
+                "model": ev.model}
     else:
         data = {}
     return {"type": type(ev).__name__, "data": data}

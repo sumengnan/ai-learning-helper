@@ -70,6 +70,7 @@ class Progress(Event):
     status: str | None = None   # "running" | "ok" | "error"，子 agent 每步的状态
     key: str | None = None      # 步骤合并键（工具调用 id）；前端据此把同一步的开始/完成折叠为一行
     agent: str | None = None    # 归属子 agent 名：沙箱步骤在子 agent 执行期间由 emit 自动打标
+    detail: dict | None = None  # 工具调用明细（tool/args/result/is_error）供前端展开；普通进度行为 None
 
 
 @dataclass
@@ -96,3 +97,4 @@ class ModelUsage(Event):
     cost_usd: float | None
     attempts: int
     latency_ms: float
+    model: str | None = None   # 产生该用量的模型名；供按模型分组统计/计价。聚合快照可为 None

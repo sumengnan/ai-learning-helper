@@ -193,3 +193,50 @@ def test_check_completer_stays_on_main_model_not_judge():
     # 配了 judge_model 也不影响核对档：它只认主模型，故两分支构造出的都是可调用对象
     assert callable(build_check_completer(object(), cfg))
     assert callable(build_check_completer(object(), _jcfg()))
+
+
+# ---- max_prompt_tokens：给 judge 等单轮 completer 的输入加硬上限（中段截断）----
+
+@pytest.mark.asyncio
+async def test_completer_max_prompt_tokens_truncates_huge_user():
+    from harness.llm.base import StreamChunk
+    from harness.usage import count_message_tokens
+    captured = {}
+
+    class Rec:
+        async def stream(self, messages, tools):
+            captured["messages"] = messages
+            yield StreamChunk(type="text", text="ok")
+            yield StreamChunk(type="done")
+
+    complete = build_completer(Rec(), model_name="m", max_prompt_tokens=200)
+    big = "数据" * 8000
+    await complete("你是判官", big)
+    user = [m for m in captured["messages"] if m.role.value == "user"][-1]
+    assert "省略" in user.content and len(user.content) < len(big)   # 中段截断
+    assert user.content.startswith("数据")                           # 保头
+    assert count_message_tokens(captured["messages"], "m") <= 200    # 硬上限
+
+
+@pytest.mark.asyncio
+async def test_completer_no_cap_sends_full_user():
+    from harness.llm.base import StreamChunk
+    captured = {}
+
+    class Rec:
+        async def stream(self, messages, tools):
+            captured["messages"] = messages
+            yield StreamChunk(type="text", text="ok")
+            yield StreamChunk(type="done")
+
+    complete = build_completer(Rec(), model_name="m")   # cap=0，不裁
+    big = "数据" * 3000
+    await complete("s", big)
+    user = [m for m in captured["messages"] if m.role.value == "user"][-1]
+    assert user.content == big
+
+
+def test_judge_completer_config_default_off():
+    cfg = _jcfg()
+    assert cfg.context_max_prompt_tokens_fast == 0
+    assert cfg.context_max_prompt_tokens_judge == 0

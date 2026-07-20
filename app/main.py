@@ -17,6 +17,9 @@ from .api.downloads import make_downloads_router
 from .api.profile import make_profile_router
 from .api.questions import make_questions_router
 from .api.stats import make_stats_router
+from .api.exam_status import make_exam_router
+from .api.pending_actions import make_pending_actions_router
+from .api.models_info import make_models_router
 from .api.version import make_version_router
 from .api.wrong_answers import make_wrong_answers_router
 from harness.telemetry.tracer import setup_telemetry
@@ -31,6 +34,7 @@ from .db import migrate, open_db
 from .url_blocklist import UrlBlockStore
 from .documents import DocumentStore
 from .exam_session import ExamSessionStore
+from .pending_actions import PendingActionStore
 from .profile import ProfileStore
 from .knowledge import KnowledgeService
 from .logging_setup import configure_logging
@@ -46,7 +50,7 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
                question_store=None, exam_store=None, wrong_store=None,
                quiz_service=None, user_store=None, verifier=None,
                attachment_store=None, stats_service=None, question_importer=None,
-               profile_store=None, exam_session_store=None,
+               profile_store=None, exam_session_store=None, pending_store=None,
                url_block_store=None) -> FastAPI:
     # exam_store 参数保留仅为向后兼容（模拟考试已迁入聊天工具，不再有独立考试端点）
     if config is None:
@@ -83,6 +87,9 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
     attachment_store = (attachment_store if attachment_store is not None
                         else AttachmentStore(config.attachments_dir, conn=app_conn))
     profile_store = profile_store if profile_store is not None else ProfileStore(conn=app_conn)
+    # 待确认的破坏性操作（删题库/删错题）：agent 只登记，用户在界面确认后由 API 执行
+    pending_store = (pending_store if pending_store is not None
+                     else (PendingActionStore(conn=app_conn) if app_conn is not None else None))
     # 抓取失败网址登记（全局共享，不分用户）。app_conn 为 None 说明调用方注入了全部 Store
     # （测试路径），此时不自建库、guard 退化为直通——与其它 Store 的「不产生多余 app.db」一致。
     if url_block_store is None and config.enable_url_blocklist and app_conn is not None:
@@ -149,6 +156,7 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
         await run_manager.close()
 
     app.include_router(make_version_router())
+    app.include_router(make_models_router(config))
     app.include_router(make_auth_router(auth, require_captcha=config.require_captcha))
     app.include_router(make_conversations_router(store, harness, attachment_store, config))
     app.include_router(make_chat_router(harness, store, config,
@@ -158,7 +166,10 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
                                         quiz_service=quiz_service, profile_store=profile_store,
                                         trajectory_judge=trajectory_judge,
                                         exam_session_store=exam_session_store,
+                                        pending_store=pending_store,
                                         url_block_store=url_block_store))
+    app.include_router(make_exam_router(exam_session_store))
+    app.include_router(make_pending_actions_router(pending_store, question_store, wrong_store))
     app.include_router(make_documents_router(service, doc_store, config))
     app.include_router(make_attachments_router(attachment_store, store, config))
 
@@ -186,7 +197,10 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
         stats_service = StatsService(trajectory_conn=traj_conn, app_conn=stats_app_conn,
                                      memory_conn=mem_conn,
                                      memory_store=getattr(harness, "memory_store", None),
+                                     maintainer=getattr(harness, "memory_maintainer", None),
                                      price_tiers=config.model_price_tiers,
+                                     price_tiers_by_model=config.model_price_tiers_by_model,
+                                     price_map=config.price_map,
                                      currency=config.price_currency)
     app.include_router(make_stats_router(stats_service))
 
@@ -198,6 +212,11 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
         @app.on_event("shutdown")
         async def _close_sandboxes() -> None:
             await sandbox_manager.close_all()
+
+    # 技能详情：前端展开「已启用技能…」时按需取正文（正文是静态资源，不随事件下发）
+    if getattr(harness, "skill_registry", None) is not None:
+        from .api.skills import make_skills_router
+        app.include_router(make_skills_router(harness))
 
     # MCP 客户端：startup 时连接 server 并把远程工具注册进全局 registry（请求期 _build_registry
     # 会全量复制，故自动进入每次对话）；关停时断开（防遗留 stdio 僵尸子进程）。连接失败只 warning，

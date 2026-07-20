@@ -51,6 +51,29 @@ def test_messages_multi_step_replayed_in_order():
     assert roles == ["user", "assistant", "tool", "assistant", "tool", "assistant"]
 
 
+def test_messages_strips_download_and_knowledge_markers_on_replay():
+    """回放给模型的工具结果要剥掉〔下载ID:x〕〔知识ID:x〕。
+
+    当前轮由 ToolOutput.marker 挡住了这串 id，但落库的 steps 仍带着它——回放就等于
+    从后门把 id 递给模型，它照样会抄进正文（「知识库ID：ba87f8…」），对用户是乱码。
+    题目ID 例外：start_exam 的说明要求模型从标记里取 id 指定考题，剥了就点不了名。
+    """
+    s = ConversationStore(":memory:")
+    cid = s.create("u1")
+    s.start_turn(cid, Message(role=Role.USER, content="整理成笔记"), "r1")
+    s.finish_turn(cid, "r1", "好了",
+                  steps=[{"tool": "save_download", "args": {},
+                          "result": "已保存到下载区：note.md。〔下载ID:d1〕"},
+                         {"tool": "save_to_knowledge", "args": {},
+                          "result": "已保存到知识库：《x》。〔知识ID:k1〕"},
+                         {"tool": "add_questions", "args": {},
+                          "result": "已入库 2 题〔题目ID:q1,q2〕"}])
+    tool_msgs = [m.content for m in s.messages(cid) if m.role == Role.TOOL]
+    assert tool_msgs[0] == "已保存到下载区：note.md。"
+    assert tool_msgs[1] == "已保存到知识库：《x》。"
+    assert tool_msgs[2] == "已入库 2 题〔题目ID:q1,q2〕"      # 题目 id 模型要用，留着
+
+
 def test_messages_without_steps_unchanged():
     s = ConversationStore(":memory:")
     cid = s.create("u1")

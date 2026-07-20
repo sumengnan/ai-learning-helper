@@ -1,4 +1,6 @@
-from harness.usage import Usage, estimate_usage, cost_usd, count_message_tokens, tiered_cost
+from harness.usage import (
+    Usage, estimate_usage, cost_usd, count_message_tokens, tiered_cost,
+    effective_cost, set_price_tiers, reset_price_tiers)
 from harness.types import Message, Role, ToolCall
 
 
@@ -50,6 +52,31 @@ def test_tiered_cost_above_cap_uses_last_tier():
     # 输入 200 万超过末档上限 → 用末档封顶价
     got = tiered_cost(2_000_000, 0, _TIERS)
     assert got == 2_000_000 / 1_000_000 * 4.8
+
+
+def test_effective_cost_prefers_price_map():
+    # price_map 配了该模型 → 用扁平计费，不看 tiers
+    tok = set_price_tiers(_TIERS)
+    try:
+        assert effective_cost(Usage(1000, 1000, 2000), "m", {"m": [1.0, 2.0]}) == 3.0
+    finally:
+        reset_price_tiers(tok)
+
+
+def test_effective_cost_falls_back_to_context_tiers():
+    # price_map 空（默认）→ 回退上下文里的分层计费，成本不再恒为 None/0
+    tok = set_price_tiers(_TIERS)
+    try:
+        got = effective_cost(Usage(250_000, 100_000, 350_000), "m", {})
+        assert got == tiered_cost(250_000, 100_000, _TIERS)
+        assert got > 0
+    finally:
+        reset_price_tiers(tok)
+
+
+def test_effective_cost_none_when_no_price_and_no_tiers():
+    # price_map 空且未设 tiers → None（保持旧语义，透明）
+    assert effective_cost(Usage(1, 1, 2), "m", {}) is None
 
 
 _M = "gpt-4o-mini"

@@ -874,8 +874,8 @@ def test_is_retrieval_tool_covers_web_and_mcp_search():
                 "mcp__websearch__bailian_web_search", "mcp__search__foo", "mcp__x__web_lookup"):
         assert _is_retrieval_tool(yes) is True, yes
     for no in ("run_python", "run_shell", "save_download", "remember",
-               "sample_questions", "calculator", "search_memory", ""):
-        # 注：search_memory 单独在收集处标 retrieval，不经本谓词
+               "sample_questions", "calculator", "search_knowledge", ""):
+        # 注：search_knowledge 单独在收集处标 retrieval，不经本谓词
         assert _is_retrieval_tool(no) is False, no
 
 
@@ -885,7 +885,7 @@ def test_recent_dialogue_skips_tool_noise_and_keeps_order():
     from harness.types import Message, Role, ToolCall
     hist = [
         Message(role=Role.USER, content="帮我做个方案"),
-        Message(role=Role.ASSISTANT, tool_calls=[ToolCall(id="c", name="search_memory", arguments={})]),
+        Message(role=Role.ASSISTANT, tool_calls=[ToolCall(id="c", name="search_knowledge", arguments={})]),
         Message(role=Role.TOOL, tool_call_id="c", content="检索结果…"),
         Message(role=Role.ASSISTANT, content="请回复 A / B / C 选择方案"),
     ]
@@ -929,3 +929,39 @@ def test_recent_dialogue_empty_and_multimodal():
     hist = [Message(role=Role.ASSISTANT,
                     content=[{"type": "text", "text": "看这两个方案，回 A 或 B"}])]
     assert "回 A 或 B" in _recent_dialogue(hist)
+
+
+# ---------- 清单收尾：按「计划是谁发的」判断，而非「走没走编排器」 ----------
+
+def test_plan_from_orchestrator_detects_id_bearing_steps():
+    """编排器的计划步带 id；模型调 update_plan 发的 ReAct 清单只有 title/status。
+    两者同为 scope=plan，必须区分——否则 ReAct 清单会被当成编排器计划跳过收尾，
+    永远停在模型最后一次自述的状态，前端渲染成一排 unknown。"""
+    from app.api.chat import _plan_from_orchestrator
+    import json as _j
+
+    orch = [{"scope": "plan", "text": _j.dumps(
+        [{"id": "s1", "title": "查资料", "status": "done"}])}]
+    react = [{"scope": "plan", "text": _j.dumps(
+        [{"title": "查资料", "status": "running"}])}]
+
+    assert _plan_from_orchestrator(orch) is True
+    assert _plan_from_orchestrator(react) is False
+    assert _plan_from_orchestrator([]) is False
+    assert _plan_from_orchestrator([{"scope": "verify", "text": "x"}]) is False
+
+
+def test_plan_from_orchestrator_survives_bad_payload():
+    """text 不是合法 JSON / 不是数组时不得抛异常——它在交付收尾路径上，崩了会连累整轮。"""
+    from app.api.chat import _plan_from_orchestrator
+    for bad in ("", "不是JSON", "{}", "null", None):
+        assert _plan_from_orchestrator([{"scope": "plan", "text": bad}]) is False
+
+
+def test_plan_from_orchestrator_uses_last_plan_entry():
+    """一轮里可能先后有多条 plan（编排器重规划会再发）；以最后一条为准。"""
+    from app.api.chat import _plan_from_orchestrator
+    import json as _j
+    mixed = [{"scope": "plan", "text": _j.dumps([{"title": "自述", "status": "running"}])},
+             {"scope": "plan", "text": _j.dumps([{"id": "s1", "title": "编排", "status": "done"}])}]
+    assert _plan_from_orchestrator(mixed) is True

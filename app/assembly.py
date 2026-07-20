@@ -11,8 +11,12 @@ from harness.tools.base import ToolRegistry
 from harness.tools.builtins.calculator import CalculatorTool
 from harness.tools.builtins.http_tool import HttpRequestTool
 
+from .search_guidance import SEARCH_SYSTEM_GUIDANCE
 from .tools.plan_tool import UpdatePlanTool, PLAN_SYSTEM_GUIDANCE
-from .tools.validating import ValidatingTool, relevance_check
+from .tools.validating import ValidatingTool, relevance_check, web_content_check
+
+
+# 执行子步的隐藏工具视图 HidingRegistry 已移至 app.orchestration.executor（供编排器与装配层共用）。
 
 
 @dataclass
@@ -32,6 +36,7 @@ class Harness:
     sandbox: object | None = None            # 绑进工具的会话级沙箱代理（SandboxProxy）
     sandbox_manager: object | None = None    # 会话级容器生命周期管理（销毁/关停/清扫）
     mcp_manager: object | None = None        # MCP 客户端管理器（startup 期连接、注册远程工具）
+    orchestrator: object | None = None       # 启用编排器时的 Plan-Execute-Reflect 控制器
 
 
 def build_harness(config) -> Harness:
@@ -79,7 +84,11 @@ def build_harness(config) -> Harness:
             config.http_allowed_domains, config.http_block_private, config.http_timeout,
             config.http_max_response_bytes, config.http_max_redirects,
             user_agent=config.http_user_agent)
-    _reg(http_tool)
+    # 联网抓取包 web_content_check：拦「抓取成功但抓到的是占位域名/空壳页」——
+    # 模型编造的网址往往落在 example.com 这类真实存在且恒返回 200 的域名上，
+    # 靠状态码和错误页判据是拦不住的。
+    _reg(ValidatingTool(http_tool, web_content_check)
+         if config.enable_step_check else http_tool)
 
     # 记忆（有 api_key 即可注册；知识库为空时检索返回空，不报错）
     if config.api_key or config.embedding_api_key:
@@ -87,7 +96,8 @@ def build_harness(config) -> Harness:
         from harness.memory.sqlite_backend import SqliteVecBackend
         from harness.memory.memory import Memory
         from harness.memory.episodic import EpisodicMemory
-        from harness.tools.builtins.memory_search import SearchMemoryTool
+        from harness.tools.builtins.memory_search import (
+            SearchKnowledgeTool, SearchMemoryTool)
         from harness.tools.builtins.memory_write import RememberTool
         from harness.tools.builtins.episode_tools import RecallEpisodesTool
         embedder = OpenAICompatibleEmbeddingClient(
@@ -156,31 +166,30 @@ def build_harness(config) -> Harness:
                 extract_complete=build_fast_completer(client, config),
                 candidate_k=config.memory_write_candidate_k,
                 ttl_by_type=_ttl_by_type)
-        _search_tool = SearchMemoryTool(mem, default_k=config.search_top_k)
+        # 知识库检索包 relevance_check：空命中意味着「本轮没有可引用依据」，要驱动模型自纠正。
+        _search_tool = SearchKnowledgeTool(mem, default_k=config.search_top_k)
         _reg(ValidatingTool(_search_tool, relevance_check)
              if config.enable_step_check else _search_tool)
+        # 记忆检索不包校验：记忆为空是常态（新用户本就没记过什么），不是失败。
+        _reg(SearchMemoryTool(mem, default_k=config.search_top_k))
         _reg(RememberTool(mem))
         _reg(RecallEpisodesTool(EpisodicMemory(mem), default_k=config.episode_recall_k))
 
     if config.enable_browser:
         from harness.browser.factory import build_browser
         from harness.tools.builtins.browse_tool import BrowseTool
-        # 配了浏览器专用镜像 → 每次抓取起一次性 playwright 子沙箱（基础镜像可保持轻量）
-        browser_sub_factory = None
-        if sandbox is not None and config.browser_sandbox_image:
-            from harness.sandbox.factory import _docker_for
-            from .sandbox_manager import _SANDBOX_LABEL
-            _blabels = {_SANDBOX_LABEL: "true", "role": "ephemeral-browser"}
-            browser_sub_factory = lambda: _docker_for(   # noqa: E731
-                config, config.browser_sandbox_image, labels=_blabels,
-                network=config.sandbox_network, display_name="浏览器子沙箱",
-                mem_limit=config.browser_sandbox_mem_limit)   # Chromium 需更大内存，避免 OOM
+        # 配了浏览器专用镜像 → 浏览器沙箱**全局共用一个**（跨会话），懒加载启动、复用，空闲 24h
+        # 才销毁，避免每次重建 Chromium 容器；生命周期归 SandboxManager（关停时关闭）。基础镜像可保持轻量。
+        browser_sub_acquire = None
+        if sandbox is not None and config.browser_sandbox_image and sandbox_manager is not None:
+            browser_sub_acquire = sandbox_manager.get_browser   # async ()->(box, True)
         browse_tool = BrowseTool(
-            build_browser(config, sandbox, sub_factory=browser_sub_factory),
+            build_browser(config, sandbox, sub_acquire=browser_sub_acquire),
             config.http_allowed_domains, config.http_block_private,
             config.browser_nav_timeout, config.browser_wait_until, config.browser_output_max_chars,
             sandbox=sandbox)   # 有沙箱则 DNS 解析下沉到容器内（与 http_request 对称）
-        _reg(browse_tool)
+        _reg(ValidatingTool(browse_tool, web_content_check)
+             if config.enable_step_check else browse_tool)
         # 自动兜底：http_request 抓取出错或疑似被防抓/需 JS 时，改用浏览器抓取同一 URL
         http_tool.set_browser_fallback(
             lambda url: browse_tool.run(BrowseTool.Params(url=url)))
@@ -243,14 +252,55 @@ def build_harness(config) -> Harness:
         from harness.mcp import MCPManager
         mcp_manager = MCPManager(config)
 
+    # 编排器（Plan-Execute-Reflect）：已成为唯一主流程，恒构建、无开关。chat 路由每请求把
+    # 会话上下文（历史+全部指引+记忆）与每请求工具表（用户级工具）注入其 run()，故它可作为唯一
+    # 主流程而不丢失多轮对话/附件/考试/引用/个性化。简单问答仍在其内部短路成单个 ReAct 直答，
+    # 复杂任务才拆分并行执行，不额外增加简单场景开销。
+    from app.completion import build_completer, build_fast_completer, build_fast_client
+    from app.orchestration.orchestrator import Orchestrator
+    from app.orchestration.planner import Planner
+    from app.orchestration.critic import Critic
+    from app.orchestration.executor import Executor, HidingRegistry
+    from harness.skills.matcher import SkillMatcher
+    from app.sandbox_manager import sandbox_guide
+    from harness.reliability.budget import BudgetTracker
+    _plan_complete = build_completer(client, config.model)     # 规划 + 终局 review 用主模型（判断质量要求高）
+    _fast_complete = build_fast_completer(client, config)      # triage + 单步 validate 用快速档（频繁，提速）
+    _exec_client, _exec_model = build_fast_client(client, config)   # 执行子步走快速档模型（占大头往返，提速）
+    # 装配期回退用的执行子步工具视图（隐藏 update_plan）；实际运行时由 chat 路由传入每请求 registry 覆盖。
+    _exec_reg = HidingRegistry(reg, {"update_plan"})
+    orchestrator = Orchestrator(
+        client=client, registry=reg, model=config.model,
+        planner=Planner(_plan_complete, max_retries=config.orchestrator_planner_max_retries),
+        critic=Critic(_plan_complete, validate_complete=_fast_complete),
+        executor=Executor(_exec_client, _exec_reg, config.app_system_prompt, _exec_model,
+                          max_steps=config.orchestrator_step_max_steps,
+                          loop_detect_window=config.loop_detect_window,
+                          disable_thinking=config.orchestrator_step_disable_thinking,
+                          # 有沙箱才按配置预渲染指引（工作目录/镜像/联网）；无沙箱这些工具没注册，提了反误导
+                          sandbox_guide_text=(sandbox_guide(config)
+                                              if sandbox is not None else "")),
+        fast_complete=_fast_complete,
+        # 简单直答走快速档模型/端点（省钱提速）；未配 fast_model 时 _exec_* 即回退主 client/主模型
+        fast_client=_exec_client, fast_model=_exec_model,
+        # 简单直答的上下文按快速模型口径再收一道（0=不裁）
+        fast_max_prompt_tokens=config.context_max_prompt_tokens_fast,
+        # 每次 run 新建独立预算封顶时长/token（超限带现有成果收尾）；单例并发安全
+        budget_factory=lambda: BudgetTracker(config.max_tokens_budget, config.max_wall_seconds),
+        max_step_retry=config.orchestrator_max_step_retry,
+        max_replan=config.orchestrator_max_replan,
+        # 技能路由：有技能时按触发词匹配、命中剧本注入 planner/直答（无技能则 None，零行为变更）
+        skill_matcher=SkillMatcher(skill_registry) if skill_registry is not None else None)
+
     traj = TrajectoryStore(config.persistence_db_path)
     return Harness(
         client=client, registry=reg,
         checkpoint_store=CheckpointStore(config.persistence_db_path),
         trajectory_store=traj, sink=TrajectorySink(traj),
-        system_prompt=config.app_system_prompt + PLAN_SYSTEM_GUIDANCE,
+        system_prompt=(config.app_system_prompt + PLAN_SYSTEM_GUIDANCE
+                       + SEARCH_SYSTEM_GUIDANCE),
         memory=memory, memory_store=memory_store, memory_writer=memory_writer,
         memory_maintainer=memory_maintainer,
         download_store=dstore,
         skill_registry=skill_registry, sandbox=sandbox, sandbox_manager=sandbox_manager,
-        mcp_manager=mcp_manager)
+        mcp_manager=mcp_manager, orchestrator=orchestrator)

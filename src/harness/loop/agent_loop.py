@@ -20,7 +20,7 @@ from ..state import RunState
 from ..telemetry.tracer import get_tracer
 from ..tools.base import ToolExecutor, ToolRegistry
 from ..types import Message, Role, ToolCall, ToolResult
-from ..usage import cost_usd
+from ..usage import effective_cost
 
 
 @dataclass
@@ -182,10 +182,11 @@ class AgentLoop:
 
                     latency_ms = (time.monotonic() - t0) * 1000
                     if usage is not None:
-                        cost = cost_usd(usage, self._model_name, self._price_map)
+                        cost = effective_cost(usage, self._model_name, self._price_map)
                         if self._budget:
                             self._budget.add_usage(usage)
-                        yield ModelUsage(usage=usage, cost_usd=cost, attempts=attempts, latency_ms=latency_ms)
+                        yield ModelUsage(usage=usage, cost_usd=cost, attempts=attempts,
+                                         latency_ms=latency_ms, model=self._model_name)
 
                     finalized = _finalize(tool_acc)
                     tool_calls = [f.call for f in finalized]
@@ -252,7 +253,9 @@ class AgentLoop:
                             if result.is_error:
                                 ts.set_status(Status(StatusCode.ERROR, result.content[:200]))
                                 ts.add_event("tool.error", {"content": result.content[:200]})
-                        state.append(Message(role=Role.TOOL, content=result.content, tool_call_id=tc.id))
+                        # for_model()：机读 marker（〔下载ID:x〕等）只进事件/落库，不进上下文
+                        state.append(Message(role=Role.TOOL, content=result.for_model(),
+                                             tool_call_id=tc.id))
                         # 工具追加的后续消息（如把图片作为 user 视觉块注入）：接在 tool 结果之后
                         for fm in result.follow_up:
                             state.append(fm)

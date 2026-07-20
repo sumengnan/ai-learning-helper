@@ -1,1 +1,4 @@
 html, body, #root { height: 100%; margin: 0; }
+/* 整体等比缩小到 90%，等价于浏览器缩放 100%→90%；zoom 按布局缩放，
+   不会像 transform:scale 那样留白或破坏 position:fixed 的侧边栏 */
+body { zoom: 0.93; }

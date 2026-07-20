@@ -24,7 +24,7 @@ def test_core_tools_registered_heavy_gated_off():
     assert isinstance(h, Harness)
     assert h.registry.get("calculator") is not None
     assert h.registry.get("http_request") is not None
-    assert h.registry.get("search_memory") is not None    # api_key 有 → 记忆注册
+    assert h.registry.get("search_knowledge") is not None    # api_key 有 → 记忆注册
     assert h.registry.get("browse") is None                # 未启用
     assert h.registry.get("run_python") is None             # 未启用沙箱
     assert h.registry.get("dispatch") is None               # 未启用派发
@@ -63,10 +63,10 @@ def _agents_dir(tmp_path, fname, content):
 
 
 def test_dispatch_gated_on(tmp_path):
-    # api_key 有 → search_memory 在池；http_request 恒在 → researcher 有可用工具
+    # api_key 有 → search_knowledge 在池；http_request 恒在 → researcher 有可用工具
     d = _agents_dir(tmp_path, "researcher.yaml",
                     "name: researcher\ndescription: 检索\nsystem_prompt: 你是研究员\n"
-                    "tool_names: [search_memory, http_request]\n")
+                    "tool_names: [search_knowledge, http_request]\n")
     h = build_harness(_cfg(enable_dispatch=True, agents_dir=d))
     assert h.registry.get("dispatch") is not None
 
@@ -126,6 +126,18 @@ def test_update_plan_registered_and_prompt_has_guidance():
     h = build_harness(_cfg())
     assert h.registry.get("update_plan") is not None
     assert "update_plan" in h.system_prompt
+
+
+def test_prompt_has_search_guidance():
+    """联网检索指引必须进系统提示：否则模型会把用户原话整句当 query 搜一次就下笔。
+
+    这条只能靠提示词——搜索工具是 MCP 接入的第三方工具，描述改不了；而每步检索校验
+    只判空命中，一条宽泛 query 照样返回若干条非空结果，必然放行。
+    """
+    sp = build_harness(_cfg()).system_prompt
+    assert "未来 N 年" in sp          # 相对时间必须换算成绝对年份再进 query
+    assert "正交的子查询" in sp        # 宽泛问题要拆
+    assert "不要为拆而拆" in sp        # 但简单事实查询不该被拖成多次检索
 
 
 # ---- 快速模型档的接线 ----

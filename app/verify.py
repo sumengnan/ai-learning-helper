@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 
 from harness.llm.openai_compat import json_output
 from harness.tools.base import ToolError
+from harness.tools.builtins.memory_search import NO_KNOWLEDGE_HIT
 
 from .quiz_service import _strip_fence
 from .url_blocklist import UrlBlockedError
@@ -105,7 +106,7 @@ _LANG_TOOL = {
     "js": "run_node", "javascript": "run_node", "node": "run_node",
     "java": "run_java",
 }
-_NO_HIT = "（未在知识库中检索到相关内容）"
+_NO_HIT = NO_KNOWLEDGE_HIT   # 知识库空命中哨兵：取自内核，勿重抄字面量
 _GROUNDING_CONTEXT_MAX = 12000     # grounding 核查上下文上限（含知识库+联网），防撑爆核查模型
 
 
@@ -258,11 +259,11 @@ class AnswerVerifier:
             def _live(entries):
                 return [g["content"] for g in entries if not g.get("is_error")
                         and g.get("content") and _NO_HIT not in g["content"]]
-            kb = _live([g for g in grounding if g.get("tool") == "search_memory"])
+            kb = _live([g for g in grounding if g.get("tool") == "search_knowledge"])
             web = _live([g for g in grounding
-                         if g.get("retrieval") and g.get("tool") != "search_memory"])
+                         if g.get("retrieval") and g.get("tool") != "search_knowledge"])
             # 本轮经 read_attachment/read_file 读入的文档正文：整理成笔记/总结时模型据以作答的
-            # 依据，也纳入核查资料——否则「整理知识库成笔记」会因笔记内容不在本轮 top-k search_memory
+            # 依据，也纳入核查资料——否则「整理知识库成笔记」会因笔记内容不在本轮 top-k search_knowledge
             # 片段里而被误判缺依据。不带 retrieval 标记，故不单独触发 grounding，仅在本轮另有知识库
             # 命中时作为核查上下文。
             docs = _live([g for g in grounding

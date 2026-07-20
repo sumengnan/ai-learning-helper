@@ -1,7 +1,7 @@
 import { Fragment, useState } from "react";
 import type { Conversation } from "../types";
 import {
-  Box, Button, List, ListItemButton, ListItemText, ListSubheader, IconButton,
+  Box, Button, List, ListItemButton, ListSubheader, IconButton,
   Typography, Dialog, DialogTitle, DialogContent, DialogContentText,
   DialogActions,
 } from "@mui/material";
@@ -12,6 +12,7 @@ import ForumOutlinedIcon from "@mui/icons-material/ForumOutlined";
 import { chromeBg } from "./AppShell";
 import { listItemVariants } from "./motion";
 import { EmptyState } from "./EmptyState";
+import { EllipsisText } from "./EllipsisText";
 
 // 依据创建时间与今天的自然日差，归入「今天 / 昨天 / 3天前 / …」分组
 function dayDiff(iso: string): number {
@@ -100,10 +101,9 @@ export function ConversationList({ items, activeId, onSelect, onNew, onDelete }:
                   "&:hover .conv-actions": { opacity: 1 },
                 }}
               >
-                <ListItemText
-                  primary={c.title}
-                  slotProps={{ primary: { noWrap: true } }}
-                />
+                {/* 会话名只占一行，超出才截断为 …，且仅在真被截断时才 hover 显示完整（issue 2）。
+                    用 EllipsisText 复用「测量后截断才挂 Tooltip」的逻辑，短名不会误触发 hover。 */}
+                <EllipsisText text={c.title} variant="body1" color="text.primary" />
                 <Box className="conv-actions" sx={{ opacity: 0, display: "flex", ml: 0.5 }}>
                   <IconButton
                     size="small"

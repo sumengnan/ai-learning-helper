@@ -19,12 +19,26 @@ from typing import Callable
 from harness.events import Progress
 from harness.progress import emit
 from harness.tools.base import Tool, ToolError
+from harness.tools.builtins.memory_search import NO_KNOWLEDGE_HIT
 from harness.types import ToolOutput
+
+from ..sources import looks_placeholder_page
 
 _log = logging.getLogger("app.validating")
 
-# 与 SearchMemoryTool 的空命中文案、verify.py 的 _NO_HIT 保持一致
-NO_HIT_MARK = "（未在知识库中检索到相关内容）"
+# 空命中哨兵：直接取内核常量，不再重抄字面量（重抄会让内核改文案时此处静默失效）
+NO_HIT_MARK = NO_KNOWLEDGE_HIT
+
+# 网页正文低于此长度即视为「没抓到东西」。取值偏保守：宁可放过短页，也不误伤真实的短文档。
+_MIN_PAGE_BODY = 80
+
+
+def _page_body(text: str) -> str:
+    """剥掉 HTTP 状态/标题/最终URL 这些头部行，只留正文，供长度判定。"""
+    lines = [ln for ln in (text or "").splitlines()
+             if not (ln.startswith("HTTP ") or ln.startswith("标题：")
+                     or ln.startswith("最终URL："))]
+    return "\n".join(lines).strip()
 
 
 @dataclass
@@ -93,6 +107,34 @@ def _append_hint(raw, hint: str):
     if isinstance(raw, ToolOutput):
         return ToolOutput(text=raw.text + note, follow_up=raw.follow_up)
     return (raw or "") + note
+
+
+def web_content_check(text: str) -> CheckResult:
+    """联网抓取的每步校验：抓到的是不是真能当依据的东西。
+
+    既有的来源过滤只判「抓取动作成功了吗」（状态码/拦截页/有无正文），判不了「抓回来的
+    东西值不值得引用」。模型凭印象编一个 example.com/xxx 这类网址时，抓取会**成功**——
+    真实域名、HTTP 200、有标题有正文——于是一路畅通被记成参考来源。这里补上这层判断。
+
+    只对渲染成「标题+正文」的网页结果生效；JSON/API 原样透传的结果形态不可预期（短也
+    正常），一律放行不判，避免误伤接口调用。
+    """
+    t = text or ""
+    if "最终URL：" not in t:            # 非网页渲染结果（JSON/API）→ 不判
+        return CheckResult(True, "")
+    if looks_placeholder_page(t):
+        return CheckResult(
+            ok=False, text="抓到占位域名",
+            hint="该网址指向文档示例/占位域名（如 example.com）或域名停放页，不是真实资料"
+                 "来源——多半是凭印象编造的网址。请改用联网搜索工具查到真实网址再抓，"
+                 "并且不要把本次内容当作依据，也不要在正文里引用它。")
+    body = _page_body(t)
+    if len(body) < _MIN_PAGE_BODY:
+        return CheckResult(
+            ok=False, text="网页正文过短",
+            hint="本次抓取几乎没有正文（可能是跳转页、需登录或需 JS 渲染），不足以作为依据。"
+                 "请改用联网搜索工具，或换其它来源，不要据此臆断。")
+    return CheckResult(True, "抓取有效")
 
 
 def relevance_check(text: str) -> CheckResult:

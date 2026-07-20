@@ -35,14 +35,29 @@ def _clamp(count: int) -> int:
     return max(1, min(count, 50))
 
 
+# 题干在结果里的展示上限：够模型指代某道题即可，全文会把工具结果撑长、挤占上下文。
+_STEM_MAX = 40
+
+# 跟在题干清单后、机读标记之前。给模型最贴近的一次提醒：id 是系统内部凭证，不是给人看的。
+# 光在 EXAM_GUIDE 里说一次不够——真正诱使它写出 id 的正是这条工具结果本身。
+_ID_HINT = "（下方 id 仅供你调用工具时使用，不要写进给用户的回答；提到某道题请用题干）"
+
+
+def _stem_list(stems: list[str]) -> str:
+    """把题干渲染成编号清单，供模型向用户复述「生成了哪几道题」。"""
+    return "\n".join(f"{i}. {(s or '（无题干）').strip()[:_STEM_MAX]}"
+                     for i, s in enumerate(stems, 1))
+
+
 class SampleQuestionsTool(Tool):
     name = "sample_questions"
     description = (
         "从当前用户的题库中随机抽取题目用于模拟考试。返回的题目含答案与解析，"
-        "仅供你出题与判分：在『打分式』考试中，作答完成前不要向用户透露答案。")
+        "仅供你出题与判分：在『打分式』考试中，作答完成前不要向用户透露答案。"
+        "count 常用 10-50（即上限）：抽太少覆盖面不够，用户刷两下就没题了。")
 
     class Params(BaseModel):
-        count: int = 5
+        count: int = 10
         types: _OptIdList = None
 
     def __init__(self, question_store, user_id: str) -> None:
@@ -121,19 +136,21 @@ class AddQuestionsTool(Tool):
     async def run(self, params: "AddQuestionsTool.Params") -> str:
         valid = [q for q in params.questions if _valid(q, ALL_TYPES)]
         added_ids: list[str] = []
+        stems: list[str] = []
         for q in valid:
             q.setdefault("source", "聊天整理")
             q["explanation"] = q.get("explanation", "")
             qid = self._store.create_deduped(self._uid, q)
             if qid is not None:
                 added_ids.append(qid)
+                stems.append(q.get("stem", ""))
         added = len(added_ids)
         skipped = len(params.questions) - added
         if added == 0:
             return f"没有新题入库（跳过 {skipped} 道：无效或与题库重复）。"
         # 末尾带机读标记〔题目ID:id,id〕：交付门据此在校验不通过时清理该轮误入库的题（前端剥离不展示）
-        return (f"已入库 {added} 道，跳过 {skipped} 道（无效或重复）。"
-                f"〔题目ID:{','.join(added_ids)}〕")
+        return (f"已入库 {added} 道，跳过 {skipped} 道（无效或重复）：\n{_stem_list(stems)}\n"
+                f"{_ID_HINT}〔题目ID:{','.join(added_ids)}〕")
 
 
 class GenerateQuestionsTool(Tool):
@@ -164,10 +181,13 @@ class GenerateQuestionsTool(Tool):
         except QuizError:
             return "出题失败：生成结果无有效题目，请调整主题或稍后重试。"
         ids = [q["id"] for q in qs if q.get("id")]
-        msg = f"已从知识库生成并入库 {len(qs)} 道题（主题：{params.topic}）。"
+        # 带上题干：模型要向用户复述「生成了哪几道题」时得有名字可用，否则它只有 id 可写，
+        # 就会把一串对用户毫无意义的哈希写进学习计划里。
+        msg = (f"已从知识库生成并入库 {len(qs)} 道题（主题：{params.topic}）：\n"
+               f"{_stem_list([q.get('stem', '') for q in qs])}")
         # 末尾带机读标记〔题目ID:id,id〕：交付门据此清理失败轮误入库的题（前端剥离不展示）；
         # 也让后续「就考刚才这几道」能用 start_exam(source=ids) 精确取到这批题
-        return f"{msg}〔题目ID:{','.join(ids)}〕" if ids else msg
+        return f"{msg}\n{_ID_HINT}〔题目ID:{','.join(ids)}〕" if ids else msg
 
 
 class ListQuestionsTool(Tool):
@@ -196,32 +216,47 @@ class ListQuestionsTool(Tool):
 class DeleteQuestionsTool(Tool):
     name = "delete_questions"
     description = (
-        "从用户题库中删除指定题目（按 question_id）。删除不可恢复，"
-        "调用前必须先向用户复述将删除的题目并取得确认。"
+        "请求从用户题库中删除指定题目（按 question_id）。"
+        "本工具**不会立即删除**：它只登记一条待确认操作，由用户在界面上点「确认删除」后才真正执行。"
+        "你只需照常调用，然后如实告诉用户「已列出待删题目，请确认」，不要谎称已经删掉，"
+        "也不要反复追问——确认动作在界面上完成，不在对话里。"
         "question_id 可先用 list_questions 获取。")
 
     class Params(BaseModel):
         question_ids: _IdList
 
-    def __init__(self, question_store, user_id: str) -> None:
+    def __init__(self, question_store, user_id: str, pending_store=None,
+                 conv_id: str | None = None) -> None:
         self._store = question_store
         self._uid = user_id
+        self._pending = pending_store
+        self._conv = conv_id
 
     async def run(self, params: "DeleteQuestionsTool.Params") -> str:
-        before = {q["id"] for q in self._store.list(self._uid)}
-        hit = [i for i in params.question_ids if i in before]
-        self._store.delete_many(self._uid, hit)
-        return f"已从题库删除 {len(hit)} 道题。"
+        hit = self._store.get_many(self._uid, list(params.question_ids))
+        if not hit:
+            return "没有匹配的题目（id 不存在或不属于你），未登记任何删除。"
+        if self._pending is None:      # 未接确认机制（老测试/精简装配）：退回直接删除
+            self._store.delete_many(self._uid, [q["id"] for q in hit])
+            return f"已从题库删除 {len(hit)} 道题。"
+        pid = self._pending.create(
+            self._uid, self._conv, "delete_questions",
+            {"ids": [q["id"] for q in hit],
+             "labels": [(q.get("stem") or "")[:_STEM_MAX] for q in hit]})
+        return (f"已登记删除请求，等待用户确认（{len(hit)} 道）：\n"
+                f"{_stem_list([q.get('stem', '') for q in hit])}\n"
+                f"尚未删除，用户在界面上确认后才会执行。〔待确认:{pid}〕")
 
 
 class SampleWrongAnswersTool(Tool):
     name = "sample_wrong_answers"
     description = (
         "从用户的「错题集」随机抽取题目用于重考/复习。返回题目快照（含答案与解析）"
-        "及错题 id，仅供你出题与判分：在『打分式』考试中作答完成前不要透露答案。")
+        "及错题 id，仅供你出题与判分：在『打分式』考试中作答完成前不要透露答案。"
+        "count 常用 10-50（即上限）：复习要有量才见效，抽太少不解决问题。")
 
     class Params(BaseModel):
-        count: int = 5
+        count: int = 10
 
     def __init__(self, wrong_store, user_id: str) -> None:
         self._store = wrong_store
@@ -238,21 +273,34 @@ class SampleWrongAnswersTool(Tool):
 class DeleteWrongAnswersTool(Tool):
     name = "delete_wrong_answers"
     description = (
-        "从用户「错题集」删除指定错题（按 wrong_answer_id，即 sample_wrong_answers 返回的 id）。"
-        "删除不可恢复，调用前必须先向用户复述将删除的题目并取得确认。")
+        "请求从用户「错题集」删除指定错题（按 wrong_answer_id，即 sample_wrong_answers 返回的 id）。"
+        "本工具**不会立即删除**：它只登记一条待确认操作，由用户在界面上点「确认删除」后才真正执行。"
+        "你只需照常调用，然后如实告诉用户「已列出待删错题，请确认」，不要谎称已经删掉。")
 
     class Params(BaseModel):
         wrong_answer_ids: _IdList
 
-    def __init__(self, wrong_store, user_id: str) -> None:
+    def __init__(self, wrong_store, user_id: str, pending_store=None,
+                 conv_id: str | None = None) -> None:
         self._store = wrong_store
         self._uid = user_id
+        self._pending = pending_store
+        self._conv = conv_id
 
     async def run(self, params: "DeleteWrongAnswersTool.Params") -> str:
-        before = {r["id"] for r in self._store.list(self._uid)}
-        hit = [i for i in params.wrong_answer_ids if i in before]
-        self._store.delete_many(self._uid, hit)
-        return f"已从错题集删除 {len(hit)} 道题。"
+        want = set(params.wrong_answer_ids)
+        hit = [r for r in self._store.list(self._uid) if r["id"] in want]
+        if not hit:
+            return "没有匹配的错题（id 不存在或不属于你），未登记任何删除。"
+        stems = [((r.get("snapshot") or {}).get("stem") or "") for r in hit]
+        if self._pending is None:      # 未接确认机制：退回直接删除
+            self._store.delete_many(self._uid, [r["id"] for r in hit])
+            return f"已从错题集删除 {len(hit)} 道题。"
+        pid = self._pending.create(
+            self._uid, self._conv, "delete_wrong_answers",
+            {"ids": [r["id"] for r in hit], "labels": [s[:_STEM_MAX] for s in stems]})
+        return (f"已登记删除请求，等待用户确认（{len(hit)} 道）：\n{_stem_list(stems)}\n"
+                f"尚未删除，用户在界面上确认后才会执行。〔待确认:{pid}〕")
 
 
 class StartExamTool(Tool):

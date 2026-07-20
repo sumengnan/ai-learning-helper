@@ -40,6 +40,47 @@ def strip_citations(text: str) -> str:
     return _CITATION_RE.sub("", text)
 
 
+# 编排器内部的步骤标记 [s1]/[s12]…（计划步 id）。与来源角标 [n] 形似但来路完全不同：
+# 它来自执行子步/汇总提示词里对前置产出的标注，模型复用内容时会连前缀一起抄出来。
+# 连同紧邻的前后空格一起吃掉：漏出来的形态是「[s2] # 标题」，只删记号会留下前导空格。
+_STEP_MARKER_RE = re.compile(r"[ \t]*\[s\d+\][ \t]*")
+
+
+# 围栏代码块 ```…``` 与行内代码 `…`：剥角标时整段跳过。
+# 代码里的 arr[1]/nums[0] 形态与角标 [n] 完全一致，_CITATION_RE 的前导空格又是可选的，
+# 不跳过就会把 arr[1] 削成 arr——导出的代码笔记直接被改坏。
+_CODE_SPAN_RE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
+
+
+def _outside_code(text: str, sub) -> str:
+    """只对代码块之外的部分做替换，代码原样保留。"""
+    out, last = [], 0
+    for m in _CODE_SPAN_RE.finditer(text):
+        out.append(sub(text[last:m.start()]))
+        out.append(m.group(0))
+        last = m.end()
+    out.append(sub(text[last:]))
+    return "".join(out)
+
+
+def strip_citations_outside_code(text: str) -> str:
+    """剥离正文角标 [n]，但跳过代码块（见 _outside_code）。用于交付给用户的成品文件。"""
+    if not text:
+        return text
+    return _outside_code(text, lambda s: _CITATION_RE.sub("", s))
+
+
+def strip_step_markers(text: str) -> str:
+    """去掉漏进正文的内部步骤标记 [sN]。
+
+    这是编排管道的内部记号，对用户毫无意义。根因已在 _build_prompt / _synth_user 里
+    改掉（id 不再紧贴正文），这里是交付给用户前的兜底——成品文件不该带管道残留。
+    """
+    if not text:
+        return text
+    return _STEP_MARKER_RE.sub("", text)
+
+
 def _domain(url: str) -> str:
     try:
         host = urlparse(url).hostname or url
@@ -78,9 +119,51 @@ def _no_real_content(result: str) -> bool:
     return "无可提取正文" in (result or "")
 
 
+# RFC 2606/6761 保留给文档示例的域名，以及常见的域名停放/待售页文案。
+# 这类页面真实存在、稳定返回 200、有标题有正文——所有「抓取是否成功」的判据都拦不住它们。
+# 模型编造网址时最容易撞上 example.com 这一族，命中即视为无效抓取（不是真实资料来源）。
+_PLACEHOLDER_HOSTS = frozenset({
+    "example.com", "example.org", "example.net", "example.edu",
+    "localhost", "127.0.0.1", "0.0.0.0",
+})
+_PLACEHOLDER_MARKS = (
+    "this domain is for use in documentation examples",
+    "domain is for use in illustrative examples",
+    "此域名可用于文档示例",
+    "this domain is parked", "domain is for sale", "buy this domain",
+)
+
+
+def final_url_of(result: str) -> str:
+    """从抓取结果里取「最终URL：」行（跟随重定向后的真实地址）；取不到返回空串。"""
+    for line in (result or "").splitlines():
+        if line.startswith("最终URL："):
+            return line[len("最终URL："):].strip()
+    return ""
+
+
+def is_placeholder_host(url: str) -> bool:
+    """URL 的主机是否为保留/占位域名。
+
+    子域名一并算：模型编造端点时最爱写 api.example.com、www.example.org 这种，
+    只做精确匹配会全部漏过（此前就漏了）。
+    """
+    host = (urlparse(url or "").hostname or "").lower()
+    if not host:
+        return False
+    return any(host == d or host.endswith("." + d) for d in _PLACEHOLDER_HOSTS)
+
+
+def looks_placeholder_page(result: str, url: str = "") -> bool:
+    """是否为占位/示例域名或域名停放页。优先按最终URL判域名，其次按页面文案。"""
+    if is_placeholder_host(url or final_url_of(result)):
+        return True
+    return any(m in (result or "")[:600].lower() for m in _PLACEHOLDER_MARKS)
+
+
 # ---- 各工具的来源 builder：入参 (args, result)，出参 dict|None（不含 index）----
 
-def _b_search_memory(args: dict, result: str) -> dict | None:
+def _b_search_knowledge(args: dict, result: str) -> dict | None:
     if not result or result.startswith("（未在知识库"):
         return None
     files: list[str] = []
@@ -97,8 +180,9 @@ def _b_search_memory(args: dict, result: str) -> dict | None:
 
 
 def _b_browse(args: dict, result: str) -> dict | None:
-    # 只收抓到真实内容的网页：拦截/错误页、无正文一律不记源
-    if _looks_error_page(result) or _no_real_content(result):
+    # 只收抓到真实内容的网页：拦截/错误页、无正文、占位/停放域名一律不记源
+    if (_looks_error_page(result) or _no_real_content(result)
+            or looks_placeholder_page(result, str(args.get("url") or ""))):
         return None
     title = url = ""
     for line in (result or "").splitlines():
@@ -120,7 +204,8 @@ def _b_http(args: dict, result: str) -> dict | None:
     status = _http_status(result)
     if status is not None and status != 200:
         return None
-    if _looks_error_page(result) or _no_real_content(result):
+    if (_looks_error_page(result) or _no_real_content(result)
+            or looks_placeholder_page(result, url)):
         return None
     return {"type": "web", "label": _domain(url), "url": url}
 
@@ -170,6 +255,14 @@ def _b_recall_episodes(args: dict, result: str) -> dict | None:
     return {"type": "memory", "label": "历史经验片段"}
 
 
+def _b_search_memory(args: dict, result: str) -> dict | None:
+    """AI 自己记下的长期记忆。与知识库同为「检索到的东西」，但不是可引用的资料来源，
+    故归 type=memory（前端另一种配色/图标），不与 knowledge 混淆。"""
+    if not result or result.startswith("（未检索到相关的长期记忆"):
+        return None
+    return {"type": "memory", "label": "长期记忆"}
+
+
 _CODE_LABEL = {"run_python": "Python 代码执行",
                "run_node": "Node 代码执行",
                "run_java": "Java 代码执行"}
@@ -183,6 +276,7 @@ def _b_code(tool_name: str):
 
 
 _BUILDERS = {
+    "search_knowledge": _b_search_knowledge,
     "search_memory": _b_search_memory,
     "browse": _b_browse,
     "http_request": _b_http,

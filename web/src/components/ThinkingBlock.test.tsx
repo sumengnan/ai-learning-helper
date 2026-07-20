@@ -49,4 +49,10 @@ describe("ThinkingBlock 顶部计时", () => {
     expect(screen.getByText("🧠 思考过程")).toBeTruthy();
     expect(screen.queryByText(/秒/)).toBeNull();
   });
+
+  it("给 title 时用自定义标题（如任务计划思考/结果思考）", () => {
+    render(<ThinkingBlock reasoning="怎么拆" thinking={false} title="任务计划思考" />);
+    expect(screen.getByText("🧠 任务计划思考")).toBeTruthy();
+    expect(screen.queryByText("🧠 思考过程")).toBeNull();
+  });
 });

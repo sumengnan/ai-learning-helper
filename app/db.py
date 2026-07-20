@@ -45,6 +45,14 @@ _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS conversation_runs(
          conv_id TEXT, run_id TEXT, created_at TEXT,
          PRIMARY KEY(conv_id, run_id))""",
+    # 待确认的破坏性操作：agent 不直接执行删除，先在此登记，由用户在前端确认后才真正执行。
+    # payload 存执行所需的最小信息（如 ids）+ 给用户看的标签（题干），status 为
+    # pending/confirmed/rejected。expires_at 到期即失效，避免过期卡片被误点。
+    """CREATE TABLE IF NOT EXISTS pending_actions(
+         id TEXT PRIMARY KEY, user_id TEXT NOT NULL, conv_id TEXT,
+         kind TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL,
+         created_at TEXT NOT NULL, expires_at TEXT NOT NULL, decided_at TEXT)""",
+    "CREATE INDEX IF NOT EXISTS idx_pending_user ON pending_actions(user_id, status)",
     # L2 滚动摘要：更早历史压缩成一段摘要。up_to_seq 为水位（已覆盖的历史消息前缀长度），
     # 增量摘要只处理水位之后的 delta，永不重摘全历史。
     """CREATE TABLE IF NOT EXISTS conversation_summaries(
@@ -84,7 +92,10 @@ _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
     "documents": {"user_id": "TEXT", "excerpt": "TEXT", "content_hash": "TEXT"},
     "questions": {"user_id": "TEXT"},
     "wrong_answers": {"user_id": "TEXT"},
-    "downloads": {"user_id": "TEXT"},
+    # content_hash：正文 sha256，用于「同一用户重复生成同一文件」的去重。
+    # 编排器的单步重试会把带副作用的工具原样再调一遍，同一份笔记于是被存两次、
+    # 消息下方冒出两个一模一样的下载按钮。旧库为 NULL：老记录不参与去重。
+    "downloads": {"user_id": "TEXT", "content_hash": "TEXT"},
 }
 
 _SCHEMA_VERSION = 1

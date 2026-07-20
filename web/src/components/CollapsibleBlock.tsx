@@ -10,32 +10,38 @@ import StopCircleIcon from "@mui/icons-material/StopCircle";
 // 可折叠的过程块（工具调用 / 沙箱执行 / 子代理执行 / 任务步骤 统一外观）
 // summary：标题右侧显示的“最后一步进度”预览；给了就用它替代整体状态图标
 // stopped：用户主动停止时的终态（灰色停止图标，区别于成功/失败）
-export function CollapsibleBlock({ icon, title, status, summary, defaultExpanded = false, children }: {
+export function CollapsibleBlock({ icon, title, status, summary, defaultExpanded = false, large = false, children }: {
   icon: ReactNode;
   title: string;
   status: "running" | "ok" | "error" | "stopped";
   summary?: ReactNode;
   defaultExpanded?: boolean;
+  large?: boolean;   // 强调型块头（更大更粗的标题，与内部条目拉开层级），用于「任务步骤」总块
   children: ReactNode;
 }) {
   return (
     <Accordion
       defaultExpanded={defaultExpanded} disableGutters elevation={0}
       sx={{
-        mb: 1, border: 1, borderColor: "divider", borderRadius: 1.5,
-        bgcolor: "background.default", overflow: "hidden",
+        mb: 1, border: 1, borderColor: large ? "primary.main" : "divider",
+        borderRadius: 1.5, bgcolor: "background.default", overflow: "hidden",
         "&:before": { display: "none" },
       }}
     >
       <AccordionSummary
-        expandIcon={<ExpandMoreIcon fontSize="small" />}
+        expandIcon={<ExpandMoreIcon fontSize={large ? "medium" : "small"} />}
         sx={{
-          minHeight: 0, px: 1,
-          "& .MuiAccordionSummary-content": { my: 0.75, alignItems: "center", gap: 0.75 },
+          minHeight: 0, px: large ? 1.25 : 1,
+          "& .MuiAccordionSummary-content": {
+            my: large ? 1 : 0.75, alignItems: "center", gap: large ? 1 : 0.75 },
         }}
       >
         {icon}
-        <Typography variant="caption" sx={{ fontWeight: 700, flexShrink: 0, mr: 1 }}>
+        <Typography
+          variant={large ? "subtitle2" : "caption"}
+          sx={{ fontWeight: large ? 800 : 700, fontSize: large ? "1rem" : undefined,
+                flexShrink: 0, mr: 1 }}
+        >
           {title}
         </Typography>
         {summary ? (

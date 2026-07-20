@@ -228,3 +228,46 @@ def test_guard_leaves_non_fetch_tools_alone():
     t = _Other()
     assert guard_fetch_tool(t, _store()) is t          # 原样返回，不包装
     assert guard_fetch_tool(_FakeFetch(), None) is not None   # store 为 None → 直通
+
+
+# ---------- 占位域名事前拦截 ----------
+
+class _CountingFetch(Tool):
+    name = "http_request"
+    description = "d"
+
+    class Params(BaseModel):
+        url: str
+        method: str = "GET"
+
+    def __init__(self):
+        self.called = 0
+
+    async def run(self, p):
+        self.called += 1
+        return "HTTP 200\n正文"
+
+
+@pytest.mark.parametrize("url", [
+    "https://api.example.com/ai-trends",   # 子域名：精确匹配会漏，实测模型最爱编这种
+    "https://example.com/x",
+    "https://www.example.org/a",
+    "http://example.net/v1/data",
+])
+async def test_placeholder_url_blocked_before_request(url):
+    """回归：模型没有真实网址时会照着 API 文档的样子编一个。这类保留域名真实存在且恒返回
+    200，抓完才判「是占位页」既浪费往返、也让模型误以为拿到了数据——必须在发请求前拦掉。"""
+    inner = _CountingFetch()
+    t = guard_fetch_tool(inner, None)          # 无登记表也必须生效
+    with pytest.raises(ToolError) as e:
+        await t.run(t.Params(url=url))
+    assert inner.called == 0, "请求不该发出去"
+    assert "未发起请求" in str(e.value)
+    assert "联网搜索工具" in str(e.value)       # 必须给出路，否则它只会换个编造的网址重试
+
+
+async def test_real_url_passes_through_without_store():
+    inner = _CountingFetch()
+    t = guard_fetch_tool(inner, None)
+    out = await t.run(t.Params(url="https://zh.wikipedia.org/wiki/AI"))
+    assert inner.called == 1 and "正文" in out

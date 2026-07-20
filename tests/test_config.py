@@ -37,7 +37,7 @@ def test_memory_defaults():
     assert cfg.memory_db_path == "memory.db"
     assert cfg.chunk_size == 1000
     assert cfg.chunk_overlap == 200
-    assert cfg.search_top_k == 5
+    assert cfg.search_top_k == 10
     assert cfg.memory_collection == "knowledge"
 
 

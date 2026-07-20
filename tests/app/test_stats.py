@@ -187,6 +187,7 @@ def test_memory_items_listing():
     assert len(items) == 3
     assert {i["text"] for i in items} == {"a", "b", "c"}
     assert all("created_at" in i for i in items)
+    assert all(i["mem_type"] == "semantic" for i in items)   # 类型随条目返回，供前端展示
 
 
 def test_memory_items_isolated_by_user():
@@ -216,7 +217,7 @@ class _FakeMemStore:
 
     def get(self, ids):
         from types import SimpleNamespace
-        return [SimpleNamespace(owner_id=self._o[i]) for i in ids if i in self._o]
+        return [SimpleNamespace(id=i, owner_id=self._o[i]) for i in ids if i in self._o]
 
     def delete(self, ids):
         self.deleted.extend(ids)
@@ -233,6 +234,46 @@ def test_delete_memory_owned():
     fake = _FakeMemStore({"m1": "cv1"})            # cv1 属于用户 u（见 _app_conn）
     assert _svc_with_store(fake).delete_memory("u", "m1") is True
     assert fake.deleted == ["m1"]
+
+
+def test_delete_memories_batch_filters_by_owner():
+    # 批量删除：只删本人会话(cv1)的，别人的(cvX)跳过
+    fake = _FakeMemStore({"m1": "cv1", "m2": "cv1", "mx": "cvX"})
+    deleted = _svc_with_store(fake).delete_memories("u", ["m1", "m2", "mx"])
+    assert set(deleted) == {"m1", "m2"}
+    assert set(fake.deleted) == {"m1", "m2"}
+
+
+def test_delete_memories_empty_or_no_store():
+    assert _svc_with_store(_FakeMemStore({"m1": "cv1"})).delete_memories("u", []) == []
+    svc = StatsService(trajectory_conn=_traj_conn(), app_conn=_app_conn(),
+                       memory_conn=_mem_conn(), memory_store=None, now=lambda: FIXED_NOW)
+    assert svc.delete_memories("u", ["m1"]) == []
+
+
+class _FakeMaintainer:
+    """记录 consolidate_semantic 调用；每次返回固定合并统计。"""
+    def __init__(self):
+        self.calls = []
+    async def consolidate_semantic(self, owner_id, kind):
+        self.calls.append((owner_id, kind))
+        return {"clusters": 1, "merged": 2, "created": 1}
+
+
+async def test_consolidate_memories_aggregates_over_conversations():
+    fake = _FakeMaintainer()
+    svc = StatsService(trajectory_conn=_traj_conn(), app_conn=_app_conn(),
+                       memory_conn=_mem_conn(), maintainer=fake, now=lambda: FIXED_NOW)
+    out = await svc.consolidate_memories("u")
+    assert fake.calls                                       # 遍历了 u 的会话
+    assert all(kind == "conversation" for _, kind in fake.calls)
+    assert out["created"] >= 1 and out["merged"] >= 2       # 统计累加
+
+
+async def test_consolidate_memories_no_maintainer():
+    svc = StatsService(trajectory_conn=_traj_conn(), app_conn=_app_conn(),
+                       memory_conn=_mem_conn(), now=lambda: FIXED_NOW)
+    assert await svc.consolidate_memories("u") == {"clusters": 0, "merged": 0, "created": 0}
 
 
 def test_delete_memory_rejects_other_users_record():
@@ -629,3 +670,33 @@ def test_learn_activity_series_is_user_scoped():
     mine = sum(d["runs"] for d in svc.overview("u")["learn"]["activity"])
     theirs = sum(d["runs"] for d in svc.overview("other")["learn"]["activity"])
     assert mine == 2 and theirs == 1
+
+
+def test_ops_by_model_breakdown_and_per_model_pricing():
+    """ModelUsage 按 model 分组：token/调用次数汇总，成本按各模型专属计价表回溯。"""
+    tc = _traj_conn()
+    _ev(tc, "r1", 0, "RunStarted", {"run_id": "r1"})
+    _ev(tc, "r1", 1, "ModelUsage", {"usage": {"prompt": 100, "completion": 50, "total": 150},
+                                    "cost_usd": None, "attempts": 1, "latency_ms": 10.0, "model": "main-m"})
+    _ev(tc, "r1", 2, "ModelUsage", {"usage": {"prompt": 200, "completion": 100, "total": 300},
+                                    "cost_usd": None, "attempts": 1, "latency_ms": 10.0, "model": "fast-m"})
+    _ev(tc, "r1", 3, "ModelUsage", {"usage": {"prompt": 40, "completion": 10, "total": 50},
+                                    "cost_usd": None, "attempts": 1, "latency_ms": 10.0, "model": "main-m"})
+    _ev(tc, "r1", 4, "RunFinished", {"message": {"role": "assistant", "content": "done"}})
+    tc.commit()
+    svc = StatsService(trajectory_conn=tc, app_conn=_app_conn(), memory_conn=None,
+                       price_tiers=[[1000000, 1.0, 2.0]],                    # 全局默认档
+                       price_tiers_by_model={"fast-m": [[1000000, 0.3, 0.6]]},  # fast 专属更便宜
+                       currency="¥")
+    ops = svc.overview(None, days=90)["ops"]
+    by = {r["model"]: r for r in ops["by_model"]}
+    assert set(by) == {"main-m", "fast-m"}
+    assert by["main-m"]["calls"] == 2 and by["main-m"]["total_tokens"] == 200      # 150+50
+    assert by["fast-m"]["calls"] == 1 and by["fast-m"]["total_tokens"] == 300
+    # main 用默认档：输入 140/百万×1.0 + 输出 60/百万×2.0
+    assert abs(by["main-m"]["cost_usd"] - round(140/1e6*1.0 + 60/1e6*2.0, 6)) < 1e-9
+    # fast 用专属档：200/百万×0.3 + 100/百万×0.6
+    assert abs(by["fast-m"]["cost_usd"] - round(200/1e6*0.3 + 100/1e6*0.6, 6)) < 1e-9
+    # 汇总 = 各模型之和
+    assert ops["totals"]["total_tokens"] == 500
+    assert abs(ops["totals"]["cost_usd"] - round(by["main-m"]["cost_usd"] + by["fast-m"]["cost_usd"], 4)) < 1e-9

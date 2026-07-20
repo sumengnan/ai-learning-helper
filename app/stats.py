@@ -34,16 +34,46 @@ _CN_TZ = timezone(timedelta(hours=8))
 
 # 原始工具名 → 面向学习者的「能力」分组（图标, 标签, 归入的工具名集合）。
 # 未列出的工具归入「其他能力」。顺序即展示顺序的兜底（实际按调用次数倒排）。
+#
+# 这张表会随工具集演进自然腐化，且腐化时不报错——只是所有调用悄悄堆进「其他能力」，
+# 产品叙事失效。曾漏掉全部应用层工具（知识库/题库/考试）与全部 MCP 远程工具，
+# 而 EXECUTOR_GUIDE 恰恰引导模型优先用 MCP 搜索工具，「联网查资料」因此注定接近 0。
+# tests/app/test_stats_ability_groups.py 有护栏：表里的名字必须真实注册、且真实注册的
+# 主要工具不得大面积落进「其他能力」。
 _ABILITY_GROUPS: list[tuple[str, str, set[str]]] = [
     ("🌐", "联网查资料", {"http_request", "browse"}),
     ("💻", "运行代码", {"run_shell", "run_python", "run_java", "run_node"}),
-    ("🧠", "记住你的偏好", {"remember", "recall_episodes"}),
-    ("🔍", "检索长期记忆", {"search_memory"}),
-    ("🧩", "拆解复杂任务", {"dispatch"}),
+    ("🧠", "记住你的偏好", {"remember", "recall_episodes", "search_memory"}),
+    ("🔍", "检索知识库", {"search_knowledge"}),
+    ("📥", "整理进知识库", {"save_to_knowledge"}),
+    ("✏️", "出练习题", {"sample_questions", "generate_questions", "add_questions"}),
+    ("📝", "考试与错题", {"start_exam", "save_wrong_answer", "sample_wrong_answers",
+                      "delete_wrong_answers", "list_questions", "delete_questions"}),
+    ("🧩", "拆解复杂任务", {"dispatch", "update_plan"}),
     ("✍️", "生成文件产物", {"write_file", "save_download"}),
-    ("✏️", "出练习题", {"sample_questions"}),
     ("📄", "读你的资料", {"read_attachment", "list_attachments", "read_file", "list_files"}),
+    ("🔢", "做计算", {"calculator"}),
 ]
+
+# MCP 远程工具名形如 mcp__<server>__<tool>，由外部服务器决定、无法枚举，只能按名字里的
+# 动作关键词归类。命中不了的仍进「其他能力」——那是诚实的，好过硬塞进某一类。
+_MCP_KEYWORD_GROUPS: list[tuple[tuple[str, ...], str]] = [
+    (("search", "搜索", "web_search"), "联网查资料"),
+    (("fetch", "browse", "crawl", "抓取"), "联网查资料"),
+]
+
+
+def _ability_label(name: str) -> str | None:
+    """工具名 → 能力标签；归不了类返回 None（调用方计入「其他能力」）。"""
+    for _icon, label, names in _ABILITY_GROUPS:
+        if name in names:
+            return label
+    if name.startswith("mcp__"):
+        low = name.lower()
+        for keys, label in _MCP_KEYWORD_GROUPS:
+            if any(k in low for k in keys):
+                return label
+    return None
 
 
 def _percentile(values: list[float], p: float) -> float:
@@ -69,6 +99,20 @@ def _iso_delta_ms(start: str, end: str) -> float | None:
     except (ValueError, TypeError):
         return None
     return (b - a).total_seconds() * 1000.0
+
+
+def _by_model_rows(by_model: dict) -> list[dict]:
+    """把 {model: {...}} 转成按 total token 降序的列表，供前端分模型表格。"""
+    rows = [{
+        "model": name,
+        "calls": m["calls"],
+        "prompt": m["prompt"],
+        "completion": m["completion"],
+        "total_tokens": m["total"],
+        "cost_usd": round(m["cost"], 6) if m["has_cost"] else None,   # ¥ 金额可能很小，多留精度
+    } for name, m in by_model.items()]
+    rows.sort(key=lambda r: r["total_tokens"], reverse=True)
+    return rows
 
 
 def _cn_day(created_at: str) -> str:
@@ -124,7 +168,10 @@ class StatsService:
                  app_conn: sqlite3.Connection,
                  memory_conn: sqlite3.Connection | None = None,
                  memory_store=None,
+                 maintainer=None,
                  price_tiers: list | None = None,
+                 price_tiers_by_model: dict | None = None,
+                 price_map: dict | None = None,
                  currency: str = "$",
                  now=None) -> None:
         self._traj = trajectory_conn
@@ -133,11 +180,27 @@ class StatsService:
         # 记忆的写侧后端（SqliteVecBackend）：删除要同步清 records/vec/fts 三表，
         # 走它才安全；只读统计仍用 _mem 连接。缺省 None 时删除不可用（优雅降级）。
         self._mem_store = memory_store
+        # 记忆维护器（MemoryMaintainer）：手动「整理相似偏好」用；缺省 None 时该功能优雅降级。
+        self._maintainer = maintainer
         # 分层单价表（按输入长度分档）；配置后由 token 数现算成本，可回溯历史事件。
         # 为空则回退累加事件里已存的 cost_usd（旧口径）。
         self._price_tiers = price_tiers or []
+        # 按模型的分层表 {model: tiers} 与扁平价表 {model: [in,out]/1k}：让 stats 也按模型精确回溯成本
+        self._price_tiers_by_model = price_tiers_by_model or {}
+        self._price_map = price_map or {}
         self._currency = currency
         self._now = now or (lambda: datetime.now(timezone.utc))
+
+    def _model_cost(self, prompt: int, completion: int, model: str) -> float | None:
+        """按模型回溯成本：扁平 price_map（per-model）→ 该模型分层表 → 全局默认分层表。都无则 None。"""
+        price = self._price_map.get(model)
+        if price:
+            in_1k, out_1k = price
+            return prompt / 1000 * in_1k + completion / 1000 * out_1k
+        tiers = self._price_tiers_by_model.get(model) or self._price_tiers
+        if tiers:
+            return tiered_cost(prompt, completion, tiers)
+        return None
 
     # ---------- 公开入口 ----------
 
@@ -301,6 +364,7 @@ class StatsService:
         retries = 0
         total_cost = 0.0
         any_cost = False
+        by_model: dict[str, dict] = {}   # {模型名: {prompt,completion,total,calls,cost,has_cost}}
         tool_name_by_id: dict[str, str] = {}
         tool_counts: Counter = Counter()
         tool_errors: Counter = Counter()
@@ -337,23 +401,28 @@ class StatsService:
                 day = _cn_day(created_at)
                 if day:
                     daily[day]["tokens"] += tok
+                # 只收真实测过的耗时：embedding（memory/embeddings.py）与 rerank
+                # （memory/reranker.py）上报的 ModelUsage 把 latency_ms 硬编码成 0.0，
+                # 收进来会把均值/p95 系统性拉低——检索用得越多显得越快，与直觉相反。
                 lat = d.get("latency_ms")
-                if isinstance(lat, (int, float)):
+                if isinstance(lat, (int, float)) and lat > 0:
                     latencies.append(float(lat))
                 if (d.get("attempts") or 1) > 1:
                     retries += 1
-                if self._price_tiers:
-                    # 由本次调用的输入/输出 token 现算，历史事件也能回溯出成本
-                    c = tiered_cost(u.get("prompt", 0) or 0, u.get("completion", 0) or 0,
-                                    self._price_tiers)
-                    if c is not None:
-                        any_cost = True
-                        total_cost += c
-                else:
+                # 按模型计价（可回溯）：per-model 扁平价/分层表 → 全局默认分层表 → 事件里存的 cost_usd
+                p_, c_ = u.get("prompt", 0) or 0, u.get("completion", 0) or 0
+                model = d.get("model") or "(未知)"
+                mc = self._model_cost(p_, c_, model)
+                if mc is None:
                     cost = d.get("cost_usd")
-                    if isinstance(cost, (int, float)):
-                        any_cost = True
-                        total_cost += float(cost)
+                    mc = float(cost) if isinstance(cost, (int, float)) else None
+                bm = by_model.setdefault(model, {"prompt": 0, "completion": 0, "total": 0,
+                                                 "calls": 0, "cost": 0.0, "has_cost": False})
+                bm["prompt"] += p_; bm["completion"] += c_; bm["total"] += tok; bm["calls"] += 1
+                if mc is not None:
+                    bm["cost"] += mc; bm["has_cost"] = True
+                    any_cost = True
+                    total_cost += mc
             elif typ == "ToolStarted":
                 tc = d.get("tool_call", {}) or {}
                 name = tc.get("name") or "?"
@@ -401,6 +470,7 @@ class StatsService:
             "tool_errors": tool_errors,
             "steps_per_run": steps_per_run,
             "daily": daily,
+            "by_model": by_model,
         }
 
     def _daily_series(self, daily: dict, now: datetime, days: int) -> list[dict]:
@@ -414,13 +484,19 @@ class StatsService:
 
     def _abilities(self, tool_counts: Counter) -> list[dict]:
         out = []
-        grouped: set[str] = set()
-        for icon, label, names in _ABILITY_GROUPS:
-            c = sum(tool_counts.get(n, 0) for n in names)
-            grouped |= names
+        # 先按工具名逐个归类（含 MCP 关键词兜底），再按标签汇总——这样 MCP 工具也能进组
+        by_label: Counter = Counter()
+        other = 0
+        for name, cnt in tool_counts.items():
+            label = _ability_label(name)
+            if label is None:
+                other += cnt
+            else:
+                by_label[label] += cnt
+        for icon, label, _names in _ABILITY_GROUPS:
+            c = by_label.get(label, 0)
             if c > 0:
                 out.append({"icon": icon, "label": label, "count": c})
-        other = sum(v for k, v in tool_counts.items() if k not in grouped)
         if other > 0:
             out.append({"icon": "🛠️", "label": "其他能力", "count": other})
         out.sort(key=lambda x: x["count"], reverse=True)
@@ -625,17 +701,18 @@ class StatsService:
         conv_ids = self._user_conv_ids(user_id)
         if self._mem is None or not conv_ids:
             return []
-        limit = max(1, min(limit, 200))
+        limit = max(1, min(limit, 1000))
         ph = ",".join("?" * len(conv_ids))
         try:
             rows = self._mem.execute(
-                f"SELECT id, text, kind, created_at FROM memory_records "
+                f"SELECT id, text, kind, mem_type, created_at FROM memory_records "
                 f"WHERE kind='conversation' AND superseded=0 AND owner_id IN ({ph}) "
                 f"ORDER BY created_at DESC LIMIT ?",
                 (*conv_ids, limit)).fetchall()
         except sqlite3.Error:
             return []
-        return [{"id": r[0], "text": r[1], "collection": r[2], "created_at": r[3]} for r in rows]
+        return [{"id": r[0], "text": r[1], "collection": r[2], "mem_type": r[3],
+                 "created_at": r[4]} for r in rows]
 
     def delete_memory(self, user_id: str | None, mem_id: str) -> bool:
         """删除当前用户的一条对话记忆（按会话归属校验）。找不到/非本人/无写后端返回 False。"""
@@ -649,6 +726,33 @@ class StatsService:
             return False
         self._mem_store.delete([mem_id])
         return True
+
+    def delete_memories(self, user_id: str | None, ids: list[str]) -> list[str]:
+        """批量删除当前用户的对话记忆（逐条按会话归属校验）。返回实际删除的 id 列表；
+        非本人/不存在的跳过。无写后端或空入参返回空。"""
+        if self._mem_store is None or not ids:
+            return []
+        owned = set(self._user_conv_ids(user_id))
+        recs = self._mem_store.get(list(ids))
+        deletable = [r.id for r in recs if r.owner_id in owned]
+        if deletable:
+            self._mem_store.delete(deletable)
+        return deletable
+
+    async def consolidate_memories(self, user_id: str | None) -> dict:
+        """手动「整理相似偏好」：把用户各会话里同主题的多条 semantic 偏好合并成一条。
+        返回合并统计 {clusters, merged, created}。无维护器时优雅降级为全 0。"""
+        total = {"clusters": 0, "merged": 0, "created": 0}
+        if self._maintainer is None:
+            return total
+        for conv_id in self._user_conv_ids(user_id):
+            try:
+                r = await self._maintainer.consolidate_semantic(conv_id, "conversation")
+            except Exception:                       # 单会话失败不影响其余（best-effort）
+                continue
+            for k in total:
+                total[k] += r.get(k, 0)
+        return total
 
     def _last_conversation(self, user_id: str | None) -> dict | None:
         if self._app is None:
@@ -717,6 +821,9 @@ class StatsService:
                 "conversations": counts["conversations"],
                 "messages": counts["messages"],
             },
+            # 分模型明细：token/调用次数/成本按模型拆开，供前端表格展示（totals 是全部模型的汇总）。
+            # 含 embedding/rerank：它们的 emit 用量已经 _merged 并入主流落 trajectory（见 chat.py pump）。
+            "by_model": _by_model_rows(agg["by_model"]),
             "daily": series,
             "tools": self._tools_list(agg["tool_counts"], agg["tool_errors"]),
             "steps_histogram": self._steps_histogram(agg["steps_per_run"]),

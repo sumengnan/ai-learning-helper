@@ -36,6 +36,32 @@ describe("PlanBlock", () => {
     expect(container.querySelector('[role="progressbar"]')).toBeTruthy();
   });
 
+  it("每步前带序号 1. 2. 3.，正在执行的步仍显示转圈", () => {
+    const snap = JSON.stringify([
+      { title: "查资料", status: "done" },
+      { title: "计算中", status: "running" },
+      { title: "汇总", status: "pending" },
+    ]);
+    const { container } = render(<PlanBlock text={snap} live />);
+    expect(screen.getByText("1.")).toBeTruthy();
+    expect(screen.getByText("2.")).toBeTruthy();
+    expect(screen.getByText("3.")).toBeTruthy();
+    // 正在执行的步仍有转圈标识
+    expect(container.querySelector('[role="progressbar"]')).toBeTruthy();
+  });
+
+  it("生成中：只有正在执行的步转圈，待办步不转圈", () => {
+    const snap = JSON.stringify([
+      { title: "已完成", status: "done" },
+      { title: "执行中", status: "running" },
+      { title: "待办1", status: "pending" },
+      { title: "待办2", status: "pending" },
+    ]);
+    const { container } = render(<PlanBlock text={snap} live />);
+    // 恰好一个进度圈（正在执行的那步），而不是所有非终态步都转圈
+    expect(container.querySelectorAll('[role="progressbar"]').length).toBe(1);
+  });
+
   it("用户停止后：运行中的步骤标『已取消』且不再转圈（issue 2）", () => {
     const snap = JSON.stringify([
       { title: "查资料", status: "done" },
@@ -107,6 +133,76 @@ describe("PlanBlock · 运行结束但模型没把清单更新完", () => {
     render(<PlanBlock text={STALE} live={false} status="stopped" />);
     expect(screen.getByText(/整合信息（已取消）/)).toBeTruthy();
     expect(screen.queryByText(/状态未知/)).toBeNull();
+  });
+});
+
+describe("PlanBlock · 并行/依赖标注", () => {
+  const plan = JSON.stringify([
+    { id: "s1", title: "调研技术", status: "done", depends_on: [] },
+    { id: "s2", title: "调研案例", status: "running", depends_on: [] },
+    { id: "s3", title: "调研风险", status: "done", depends_on: [] },
+    { id: "s4", title: "整合", status: "pending", depends_on: ["s1", "s2", "s3"] },
+    { id: "s5", title: "生成报告", status: "pending", depends_on: ["s4"] },
+  ]);
+
+  it("同层多步标『并行』，依赖步标『依赖 序号』", () => {
+    render(<PlanBlock text={plan} live status="streaming" />);
+    // s1/s2/s3 同为第 0 层、3 步 → 并行徽章（出现 3 次）
+    expect(screen.getAllByText("并行").length).toBe(3);
+    // s4 依赖 s1·s2·s3 → 依赖 1·2·3
+    expect(screen.getByText("依赖 1·2·3")).toBeTruthy();
+    // s5 依赖 s4 → 依赖 4
+    expect(screen.getByText("依赖 4")).toBeTruthy();
+  });
+
+  it("s5 独占第 2 层 → 不标并行", () => {
+    render(<PlanBlock text={plan} live status="streaming" />);
+    // s4 独占第 1 层、s5 独占第 2 层：都不并行；只有 s1/s2/s3 三个并行徽章
+    expect(screen.getAllByText("并行").length).toBe(3);
+  });
+
+  it("ReAct 清单（无 id/依赖）不出现并行/依赖标注", () => {
+    const react = JSON.stringify([
+      { title: "查资料", status: "done" }, { title: "汇总", status: "done" },
+    ]);
+    render(<PlanBlock text={react} />);
+    expect(screen.queryByText("并行")).toBeNull();
+    expect(screen.queryByText(/依赖/)).toBeNull();
+  });
+});
+
+describe("PlanBlock · 编排器计划步嵌套执行明细", () => {
+  const plan = JSON.stringify([
+    { id: "s1", title: "调研快排", status: "done" },
+    { id: "s2", title: "汇总", status: "done" },
+  ]);
+  const subItems = [
+    { scope: "subagent:executor:s1", text: "调研快排", status: "running" as const, key: "__hdr__:s1" },
+    { scope: "subagent:executor:s1", text: "调用工具 web", status: "ok" as const, key: "c1",
+      detail: { tool: "web", args: { q: "快排" }, result: "结果X", is_error: false } },
+  ];
+
+  it("带 id 且有匹配 executor 明细的步 → 可展开，露出 agent + 工具调用 + 入参/返回", () => {
+    render(<PlanBlock text={plan} live={false} status="done" subItems={subItems} />);
+    // 顶部仍是计划步（总任务步骤）
+    expect(screen.getAllByText("调研快排").length).toBeGreaterThanOrEqual(1);
+    // 展开后：执行 agent、工具名、参数/结果都在 DOM（MUI Accordion 折叠时子节点仍挂载）
+    expect(screen.getByText("执行智能体")).toBeTruthy();
+    expect(screen.getByText("web")).toBeTruthy();
+    expect(screen.getByText("参数")).toBeTruthy();
+    expect(screen.getByText("结果X")).toBeTruthy();
+  });
+
+  it("无匹配明细的步（如 s2）不产生工具明细，仍是纯步骤行", () => {
+    render(<PlanBlock text={plan} live={false} status="done" subItems={subItems} />);
+    // s2 没有 executor:s2 的明细 → 不出现「执行明细」小标
+    // s1 出现一次执行明细，s2 不出现（故总计恰好 1 处）
+    expect(screen.getAllByText("执行明细").length).toBe(1);
+  });
+
+  it("无 subItems（ReAct 清单）→ 完全按纯行渲染，无展开", () => {
+    render(<PlanBlock text={plan} live={false} status="done" />);
+    expect(screen.queryByText("执行明细")).toBeNull();
   });
 });
 

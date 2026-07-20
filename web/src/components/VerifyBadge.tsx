@@ -89,7 +89,7 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
   // checks 实时由 ChatView 赋值、刷新后为空 → 回退到从 progress 重建（数据一直在那）。
   // 检索命中是正常情形，不作为校验状态展示（仅保留失败/未命中等有意义的每步校验）
   const checks = (message.checks || checksFromProgress(message.progress)).filter(
-    (c) => !(c.tool === "search_memory" && c.status === "ok"));
+    (c) => !(c.tool === "search_knowledge" && c.status === "ok"));
   // quality 只在实时 SSE 时被 ChatView 赋值；刷新后从 progress 里的 scope="quality"
   // 条目重建（_emit_quality 把同一份 JSON 既推事件也写进 progress 列），否则质量分
   // 徽章刷新即消失，而数据其实一直在。

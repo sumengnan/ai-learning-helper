@@ -14,7 +14,7 @@ class _P(BaseModel):
 
 
 class _SearchStub(Tool):
-    name = "search_memory"
+    name = "search_knowledge"
     description = "d"
     Params = _P
 
@@ -127,6 +127,49 @@ async def test_exec_fail_emits_error_and_reraises():
 def test_transparent_name_params_schema():
     inner = _SearchStub("x")
     t = ValidatingTool(inner, relevance_check)
-    assert t.name == "search_memory"
+    assert t.name == "search_knowledge"
     assert t.Params is _P
     assert t.schema() == inner.schema()
+
+
+# ---------- 联网抓取校验：抓取成功 ≠ 抓到了能当依据的东西 ----------
+
+from app.tools.validating import web_content_check   # noqa: E402
+
+# 用户实际遇到的那次：模型编了个不存在的网址，example.com 真实存在且恒返回 200，
+# 于是状态码、错误页、有无正文三道判据全部放行，结果被记成参考来源 [3]。
+_EXAMPLE_COM_RESULT = (
+    "标题：Example Domain\n"
+    "最终URL：https://example.com/ai-agent-advancements\n\n"
+    "This domain is for use in documentation examples without needing permission. "
+    "Avoid use in operations.\nLearn more")
+
+
+def test_web_check_rejects_placeholder_domain():
+    r = web_content_check(_EXAMPLE_COM_RESULT)
+    assert r.ok is False
+    assert "占位域名" in r.text
+    assert "编造" in r.hint          # 提示要点明「网址可能是编的」，驱动模型改用搜索
+
+
+def test_web_check_rejects_parked_domain_by_text():
+    r = web_content_check("标题：x\n最终URL：https://real-looking-site.com/a\n\n"
+                          "This domain is for sale. Buy this domain now." + "x" * 200)
+    assert r.ok is False
+
+
+def test_web_check_rejects_near_empty_body():
+    r = web_content_check("HTTP 200\n标题：某页\n最终URL：https://a.com/x\n\n短")
+    assert r.ok is False and "过短" in r.text
+
+
+def test_web_check_passes_real_page():
+    body = "光合作用是植物利用光能把二氧化碳和水转化为葡萄糖和氧气的过程。" * 5
+    r = web_content_check(f"HTTP 200\n标题：光合作用\n最终URL：https://zh.wikipedia.org/wiki/x\n\n{body}")
+    assert r.ok is True
+
+
+def test_web_check_ignores_non_page_results():
+    """JSON/API 原样透传的结果没有「最终URL：」行，形态不可预期、短也正常 → 不判，免误伤。"""
+    assert web_content_check('HTTP 200\n{"ok":true}').ok is True
+    assert web_content_check("HTTP 200\n[]").ok is True

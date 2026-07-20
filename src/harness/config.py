@@ -35,6 +35,9 @@ class HarnessConfig(BaseSettings):
     # （DashScope 百炼 compatible-mode 用此形式；自托管 vLLM 用
     # {"chat_template_kwargs": {"enable_thinking": false}}）。
     llm_extra_body: dict = {}
+    # 不支持「思考模式」切换参数的模型（子串匹配模型名，JSON 数组）：命中的模型不发
+    # enable_thinking / thinking，避免端点因「未知参数」报错。例：["qwen-turbo","-flash"]
+    thinking_unsupported_models: list = []
     max_retries: int = 2
     retry_base_delay: float = 0.5
     max_tokens_budget: int | None = None
@@ -44,11 +47,15 @@ class HarnessConfig(BaseSettings):
     otel_enabled: bool = False
     otel_exporter: str = "console"      # console | otlp
     otel_endpoint: str = ""
-    price_map: dict = {}                 # {model: [in_per_1k, out_per_1k]}（旧版扁平计费，实时口径）
+    price_map: dict = {}                 # {model: [in_per_1k, out_per_1k]}（扁平计费，按模型 key，实时口径）
     # 当前模型分层计费：按「输入长度」分档，每档 [输入上限tokens, 输入价/百万token, 输出价/百万token]，
     # 升序排列，末档为封顶价；空=未知（成本显示 —）。默认 qwen-plus 档位（¥/百万 token）：
     # 输入≤256K=1.6、256K~1M=4.8；输出≤256K=6.4、256K~1M=19.2。
     model_price_tiers: list = [[256000, 1.6, 6.4], [1000000, 4.8, 19.2]]
+    # 按模型的分层计费覆盖：{模型名: tiers}。给主/快速/embedding/rerank/judge 各配一份，未命中的
+    # 模型回退上面的 model_price_tiers（默认档）。例：
+    #   {"qwen-plus":[[256000,1.6,6.4],[1000000,4.8,19.2]], "qwen-turbo":[[1000000,0.3,0.6]]}
+    model_price_tiers_by_model: dict = {}
     price_currency: str = "¥"            # 估算成本显示的货币符号
     embedding_base_url: str = "https://api.openai.com/v1"
     embedding_api_key: str = ""          # 空则回退用 api_key
@@ -58,7 +65,7 @@ class HarnessConfig(BaseSettings):
     chunk_size: int = 1000
     chunk_overlap: int = 200
     chunk_hard_max: int = 2000        # 切分容量硬上限：表格/代码块在此上限内整块保留，绝不超此值
-    search_top_k: int = 5
+    search_top_k: int = 10
     memory_collection: str = "knowledge"
     retrieval_candidate_pool: int = 20
     retrieval_w_relevance: float = 1.0
@@ -77,7 +84,7 @@ class HarnessConfig(BaseSettings):
     retrieval_multi_query_n: int = 3
     retrieval_query_plan_timeout_s: float = 2.0  # 规划 LLM 超时（首字关键路径，超时即降级）
     # 精排（rerank）：默认关=维持现状（NoOpReranker）。开启且配了端点+模型才生效，
-    # 全局作用于所有检索路径（知识库/题库/对话记忆/search_memory）。端点须为
+    # 全局作用于所有检索路径（知识库/题库/对话记忆/长期记忆）。端点须为
     # OpenAI/Cohere/Jina 兼容的 POST {base}/rerank。失败自动降级为原序，不打断检索。
     enable_rerank: bool = False
     rerank_style: str = "openai"         # openai（Cohere/Jina/SiliconFlow 兼容）| dashscope（千问 qwen）
@@ -123,6 +130,13 @@ class HarnessConfig(BaseSettings):
     # 会话级沙箱空闲驱逐（秒）：某会话超过此时长无沙箱操作则销毁其容器（安全阀，防泄漏）。
     # 与「删除会话即销毁」的主路径无关；<=0 关闭空闲驱逐。默认 30 分钟。
     sandbox_idle_timeout: float = 1800.0
+    # 语言子沙箱空闲驱逐（秒）：各语言/版本子沙箱用完不再即时销毁，而是按 (会话, 语言) 缓存复用，
+    # 超过此时长无该子沙箱操作才销毁——避免每次执行都重建镜像容器。<=0 则用完即销毁（旧行为）。
+    # 默认 1 小时。会话销毁/关停/空闲驱逐其基础容器时，其子沙箱一并销毁。
+    sandbox_sub_idle_timeout: float = 3600.0
+    # 浏览器沙箱空闲驱逐（秒）：浏览器子沙箱是**全局共用一个**（跨会话），懒加载启动、复用，
+    # 超过此时长无抓取才销毁（下次用再重建）；进程关停时一并关闭。默认 24 小时。<=0 关闭空闲驱逐。
+    browser_sandbox_idle_timeout: float = 86400.0
     # 外部 API/HTTP
     http_allowed_domains: list = []         # 空=放行公网；非空=仅白名单
     http_block_private: bool = True         # SSRF：拦截内网/元数据

@@ -7,6 +7,7 @@ import logging
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -27,15 +28,19 @@ from opentelemetry.trace import Status, StatusCode
 from harness.reliability.budget import BudgetTracker
 from harness.telemetry.tracer import get_tracer
 from harness.tools.base import ToolRegistry
-from harness.tools.builtins.memory_search import SearchMemoryTool
+from harness.tools.builtins.memory_search import SearchKnowledgeTool, SearchMemoryTool
+from harness.tools.builtins.memory_write import RememberTool
 from harness.types import Message, Role
+from harness.usage import reset_pricing, set_pricing
 
 from ..auth import current_user
 from ..completion import build_fast_completer
 from ..context_assembly import ContextAssembler
 from ..conversation_memory import ConversationMemoryService
+from ..orchestration.orchestrator import VERIFY_TRACE_KEY
+from ..orchestration.executor import CLARIFY_GUIDE
 from ..profile import render_profile_block
-from ..sandbox_manager import reset_sandbox_conv, set_sandbox_conv
+from ..sandbox_manager import reset_sandbox_conv, sandbox_guide, set_sandbox_conv
 from ..summaries import SummaryStore
 from ..summarizer import RollingSummarizer
 from ..sources import SOURCE_GUIDE, SourceSink, wrap_tool
@@ -88,6 +93,10 @@ EXAM_GUIDE = (
     "题目 id 来自 add_questions/generate_questions 返回末尾的〔题目ID:...〕标记（即那批新题，按出题顺序），"
     "也可用 list_questions 查。此时【绝不能用 source=bank 顶替】——那是全库随机抽，"
     "考出来的不是用户要的那几道，属于明确的错误。\n"
+    "- 【题目 id 绝不出现在给用户的回答里】：id 是系统内部凭证（形如 3f2a…），对用户毫无意义。"
+    "它只用于填工具参数。需要在回答里提到某道题时，一律用题干（可截短），例如"
+    "「第 3 天：完成『什么是自注意力机制』等 3 道练习」，而不是罗列一串 id。"
+    "制定学习计划、总结、复述题目清单时尤其注意这一点。\n"
     "- 以下是未用 start_exam 时的零散练习指引：\n"
     "- 当用户想模拟考试/刷题时，用 sample_questions 从题库抽题；"
     "想「用错题重考/复习错题」时用 sample_wrong_answers 从错题集抽题；题库为空时可即席出题。\n"
@@ -151,6 +160,26 @@ def _needs_exam_guide(message: str, history, exam_active: bool) -> bool:
     return False
 
 
+def _in_stateful_exam(history, exam_active: bool) -> bool:
+    """是否真的**身处**有状态的考试流程中（考试会话进行中，或模型自驱的多轮练习途中）。
+
+    与 _needs_exam_guide 的分工：那个判「要不要注入考试指引」，刻意偏向命中——漏注入
+    会让「答错必存」等保证静默失效（高代价），多注入只费约 0.3% 窗口（低代价），故纯
+    触发词也算数。本函数用于代价高得多的判断（是否关掉技能路由），所以只认两个**真有
+    状态**的信号：进行中的考试会话、近期确实调过考试工具。单凭本条消息提到「错题/刷题」
+    不算——那多半是在提要求，而不是正在答题。
+
+    覆盖 Bug：「讲讲我的错题」命中考试触发词「错题」→ 技能路由被整段跳过，而
+    wrong-answer-remediation 技能的触发词恰恰就是「错题/我的错题/讲讲错题」这些词——
+    技能被自己的核心触发词挡在门外，实测只有「我哪里薄弱」这类不含考试词的说法能命中。
+    """
+    if exam_active:
+        return True
+    return any(tc.name in _EXAM_TOOLS
+               for m in (history or [])[-_EXAM_HISTORY_WINDOW:]
+               for tc in (m.tool_calls or []))
+
+
 ATTACHMENT_GUIDE = (
     "\n\n用户可能在消息中上传附件（文件内容默认不在上下文里，需要时再取）：\n"
     "- 用 list_attachments 查看本对话的附件清单（id/文件名/类型）。\n"
@@ -158,6 +187,7 @@ ATTACHMENT_GUIDE = (
     "- 所有附件也已放入沙箱 /workspace/uploads/，可用 run_python/run_shell 直接读取或执行。\n"
     "- 只在确有需要时才读取附件，不要无谓地逐个打开。\n")
 
+# CLARIFY_GUIDE（信息不足先问、不要猜）现集中定义在 orchestration.executor，供主聊天与编排器共用。
 # 北京时间（东八区）：本应用面向中文用户，用它作为「今天」的基准
 _CN_TZ = timezone(timedelta(hours=8))
 
@@ -186,6 +216,23 @@ class _Decision(BaseModel):
 _DL_ID_RE = re.compile(r"〔下载ID:([^〕]+)〕")
 _KB_ID_RE = re.compile(r"〔知识ID:([^〕]+)〕")
 _Q_ID_RE = re.compile(r"〔题目ID:([^〕]+)〕")
+
+
+def _plan_from_orchestrator(progress: list[dict]) -> bool:
+    """本轮最后一条 plan 进度是不是编排器发的（其步骤带 id）。
+
+    简单直答路径里模型会自己调 update_plan 发一份 ReAct 清单，同样是 scope="plan"，
+    但只有 title/status。两者必须区分：清单收尾 shim 是给「模型自述、可能忘了更新」的
+    清单用的，编排器的计划由状态机保证每步有终态，无需也不该补。
+    """
+    plans = [p for p in progress if p.get("scope") == "plan"]
+    if not plans:
+        return False
+    try:
+        steps = json.loads(plans[-1].get("text") or "[]")
+    except (ValueError, TypeError):
+        return False
+    return isinstance(steps, list) and any(isinstance(s, dict) and s.get("id") for s in steps)
 
 
 def _side_effect_ids(steps: list[dict]) -> dict[str, list[str]]:
@@ -420,7 +467,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                      verifier=None, attachment_store=None, run_manager=None,
                      knowledge_service=None, quiz_service=None,
                      profile_store=None, trajectory_judge=None,
-                     exam_session_store=None, url_block_store=None) -> APIRouter:
+                     exam_session_store=None, pending_store=None,
+                     url_block_store=None) -> APIRouter:
     router = APIRouter()
     # 简答题判分用 judge completer（考试判分中间件用；客观题不需要模型）
     from ..completion import build_judge_completer
@@ -538,16 +586,21 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         if dstore is not None:
             _reg(SaveDownloadTool(
                 dstore, config.download_max_mb * 1024 * 1024, user_id))
-        # 知识库检索：必须按用户覆盖全局那个。assembly 里构造的是默认 collection="knowledge"
-        # （无冒号 → collection_to_scope 判成 owner=_global），而知识库写入的是
-        # knowledge:{user_id} —— 两个 owner 永不相交，不覆盖的话模型在聊天里永远搜不到
-        # 用户上传的文档，还会连带让交付门的 grounding 校验因「检索恒无命中」而形同虚设。
-        # 保持与 assembly.py 同款的 ValidatingTool 包装，别把每步校验弄丢了。
+        # 记忆/知识库检索：都必须按用户覆盖全局那个。assembly 里构造的是无冒号的默认
+        # collection（collection_to_scope 判成 owner=_global），而真实数据写在
+        # knowledge:{user_id} / memory:{user_id} —— 两个 owner 永不相交，不覆盖的话模型
+        # 在聊天里永远搜不到东西，还会连带让交付门的 grounding 校验因「检索恒无命中」而形同虚设。
+        # 保持与 assembly.py 同款的包装策略：知识库包每步校验，记忆不包（空记忆是常态）。
         _mem = getattr(harness, "memory", None)
         if _mem is not None:
-            _st = SearchMemoryTool(_mem, collection=f"knowledge:{user_id}",
-                                   default_k=config.search_top_k)
+            _st = SearchKnowledgeTool(_mem, collection=f"knowledge:{user_id}",
+                                      default_k=config.search_top_k)
             _reg(ValidatingTool(_st, relevance_check) if config.enable_step_check else _st)
+            _reg(SearchMemoryTool(_mem, collection=f"memory:{user_id}",
+                                  default_k=config.search_top_k))
+            # remember 同样按用户覆盖：否则写入落到 _global/memory，而检索查的是
+            # memory:{user_id}，写进去的记忆永远召不回来（拆分前就是这个 bug）。
+            _reg(RememberTool(_mem, collection=f"memory:{user_id}"))
         # 知识库保存：按用户隔离，写入 knowledge:{user_id} 并建立文档记录，
         # 使内容出现在「知识库」菜单（区别于 remember 写入的私有记忆）。
         if knowledge_service is not None:
@@ -556,7 +609,10 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             _reg(SampleQuestionsTool(question_store, user_id))
             _reg(AddQuestionsTool(question_store, user_id))
             _reg(ListQuestionsTool(question_store, user_id))
-            _reg(DeleteQuestionsTool(question_store, user_id))
+            # 传 pending_store：删除改为「登记待确认」，由用户在界面确认后经 API 执行。
+            # 执行子步没有与用户对话的通道，工具描述里那句「先取得确认」在此路径上
+            # 本就无法满足——只能把确认动作挪到界面上。
+            _reg(DeleteQuestionsTool(question_store, user_id, pending_store, conv_id))
             if quiz_service is not None:
                 _reg(GenerateQuestionsTool(quiz_service, user_id))
             # 考试激活时不暴露 save_wrong_answer：判分与保存已由服务端确定性完成，防重复入库
@@ -564,7 +620,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 _reg(SaveWrongAnswerTool(question_store, wrong_store, user_id))
         if wrong_store is not None:
             _reg(SampleWrongAnswersTool(wrong_store, user_id))
-            _reg(DeleteWrongAnswersTool(wrong_store, user_id))
+            _reg(DeleteWrongAnswersTool(wrong_store, user_id, pending_store, conv_id))
         # 服务端托管考试：模型用 start_exam 开考（题源题库/错题集/即席），开考后判分与保存全自动
         if exam_session_store is not None and (question_store is not None or wrong_store is not None):
             _reg(StartExamTool(exam_session_store, user_id, conv_id,
@@ -633,17 +689,31 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         # read_attachment 根本没注册（见 _build_registry），此时还介绍它们的用法，等于
         # 告诉模型一批它没有的工具——比浪费 token 更糟。
         attachment_guide = ATTACHMENT_GUIDE if has_attachments else ""
+        # 有沙箱才提醒环境：无沙箱时这些工具根本没注册，介绍其 cwd/镜像/联网只会误导模型
+        sandbox_dir_guide = (sandbox_guide(config)
+                             if getattr(harness, "sandbox", None) is not None else "")
         # EXAM_GUIDE 命中考试语境才注入（约省 60% 常驻）。exam_active 已由上面的
         # grade_exam_turn 判定；history 用于识别模型自驱的多轮练习。工具本身仍常驻注册，
         # 只省指引文本 —— 万一触发词漏判，模型仍能靠工具描述兜底，是降级而非失能。
         exam_guide = EXAM_GUIDE if _needs_exam_guide(
             req.message, history, exam_active) else ""
+        # 考试/练习是有状态、多轮、模型驱动的交互流程（开考→逐题判分交接），只适合 ReAct 单循环：
+        # 模型调 start_exam 拿到题、同一轮原样呈现、下一轮由 grade_exam_turn 拦截判分。编排器的
+        # plan→execute→synthesize 会把它拆成多步再二次概括，吞掉「原样呈现第一题」，且 Critic 判某步
+        # 不合格触发重试会再次 start_exam 把考试重置。故凡注入考试指引（=命中考试语境）即钉死简单直答。
+        force_simple = bool(exam_guide)
+        # 技能路由的关闭条件比 force_simple 窄一档：force_simple 宽是对的（「考我10道题」
+        # 这类开考请求必须走单循环，否则第一题会被多步汇总吞掉），但它顺带把技能路由也
+        # 关了——「讲讲我的错题」只因含「错题」二字就被判成考试语境，而错题精讲技能的触发词
+        # 正是这些词，技能被自己的触发词挡在门外。技能剧本只在**正在逐题作答**时才真会干扰
+        # 推进，故这里只认真有状态的信号。
+        in_stateful_exam = _in_stateful_exam(history, exam_active)
         # 清单收尾结果 → 并进 context 列，供统计「模型多久不收一次尾 / 补救成没成」
         plan_trace: dict = {}
         ctx_trace: dict = {}      # 上下文组装结果 → finish_turn 落 context 列，供 stats 统计
         base_ctx = await _assembler.build_manager(
-            harness.system_prompt + profile_block + exam_guide + attachment_guide
-            + SOURCE_GUIDE + _today_guide(),
+            harness.system_prompt + CLARIFY_GUIDE + profile_block + exam_guide
+            + attachment_guide + sandbox_dir_guide + SOURCE_GUIDE + _today_guide(),
             history, req.message, req.conversation_id, trace=ctx_trace)
         log.info("上下文组装 conv=%s 历史%d条 耗时%dms %s",
                  req.conversation_id, len(history), round((time.time() - _ctx_t0) * 1000),
@@ -674,8 +744,24 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             step_by_id: dict[str, dict] = {}
             tool_t0: dict[str, float] = {}   # tool_call_id -> 开始时刻，用于算单个工具耗时
 
+            # 用量事件旁路：带模型名的 ModelUsage（编排器各子调用 record_usage、embedding/rerank
+            # 上报）经 emit() 进这个队列，被 _merged 并入主事件流 → 经 sink 落 trajectory（进历史
+            # 分模型统计）+ 前端；其余 emit 事件（沙箱进度等）直达 queue（仅前端）。
+            usage_q: asyncio.Queue = asyncio.Queue()
+
+            def _emit(ev):
+                (usage_q if isinstance(ev, ModelUsage) else queue).put_nowait(ev)
+
+            async def _merged(src):
+                async for ev in src:
+                    while not usage_q.empty():
+                        yield usage_q.get_nowait()
+                    yield ev
+                while not usage_q.empty():
+                    yield usage_q.get_nowait()
+
             async def pump():
-                token = set_emitter(queue.put_nowait)
+                token = set_emitter(_emit)
                 atoken = set_context(run_id=run_id_a, timeout=config.sandbox_approval_timeout)
                 stoken = set_sandbox_conv(req.conversation_id)
                 ptoken = set_plan_clock()   # 本轮步骤计时表；重答的每次尝试各自重新计时
@@ -683,6 +769,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 # 想那么久」，管的是回答用户的那些调用，而不是交付门校验、记忆调和、记忆整合
                 # 这些旁路。此前它设在 gen() 里且从不 reset，那些旁路全都悄悄继承了它。
                 btoken = set_extra_body_override({"enable_thinking": req.think})
+                # 按模型计价上下文：扁平价表 price_map + 默认分层表 + 按模型分层表，主循环与其派生的所有
+                # 子任务（编排器 executor/synthesize/planner/critic 走各自模型）都据各自 model 名精确计价。
+                cttoken = set_pricing(
+                    price_map=config.price_map,
+                    tiers=config.model_price_tiers,
+                    tiers_by_model=config.model_price_tiers_by_model)
                 try:
                     # 本轮附件播种进会话沙箱 /workspace/uploads/，供模型直接执行（写盘≠给模型）
                     if attachment_metas and harness.sandbox is not None:
@@ -696,11 +788,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                     scope="sandbox",
                                     text=f"附件 {meta['filename']} 载入沙箱失败：{e}",
                                     status="error"))
-                    async for ev in harness.sink.wrap(loop_obj.run(message)):
+                    async for ev in harness.sink.wrap(_merged(loop_obj.run(message))):
                         queue.put_nowait(ev)
                 except Exception as e:  # 兜底成 RunError，避免流卡死
                     queue.put_nowait(RunError(error=str(e)))
                 finally:
+                    reset_pricing(cttoken)
                     reset_extra_body_override(btoken)
                     reset_plan_clock(ptoken)
                     reset_sandbox_conv(stoken)
@@ -745,17 +838,19 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             log.info("工具完成 %s 耗时%dms error=%s 输出%d字",
                                      st["tool"], _dur, ev.result.is_error,
                                      len(ev.result.content or ""))
-                            if st["tool"] in ("search_memory", "run_python", "run_node", "run_java"):
+                            # 只收 search_knowledge：search_memory 查的是 AI 自己记的偏好，
+                            # 不是可引用的资料依据，不该参与 grounding 判定。
+                            if st["tool"] in ("search_knowledge", "run_python", "run_node", "run_java"):
                                 collect["grounding"].append(
                                     {"tool": st["tool"], "content": ev.result.content,
                                      "is_error": ev.result.is_error,
                                      # 联网检索与知识库同为「检索到的依据」；标 retrieval=True 供
                                      # grounding 校验一并纳入——否则联网来的事实会被判「不在知识库」。
-                                     "retrieval": st["tool"] == "search_memory"})
+                                     "retrieval": st["tool"] == "search_knowledge"})
                             elif st["tool"] in ("read_attachment", "read_file"):
                                 # 读入的用户文档/附件正文：整理成笔记/总结时的作答依据，纳入
                                 # grounding 核查资料（不标 retrieval，故不单独触发 grounding，
-                                # 仅当本轮另有 search_memory 命中时作为核查上下文）。
+                                # 仅当本轮另有 search_knowledge 命中时作为核查上下文）。
                                 collect["grounding"].append(
                                     {"tool": st["tool"], "content": ev.result.content,
                                      "is_error": ev.result.is_error})
@@ -774,12 +869,18 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         reason_ms += (time.monotonic() - reason_t0) * 1000
                         reason_t0 = None
                     elif isinstance(ev, ModelUsage):
-                        # 记录用量供落库（与前端一致取最新一次的 total/cost），刷新后仍可展示
-                        collect["usage"] = {"tokens": ev.usage.total_tokens, "cost": ev.cost_usd}
+                        # 所有 ModelUsage 都是**逐模型增量**（编排器各子调用 record_usage、
+                        # embedding/rerank、ReAct 每步）：按模型累加，合计所有模型即本轮总额（落库同前端）。
+                        ubm = collect.setdefault("usage_by_model", {})
+                        e = ubm.setdefault(ev.model or "", {"tokens": 0, "cost": 0.0})
+                        e["tokens"] += ev.usage.total_tokens
+                        e["cost"] += ev.cost_usd or 0.0
+                        collect["usage"] = {"tokens": sum(x["tokens"] for x in ubm.values()),
+                                            "cost": sum(x["cost"] for x in ubm.values())}
                     elif isinstance(ev, Progress):
                         collect["progress"].append({"scope": ev.scope, "text": ev.text,
                                                     "status": ev.status, "key": ev.key,
-                                                    "agent": ev.agent})
+                                                    "agent": ev.agent, "detail": ev.detail})
                     # 交付门下缓冲终态事件（不转发）；直通模式转发全部
                     # 门内也转发 TextDelta（用户先看到打字机正文），只压 RunFinished/RunError
                     if passthrough or not isinstance(ev, (RunFinished, RunError)):
@@ -811,6 +912,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             delivered = None
             delivered_sources: list[dict] = []   # 交付那次尝试的权威来源
             errored = False
+            used_orchestrator = False    # 本轮是否走编排器路径（其计划终态自洽，不需清单收尾 shim）
             # 交付门结构化判定轨迹（门未开则保持 None，不落库）：progress 列只存渲染用中文，
             # 统计「哪层失败率高/平均重答几次」要的是这里未拍扁的 failed[]/hard_failed[]。
             verify_trace: dict | None = None
@@ -825,6 +927,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     parts.append(ev.text)
                     if len(parts) % 25 == 0:   # 去抖 flush：仅为服务重启后能看到断点前部分
                         store.flush_partial(req.conversation_id, turn_run_id, "".join(parts))
+                # 编排器校验未过、重答前会发 scope=reset 让前端清屏（考试轮）：落库缓冲必须
+                # 跟着清，否则最终存的是「被否那版 + 新版」的拼接，与用户屏幕所见不一致。
+                # 交付门那条路径由调用方自己 clear（见下方 gate 分支），此处只管编排器发的。
+                elif isinstance(ev, Progress) and ev.scope == "reset":
+                    parts.clear()
+                    store.flush_partial(req.conversation_id, turn_run_id, "")
                 return ev
 
             def _emit_verify(text, status=None, key=None):
@@ -863,7 +971,80 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 return Progress("sources", json.dumps(items, ensure_ascii=False))
 
             try:
-                if not gate_on:
+                if getattr(harness, "orchestrator", None) is not None:
+                    # 编排器路径（唯一主流程：装配层恒建 orchestrator，故本轮总走这里）。
+                    # 把 harness.orchestrator 当作 loop_obj 交给 _drain（其 run(message) 只 yield 既有
+                    # Event 类型），复用同一套事件处理与 SSE 下发。前端"结果校验"开关(req.verify)映射到
+                    # 编排器的终局 Critic：开→把关+可重规划，关→跑完一轮直接汇总交付。
+                    # 关键：把每请求上下文（base_ctx，含会话历史+全部指引+记忆）、每请求工具表
+                    # （registry，含用户级工具）、最近对话注入 run()——否则多轮对话/附件/考试/引用/
+                    # 个性化/用户工具全丢。context 只喂给编排器的简单直答（与 ReAct 主路径同源，故也
+                    # 同样包一层技能上下文）；registry 喂给简单直答与各执行子步。
+                    # 下方 ReAct/交付门两分支仅在 orchestrator 缺失时作惰性兜底（如精简测试注入 None）。
+                    used_orchestrator = True
+                    collect = {"final": None, "error": None, "steps": steps,
+                               "grounding": [], "progress": progress, "usage": None,
+                               "reasoning": ""}
+                    run_id_a = uuid4().hex
+                    store.add_run(req.conversation_id, run_id_a)
+                    source_sink.reset()
+                    _octx = base_ctx
+                    if getattr(harness, "skill_registry", None) is not None:
+                        from harness.skills.context import SkillContextManager
+                        _octx = SkillContextManager(_octx, harness.skill_registry)
+                    _orch_src = SimpleNamespace(
+                        run=lambda m: harness.orchestrator.run(
+                            m, verify=req.verify, context=_octx, registry=registry,
+                            recent_dialogue=recent_dialogue, force_simple=force_simple,
+                            in_stateful_exam=in_stateful_exam,
+                            run_id=run_id_a))   # 事件归到 conversation_runs 登记的 run_id，统计才认
+                    # 告诉在途客户端「本轮开了校验门」。必须赶在编排器跑之前发：执行子步的
+                    # save_download 远早于编排器那条「结果校验中…」（后者要等所有步骤跑完），
+                    # 不先发这条，前端就会在校验还没开始时把生成的文件显示出来。
+                    # 这条信号原先只在下方 ReAct+交付门分支里发，而编排器已是唯一主流程，
+                    # 于是整套「交付前盖住文件」的机制形同虚设——前端遮挡条件本身是对的。
+                    # 仅 req.verify 时发：关校验的轮次编排器一条 verify 事件都不发，前端
+                    # 见不到信号即照常显示，不会出现「永远不显示」。
+                    # 刻意不落库（不走 _emit_verify）：刷新后由已存的终态记录决定展示即可；
+                    # 落库反而会在用户中途停止时留下一条永远转圈的「生成中…」。
+                    if req.verify:
+                        yield Progress("verify", "生成中…", status="running", key=GATE_OPEN_KEY)
+                    async for s in _drain(_orch_src, run_id_a, model_message, True, collect):
+                        yield _acc(s)
+                    # 编排器的终局校验结论（结构化）：Progress 里只有中文文案，统计侧解不出
+                    # 「过没过 / 重答几次 / 拦在哪层」。此前 verify_trace 只在下方交付门分支
+                    # 赋值，而那条分支已是死代码——统计页的整块交付门指标因此恒为全 0。
+                    for _p in progress:
+                        if _p.get("key") == VERIFY_TRACE_KEY and _p.get("detail"):
+                            verify_trace = _p["detail"]
+                            break
+                    errored = collect["final"] is None
+                    if not errored:
+                        delivered = collect["final"]
+                    elif collect["error"] is not None:
+                        partial = "".join(parts).strip()
+                        hint = "（本轮未能完成，请重试）"
+                        delivered = f"{partial}\n\n{hint}" if partial else hint
+                    else:
+                        empty_text = "模型未返回任何内容（可能触发内容策略或上游限流），请重试"
+                        delivered = f"[出错] {empty_text}"
+                        yield RunError(error=empty_text)
+                    delivered_sources = source_sink.snapshot()
+                    # 回答质量分（轨迹 judge）：编排器已有自己的终局 Critic 把关，这里仅额外打一次
+                    # 分层质量分，落 progress 列供「AI 运行统计 · 回答质量」展示，不据此驱动重答。
+                    # 仅多步任务（工具步 > 1）才评：单步/无工具无「拆分/多步」可评，跳过省 token
+                    # （与旧交付门口径一致）。轨迹 judge 默认关闭，需 enable_trajectory_judge 才生效。
+                    if (not errored and trajectory_judge is not None
+                            and config.enable_trajectory_judge and delivered
+                            and len(collect["steps"]) > 1):
+                        try:
+                            tscore = await trajectory_judge.score(
+                                question, _plan_text(progress),
+                                _tool_exec_summary(collect["steps"]), delivered)
+                            yield _emit_quality(tscore)
+                        except Exception as e:   # 质量分是附加统计，失败绝不影响正常交付
+                            log.warning("轨迹 judge 打分失败（不影响交付）：%s", e, exc_info=True)
+                elif not gate_on:
                     # 直通路径：单次尝试、逐字流式（与开门前行为一致）
                     collect = {"final": None, "error": None, "steps": steps,
                                "grounding": [], "progress": progress, "usage": None,
@@ -1081,7 +1262,11 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 # 清单收尾：交付门开与不开两条路径都会漏，故放在二者汇合处。仅当模型真的
                 # 没把清单更新完才会花那一次调用（实测约 1/6 的多步任务会）。答案已定稿，
                 # 这里只动清单。errored 时不补：运行都没跑完，那些步骤本就该显示为未完成。
-                if not errored:
+                # 只有**编排器发的**计划才跳过：其状态机保证每步有终态（done/failed/skipped），
+                # 清单天然自洽（spec §6）。而简单直答里模型自己调 update_plan 发的 ReAct 清单
+                # 编排器状态机根本没管过——按 used_orchestrator 短路会把它一并跳过，它就永远
+                # 停在最后一次自述的状态上，前端渲染成一排 unknown + 「清单未更新完」。
+                if not errored and not _plan_from_orchestrator(progress):
                     _plan_ev = await _finalize_stale_plan(
                         _plan_finalizer, progress, steps, plan_trace)
                     if _plan_ev is not None:

@@ -171,7 +171,68 @@ export async function sendDecision(
   if (!r.ok) throw new Error(`decision 失败：${r.status}`);
 }
 
+export type ModelsInfo = {
+  main: string; fast: string; judge: string;
+  embedding: string | null; rerank: string | null;
+};
+
+// 技能详情：body 是 SKILL.md 正文（不含 frontmatter），前端按 markdown 渲染
+export type SkillDetail = { name: string; description: string; body: string };
+
+// 考试状态：active 为真时前端显示「考试中」标识（当前第 cursor+1/total 题、模式）
+export type ExamStatus = {
+  active: boolean; cursor?: number; total?: number;
+  mode?: string; type?: string | null;
+};
+
+// 待确认的破坏性操作。labels 是给人看的题干，count 是将影响的条数（不外泄内部 id）
+export type PendingAction = {
+  id: string;
+  kind: "delete_questions" | "delete_wrong_answers" | string;
+  status: "pending" | "confirmed" | "rejected" | "expired";
+  count: number;
+  labels: string[];
+  created_at: string;
+  expires_at: string;
+};
+
 export const api = {
+  // 各角色当前模型名，供聊天区展示「当前模型」
+  models: (): Promise<ModelsInfo> => authFetch("/api/models").then((r) => r.json()),
+  // 技能详情：展开「已启用技能…」时按需取正文（正文是静态资源，不随事件下发）
+  skills: {
+    get: (name: string): Promise<SkillDetail> =>
+      authFetch(`/api/skills/${encodeURIComponent(name)}`).then(async (r) => {
+        if (!r.ok) throw new Error(await detail(r, "技能不存在或已被移除"));
+        return r.json();
+      }),
+  },
+  // 本会话考试状态，供聊天区展示「考试中」标识
+  exam: {
+    status: (conversationId: string): Promise<ExamStatus> =>
+      authFetch(`/api/exam/status?conversation_id=${encodeURIComponent(conversationId)}`)
+        .then((r) => r.json()),
+  },
+  // 待确认的破坏性操作（删题库/删错题）：AI 只登记，确认后由服务端执行
+  pendingActions: {
+    get: (id: string): Promise<PendingAction> =>
+      authFetch(`/api/pending-actions/${encodeURIComponent(id)}`).then(async (r) => {
+        if (!r.ok) throw new Error(await detail(r, "待确认操作不存在"));
+        return r.json();
+      }),
+    confirm: (id: string): Promise<{ ok: boolean; deleted: number }> =>
+      authFetch(`/api/pending-actions/${encodeURIComponent(id)}/confirm`, { method: "POST" })
+        .then(async (r) => {
+          if (!r.ok) throw new Error(await detail(r, "确认失败"));
+          return r.json();
+        }),
+    reject: (id: string): Promise<{ ok: boolean }> =>
+      authFetch(`/api/pending-actions/${encodeURIComponent(id)}/reject`, { method: "POST" })
+        .then(async (r) => {
+          if (!r.ok) throw new Error(await detail(r, "取消失败"));
+          return r.json();
+        }),
+  },
   list: (): Promise<Conversation[]> => authFetch("/api/conversations").then((r) => r.json()),
   create: (title?: string): Promise<{ id: string }> =>
     authFetch("/api/conversations", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -187,7 +248,7 @@ export const api = {
   messages: (id: string): Promise<{
     role: string; content: string;
     steps?: { tool: string; args: unknown; result?: string; is_error?: boolean }[] | null;
-    progress?: { scope: string; text: string; status?: "running" | "ok" | "error" | null; key?: string | null }[] | null;
+    progress?: { scope: string; text: string; status?: "running" | "ok" | "error" | null; key?: string | null; agent?: string | null; detail?: { tool?: string; args?: unknown; result?: string; is_error?: boolean; elapsed_ms?: number } | null }[] | null;
     sources?: SourceItem[] | null;
     attachments?: Attachment[] | null;
     run_id?: string | null;

@@ -4,7 +4,8 @@ from __future__ import annotations
 import html as _html
 import re
 
-import trafilatura
+# trafilatura（连同其传递依赖 dateparser）导入约 0.6s，却只在真正抽取网页正文时才用。
+# 故不在模块顶层导入——改为在下面两个函数内延迟导入，避免拖慢后端启动（import 缓存，重复无开销）。
 
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 
@@ -13,6 +14,7 @@ def extract_main_text(html: str) -> str:
     """用 trafilatura 去样板（导航/广告/页脚）提取正文；抽不到返回空串。"""
     if not html:
         return ""
+    import trafilatura
     try:
         return trafilatura.extract(html) or ""
     except Exception:
@@ -23,6 +25,7 @@ def _extract_title(html: str) -> str:
     """标题：优先 trafilatura 元数据，回退 <title> 正则；抽不到返回空串。"""
     if not html:
         return ""
+    import trafilatura
     try:
         meta = trafilatura.extract_metadata(html)
         if meta and getattr(meta, "title", None):

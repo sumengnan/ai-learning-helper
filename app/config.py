@@ -57,12 +57,23 @@ class AppConfig(HarnessConfig):
     require_captcha: bool = False
     # 应用领域各表统一存于此单一数据库文件（可用 HARNESS_APP_DB_PATH 覆盖）
     app_db_path: str = "app.db"
-    app_system_prompt: str = "你是一个 AI 学习助手，可用工具检索知识、联网、计算来帮助用户学习。"
+    app_system_prompt: str = (
+        "你是一个 AI 学习助手，可用工具检索知识、联网、计算来帮助用户学习。"
+        "你只协助与学习相关的请求——如知识问答、资料检索与整理、出题与讲解、"
+        "代码与技能学习、学习规划等；当用户的请求明显与学习无关（如闲聊、娱乐、"
+        "情感陪伴、购物理财等）时，请礼貌说明你只能帮助学习相关的问题、并邀请其"
+        "提出学习需求，不要执行该无关请求。")
     enable_browser: bool = False
     # 抓取失败的网址登记：失败即记，下次抓前短路让模型换来源（分级 TTL，非永久拉黑）
     enable_url_blocklist: bool = True
     enable_sandbox: bool = False
     enable_dispatch: bool = False
+    # === Plan-Execute-Reflect 编排器（已成为唯一主流程，无开关；装配层恒构建、chat 路由恒走） ===
+    orchestrator_max_step_retry: int = 2       # 单步反复失败上限（含首次）
+    orchestrator_max_replan: int = 2           # 终局重规划轮数上限
+    orchestrator_planner_max_retries: int = 2  # Planner 出无效 DAG 的重试上限
+    orchestrator_step_max_steps: int = 10      # 每个 Executor 步内部 AgentLoop 的步数上限
+    orchestrator_step_disable_thinking: bool = True  # 执行子步强制关思考链（机械执行提速；关闭则跟随聊天开关）
     enable_skills: bool = False
     enable_mcp: bool = False          # MCP 客户端总开关；开则按 mcp_config_path 连接 server
     cors_origins: list = ["http://localhost:5173"]
@@ -126,6 +137,11 @@ class AppConfig(HarnessConfig):
     # 这个是「塞得下但不划算」——典型用法是填分档计价的档位阈值（超档单价可能翻数倍）。
     # 不设它就只能靠谎报 window 来控成本，那会让 window 字段的含义失真。
     context_max_prompt_tokens: int = 240000
+    # 快速/judge 模型各自的输入 token 上限（0=不设，默认关闭 → 零开销、行为不变）。用于按更小窗口
+    # 的模型口径再收一道：编排器简单直答走快速模型，用 fast 值把（按主模型裁过的）上下文再确定性重裁；
+    # 单轮 judge 用 judge 值给巨型输入（大段 grounding）加硬上限。<=0 关闭。
+    context_max_prompt_tokens_fast: int = 0
+    context_max_prompt_tokens_judge: int = 0
     context_working_ratio: float = 0.9             # 最近原文（L1）占可用预算的比例。注意剩余
                                                    # 部分不会被强制留给 L2/L3，见 ContextBudget
     context_summary_max_tokens: int = 2000         # L2 摘要块 token 上限

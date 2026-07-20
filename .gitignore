@@ -40,3 +40,6 @@ attachments/
 # eval 报告产物（每轮一份，带时间戳）。基线 evals/baselines/ 要进 git —— 它是门禁判据，
 # 分数变化必须以 diff 形式出现在 PR 里让人看见。
 evals/reports/
+.claude
+/CLAUDE.md
+/.codegraph

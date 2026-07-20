@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, cleanup, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ChatView, fmtDuration } from "./ChatView";
 import { GATE_OPEN_KEY } from "./VerifyBadge";
@@ -20,6 +20,8 @@ vi.mock("../api/client", () => ({
     messages: vi.fn(async () => []),
     autotitle: vi.fn(async () => ({ title: null })),
     downloads: { save: vi.fn(async () => undefined) },
+    models: vi.fn(async () => ({ main: "m", fast: "m", judge: "m", embedding: null, rerank: null })),
+    exam: { status: vi.fn(async () => ({ active: false })) },
   },
 }));
 
@@ -67,6 +69,7 @@ describe("ChatView", () => {
 
   it("流被掐断且后端并无在途 run → 落可重试终态，不停在空的「…」", async () => {
     // 请求压根没到后端（无占位可捞）：此时必须收尾成失败态，而不是把气泡吊死在「…」。
+    // 刻意全程不回调 onRunId（本地始终没有 run 句柄），复现"流被掐断且无在途 run"。
     vi.mocked(streamChat).mockImplementationOnce(
       (_cid: string, _msg: string, _onEvent: (e: any) => void, signal?: AbortSignal) =>
         new Promise((_resolve, reject) => {
@@ -149,6 +152,48 @@ describe("ChatView", () => {
     // 助手气泡最终应为 "你好"，而不是 StrictMode 重复应用导致的 "你你好好"
     await waitFor(() => expect(screen.getByText("你好")).toBeTruthy());
     expect(screen.queryByText("你你好好")).toBeNull();
+  });
+
+  it("AI 回复中封住输入/开关/附件，只留停止按钮", async () => {
+    // streamChat 挂住（回一个 TextDelta 后不结束）→ busy 保持 true
+    vi.mocked(streamChat).mockImplementationOnce(
+      (_c: string, _m: string, onEvent: (e: any) => void) =>
+        new Promise<void>(() => { onEvent({ type: "TextDelta", data: { text: "答" } }); }));
+    render(<ChatView conversationId="c1" initial={[]} />);
+    fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "hi" } });
+    fireEvent.click(screen.getByText("发送"));
+    await waitFor(() => expect(screen.getByText("停止")).toBeTruthy());
+    // 输入框禁用（占位变为提示文案）
+    expect((screen.getByPlaceholderText(/AI 正在回复/) as HTMLTextAreaElement).disabled).toBe(true);
+    // 开关禁用
+    expect((screen.getByLabelText("思考模式") as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByLabelText("结果校验") as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByLabelText("展示工具调用和 Token") as HTMLInputElement).disabled).toBe(true);
+    // 附件按钮禁用
+    expect((screen.getByLabelText("上传文件") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("拿到 run 句柄前「停止」禁用；句柄到达后启用并调 stopRun", async () => {
+    // 未拿到 X-Run-Id 前停止只能断本地流、杀不掉后端任务，故按钮先禁用；句柄到达后再启用。
+    let fireRunId: ((rid: string) => void) | null = null;
+    vi.mocked(streamChat).mockImplementationOnce(
+      (_c: string, _m: string, onEvent: (e: any) => void,
+       _sig?: AbortSignal, _att?: string[], onRunId?: (rid: string) => void) =>
+        new Promise<void>(() => {                 // 全程挂住，保持 busy
+          onEvent({ type: "TextDelta", data: { text: "答" } });
+          fireRunId = onRunId ?? null;            // 句柄暂不回调，稍后手动触发
+        }));
+    render(<ChatView conversationId="c1" initial={[]} />);
+    fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "hi" } });
+    fireEvent.click(screen.getByText("发送"));
+    const btn = (await screen.findByText("停止")).closest("button") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);              // 句柄未到 → 禁用
+    fireEvent.click(btn);                          // 禁用态点击无效
+    expect(vi.mocked(stopRun)).not.toHaveBeenCalled();
+    act(() => fireRunId?.("R1"));                 // 句柄到达
+    await waitFor(() => expect(btn.disabled).toBe(false));   // → 启用
+    fireEvent.click(btn);
+    expect(vi.mocked(stopRun)).toHaveBeenCalledWith("R1");
   });
 
   it("开关默认值：展示工具/Token 开", () => {
@@ -259,8 +304,10 @@ describe("ChatView", () => {
 
   it("生成中显示「停止」按钮，点击后中断并恢复「发送」", async () => {
     vi.mocked(streamChat).mockImplementationOnce(
-      (_cid: string, _msg: string, _onEvent: (e: any) => void, signal?: AbortSignal) =>
+      (_cid: string, _msg: string, _onEvent: (e: any) => void, signal?: AbortSignal,
+       _att?: string[], onRunId?: (rid: string) => void) =>
         new Promise((_resolve, reject) => {
+          onRunId?.("R-stop");   // 提供 run 句柄，使「停止」按钮可用（否则新逻辑下禁用）
           signal?.addEventListener("abort", () =>
             reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
         }));
@@ -294,8 +341,10 @@ describe("ChatView", () => {
 
   it("用户停止后显示「已停止」状态", async () => {
     vi.mocked(streamChat).mockImplementationOnce(
-      (_cid: string, _msg: string, _onEvent: (e: any) => void, signal?: AbortSignal) =>
+      (_cid: string, _msg: string, _onEvent: (e: any) => void, signal?: AbortSignal,
+       _att?: string[], onRunId?: (rid: string) => void) =>
         new Promise((_resolve, reject) => {
+          onRunId?.("R-stop");   // 提供 run 句柄，使「停止」按钮可用（否则新逻辑下禁用）
           signal?.addEventListener("abort", () =>
             reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
         }));
@@ -463,5 +512,34 @@ describe("ChatView", () => {
     ]} /></MemoryRouter>);
     expect(screen.getByRole("button", { name: /报告\.md/ })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /旧版\.md/ })).toBeNull();
+  });
+});
+
+describe("计划来源区分（ReAct 清单 vs 编排器计划）", () => {
+  // 本文件没配自动 cleanup：不清会残留上一个用例的 DOM，导致「隐藏」断言恒失败
+  beforeEach(() => cleanup());
+  const toolStep = { tool: "search_knowledge", args: { query: "x" }, result: "[1] 命中" };
+
+  it("ReAct 清单（步骤无 id）到达时，扁平工具块必须保留", async () => {
+    // 回归：两种计划同为 scope=plan。若只看 scope 就隐藏工具块，模型在简单直答里调
+    // update_plan 发的清单会把工具块吞掉，而该清单又挂不了明细（无 id）——
+    // 用户看到工具调用闪现后消失，点开步骤空空如也。
+    render(<ChatView conversationId="c1" initial={[{
+      key: "m1", role: "assistant", content: "答", status: "done",
+      steps: [toolStep],
+      progress: [{ scope: "plan", text: JSON.stringify([{ title: "查资料", status: "done" }]) }],
+    } as any]} />);
+    expect((await screen.findAllByText(/search_knowledge/)).length).toBeGreaterThan(0);
+  });
+
+  it("编排器计划（步骤带 id）到达时，扁平工具块隐藏（明细已在计划步下）", async () => {
+    render(<ChatView conversationId="c2" initial={[{
+      key: "m2", role: "assistant", content: "答", status: "done",
+      steps: [toolStep],
+      progress: [{ scope: "plan",
+                   text: JSON.stringify([{ id: "s1", title: "查资料", status: "done" }]) }],
+    } as any]} />);
+    expect((await screen.findAllByText(/查资料/)).length).toBeGreaterThan(0);
+    expect(screen.queryAllByText(/search_knowledge/)).toHaveLength(0);
   });
 });

@@ -12,20 +12,31 @@ from harness.types import ToolOutput
 
 # ---------- build_source：各类型工具 ----------
 
-def test_search_memory_extracts_filenames_deduped():
+def test_search_knowledge_extracts_filenames_deduped():
     result = "[1]（来源：bio.pdf） 光合作用……\n[2]（来源：bio.pdf） 又一段\n[3]（来源：chem.md） 化学"
-    d = build_source("search_memory", {"query": "光合"}, result)
+    d = build_source("search_knowledge", {"query": "光合"}, result)
     assert d["type"] == "knowledge"
     assert d["label"] == "bio.pdf、chem.md"   # 去重且保序
 
 
-def test_search_memory_empty_is_none():
-    assert build_source("search_memory", {}, "（未在知识库中检索到相关内容）") is None
+def test_search_knowledge_empty_is_none():
+    assert build_source("search_knowledge", {}, "（未在知识库中检索到相关内容）") is None
 
 
-def test_search_memory_hits_without_source_metadata():
-    d = build_source("search_memory", {}, "[1] 一段没有来源标注的文本")
+def test_search_knowledge_hits_without_source_metadata():
+    d = build_source("search_knowledge", {}, "[1] 一段没有来源标注的文本")
     assert d["type"] == "knowledge" and d["label"] == "知识库检索"
+
+
+def test_search_memory_is_typed_memory_not_knowledge():
+    """记忆检索归 memory，不能混进 knowledge——前端据此分色、且 knowledge 会跳知识库页。"""
+    d = build_source("search_memory", {"query": "偏好"}, "[1] 用户偏好简洁回答")
+    assert d["type"] == "memory"
+    assert d["label"] == "长期记忆"
+
+
+def test_search_memory_empty_is_none():
+    assert build_source("search_memory", {}, "（未检索到相关的长期记忆）") is None
 
 
 def test_browse_extracts_title_and_url():
@@ -37,9 +48,11 @@ def test_browse_extracts_title_and_url():
 
 
 def test_http_request_labels_domain():
-    d = build_source("http_request", {"url": "https://www.example.com/a/b?x=1"}, "HTTP 200\n<html>")
-    assert d["type"] == "web" and d["label"] == "example.com"
-    assert d["url"] == "https://www.example.com/a/b?x=1"
+    # 刻意不用 example.com：它是 RFC 2606 保留域名，已被 looks_placeholder_page 判为
+    # 无效抓取而不记源。这里测的是「域名标签提取」，换个真实域名即可。
+    d = build_source("http_request", {"url": "https://www.wikipedia.org/a/b?x=1"}, "HTTP 200\n<html>")
+    assert d["type"] == "web" and d["label"] == "wikipedia.org"
+    assert d["url"] == "https://www.wikipedia.org/a/b?x=1"
 
 
 def test_http_request_non_200_is_none():
@@ -110,7 +123,7 @@ def test_non_source_tool_is_none():
 
 
 def test_is_source_tool():
-    assert is_source_tool("search_memory")
+    assert is_source_tool("search_knowledge")
     assert is_source_tool("mcp__x__y")
     assert not is_source_tool("calculator")
 
@@ -138,7 +151,7 @@ def test_sink_reset_clears():
 # ---------- wrap_tool：接地标注 + 记源 + 报错不记源 ----------
 
 class _FakeSearch(Tool):
-    name = "search_memory"
+    name = "search_knowledge"
     description = "fake"
 
     class Params(BaseModel):
@@ -288,3 +301,103 @@ async def test_paused_http_fetch_is_not_credited_as_source():
     with sink.paused():
         await wrapped.run(wrapped.Params(url="https://x.com/a"))
     assert sink.snapshot() == []
+
+
+# ---------- 占位/停放域名不记源 ----------
+
+def test_browse_placeholder_domain_is_none():
+    """抓取成功但落在 example.com：不是真实资料来源，不该出现在「参考来源」里。"""
+    r = ("标题：Example Domain\n最终URL：https://example.com/ai-agent-advancements\n\n"
+         "This domain is for use in documentation examples without needing permission.")
+    assert build_source("browse", {"url": "https://example.com/ai-agent-advancements"}, r) is None
+
+
+def test_http_placeholder_domain_is_none():
+    r = "HTTP 200\n标题：Example Domain\n最终URL：https://example.org/x\n\n示例内容"
+    assert build_source("http_request", {"url": "https://example.org/x"}, r) is None
+
+
+def test_browse_real_domain_still_recorded():
+    """反向：真实域名不受影响，照常记源（防止改动误伤正常抓取）。"""
+    r = "标题：光合作用 - 维基百科\n最终URL：https://zh.wikipedia.org/wiki/光合作用\n\n正文……"
+    d = build_source("browse", {"url": "https://zh.wikipedia.org/wiki/光合作用"}, r)
+    assert d is not None and d["type"] == "web"
+
+
+# ---------- 跨层字符串契约 ----------
+
+def test_no_hit_sentinel_is_single_source_of_truth():
+    """空命中哨兵必须只有一处定义。
+
+    它是跨层契约：内核工具产出这串文字，app 的每步校验与交付门 grounding 靠认出它来
+    判断「这次什么也没查到」。任何一处重抄字面量，内核改文案时该处就**静默**失效——
+    相关性校验永远判通过、grounding 把空结果当成有依据，且不会有任何报错。
+    """
+    from harness.tools.builtins.memory_search import NO_KNOWLEDGE_HIT, SearchKnowledgeTool
+    from app.tools.validating import NO_HIT_MARK
+    from app.verify import _NO_HIT
+
+    assert SearchKnowledgeTool._empty is NO_KNOWLEDGE_HIT
+    assert NO_HIT_MARK is NO_KNOWLEDGE_HIT
+    assert _NO_HIT is NO_KNOWLEDGE_HIT
+
+
+def test_sentinel_not_rehardcoded_in_production_code():
+    """生产代码里不得再出现该字面量（测试与 evals 数据集里是黑盒断言，不在此列）。"""
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parents[1]
+    literal = "（未在知识库中检索到相关内容）"
+    offenders = []
+    for d in ("app", "src"):
+        for f in (root / d).rglob("*.py"):
+            if literal in f.read_text(encoding="utf-8"):
+                offenders.append(str(f.relative_to(root)))
+    assert offenders == ["src/harness/tools/builtins/memory_search.py"], \
+        f"字面量被重抄到：{offenders}"
+
+# —— 成品文件的角标剥离：跳过代码块 ——
+
+def test_strip_citations_outside_code_keeps_code_spans():
+    from app.sources import strip_citations_outside_code
+    src = "见下[1]。\n```py\nx = a[0] + a[1]\n```\n行内 `b[2]` 保留[3]。"
+    out = strip_citations_outside_code(src)
+    assert "a[0] + a[1]" in out and "`b[2]`" in out     # 代码原样
+    assert "[1]" not in out.split("```")[0]             # 正文角标被剥
+    assert out.endswith("保留。")
+
+
+def test_strip_citations_outside_code_empty_and_noop():
+    from app.sources import strip_citations_outside_code
+    assert strip_citations_outside_code("") == ""
+    assert strip_citations_outside_code("没有角标") == "没有角标"
+
+
+def test_strip_step_markers_removes_only_step_ids():
+    from app.sources import strip_step_markers
+    # 连同紧邻空格一起吃掉：漏出的形态是「[s2] # 标题」，留前导空格不干净
+    assert strip_step_markers("[s2] # 标题 [s10]尾") == "# 标题尾"
+    assert strip_step_markers("来源[1]不动") == "来源[1]不动"   # 数字角标归 strip_citations
+
+
+# —— 成品文件的角标剥离：跳过代码块 ——
+
+def test_strip_citations_outside_code_keeps_code_spans():
+    from app.sources import strip_citations_outside_code
+    src = "见下[1]。\n```py\nx = a[0] + a[1]\n```\n行内 `b[2]` 保留[3]。"
+    out = strip_citations_outside_code(src)
+    assert "a[0] + a[1]" in out and "`b[2]`" in out     # 代码原样
+    assert "[1]" not in out.split("```")[0]             # 正文角标被剥
+    assert out.endswith("保留。")
+
+
+def test_strip_citations_outside_code_empty_and_noop():
+    from app.sources import strip_citations_outside_code
+    assert strip_citations_outside_code("") == ""
+    assert strip_citations_outside_code("没有角标") == "没有角标"
+
+
+def test_strip_step_markers_removes_only_step_ids():
+    from app.sources import strip_step_markers
+    # 连同紧邻空格一起吃掉：漏出的形态是「[s2] # 标题」，留前导空格不干净
+    assert strip_step_markers("[s2] # 标题 [s10]尾") == "# 标题尾"
+    assert strip_step_markers("来源[1]不动") == "来源[1]不动"   # 数字角标归 strip_citations

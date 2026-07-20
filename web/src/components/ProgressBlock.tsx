@@ -1,4 +1,7 @@
+import { useState } from "react";
 import { Box, Typography, CircularProgress, Chip } from "@mui/material";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import StorageIcon from "@mui/icons-material/Storage";
 import AccountTreeIcon from "@mui/icons-material/AccountTree";
 import ExtensionIcon from "@mui/icons-material/Extension";
@@ -9,13 +12,24 @@ import RemoveCircleOutlineIcon from "@mui/icons-material/RemoveCircleOutlined";
 import StopCircleIcon from "@mui/icons-material/StopCircle";
 import { CollapsibleBlock } from "./CollapsibleBlock";
 import { EllipsisText } from "./EllipsisText";
+import { SkillDetail } from "./SkillDetail";
 
 type ProgressItem = {
   scope: string; text: string;
   status?: "running" | "ok" | "error" | null;
   key?: string | null;
   agent?: string | null;   // 沙箱步骤归属的子 agent（后端在子 agent 执行期间打标）
+  // 机读附加信息：技能行带 {skill: 技能名}（供展开取正文），工具行带 tool/args/result
+  detail?: Record<string, unknown> | null;
 };
+
+// 该技能行可展开查看正文时，返回技能名；否则 undefined。
+// 走 detail 而不是从 text 里反解——文案一改（「已启用技能「X」：…」）反解就断了。
+function skillOf(p: ProgressItem, kind: string): string | undefined {
+  if (kind !== "skill") return undefined;
+  const n = p.detail?.skill;
+  return typeof n === "string" && n ? n : undefined;
+}
 
 // 标题右侧「最后一步」预览的硬字数上限
 const SUMMARY_MAX = 24;
@@ -24,6 +38,13 @@ const SUMMARY_MAX = 24;
 function agentOf(p: ProgressItem, kind: string): string {
   if (kind === "subagent") return p.scope.startsWith("subagent:") ? p.scope.slice("subagent:".length) : "";
   return p.agent || "";
+}
+
+// 沙箱进度的 agent 标记多为 "executor:s1"（编排器执行子步）——直接显示太机器味，
+// 转成用户能读懂的「步骤 s1」，让沙箱日志一眼看出「哪个智能体、在哪步执行」（issue 5）。
+function friendlyAgent(agent: string): string {
+  const m = /^executor:(.+)$/.exec(agent);
+  return m ? `步骤 ${m[1]}` : agent;
 }
 
 // 每步状态图标：优先用后端下发的显式 status（子 agent 每步）；否则回退到文本启发式（沙箱）
@@ -76,6 +97,8 @@ export function ProgressBlock({ title, kind, items, status }: {
   items: ProgressItem[];
   status: "running" | "ok" | "error" | "stopped";
 }) {
+  // 展开中的技能名（同时最多展开一条，避免一屏里叠几份长正文）
+  const [openSkill, setOpenSkill] = useState<string | null>(null);
   const stopped = status === "stopped";
   if (!items.length) return null;
   // 折叠开始/完成为一行；成功的收尾文字（如「任务完成」）不进正文，状态已由块头图标表达
@@ -91,7 +114,7 @@ export function ProgressBlock({ title, kind, items, status }: {
   // 标题右侧显示最后一步进度（含归属子 agent）
   const last = rows[rows.length - 1];
   const lastAgent = agentOf(last, kind);
-  const summaryText = lastAgent ? `${lastAgent}: ${last.text}` : last.text;
+  const summaryText = lastAgent ? `${friendlyAgent(lastAgent)}: ${last.text}` : last.text;
   const lastCancelled = stopped
     && (last.status === "running" || (!last.status && last.text.endsWith("…")));
   const summary = (
@@ -105,18 +128,49 @@ export function ProgressBlock({ title, kind, items, status }: {
     <CollapsibleBlock icon={icon} title={title} status={status} summary={summary}>
       {rows.map((p, i) => {
         const agent = agentOf(p, kind);
+        // 归属的 agent/步骤发生切换时，本行上方加一条分隔线，把不同智能体、不同步骤的沙箱日志
+        // 间隔开，避免连成一片分不清哪条属于哪步（issue 5）。首行不加。
+        const prevAgent = i > 0 ? agentOf(rows[i - 1], kind) : agent;
+        const agentChanged = i > 0 && agent !== prevAgent;
+        // 技能行可点开看正文（md 渲染）：光说「已启用技能 X」，用户无从知道它到底让 AI 做了什么
+        const skill = skillOf(p, kind);
+        const expanded = !!skill && openSkill === skill;
         return (
-          <Box key={p.key ?? i} sx={{ display: "flex", alignItems: "center", gap: 0.75, py: 0.15 }}>
-            {stepIcon(p, i === rows.length - 1, status === "running", stopped)}
-            {/* 子 agent 归属用彩色小标签区分（尤其沙箱执行中混入的子代理步骤） */}
-            {agent ? (
-              <Chip label={agent} size="small" color="secondary" variant="outlined"
-                sx={{ height: 16, flexShrink: 0, "& .MuiChip-label": { px: 0.5, fontSize: 10, fontWeight: 700 } }} />
-            ) : null}
-            <Typography variant="caption" color="text.secondary">
-              {p.text}
-              {stopped && i === rows.length - 1 && lastCancelled ? "（已取消）" : ""}
-            </Typography>
+          <Box key={p.key ?? i}
+            sx={{ ...(agentChanged && { mt: 0.5, pt: 0.5, borderTop: 1, borderColor: "divider" }) }}>
+            <Box
+              onClick={skill ? () => setOpenSkill(expanded ? null : skill) : undefined}
+              onKeyDown={skill ? (e) => {
+                // role=button 不自带键盘激活，需手动接 Enter/Space
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setOpenSkill(expanded ? null : skill);
+                }
+              } : undefined}
+              {...(skill ? {
+                role: "button", tabIndex: 0, "aria-expanded": expanded,
+                // 明确的 aria-label：既是无障碍说明，也让它与外层 CollapsibleBlock 的 Accordion 头区分开
+                "aria-label": `查看技能「${skill}」详情`,
+              } : {})}
+              sx={{ display: "flex", alignItems: "center", gap: 0.75, py: 0.15,
+                ...(skill && { cursor: "pointer", borderRadius: 0.5,
+                  "&:hover": { bgcolor: "action.hover" } }) }}>
+              {stepIcon(p, i === rows.length - 1, status === "running", stopped)}
+              {/* 子 agent/步骤归属用彩色小标签区分（尤其沙箱执行中混入的子代理步骤） */}
+              {agent ? (
+                <Chip label={friendlyAgent(agent)} size="small" color="secondary" variant="outlined"
+                  sx={{ height: 16, flexShrink: 0, "& .MuiChip-label": { px: 0.5, fontSize: 10, fontWeight: 700 } }} />
+              ) : null}
+              <Typography variant="caption" color="text.secondary">
+                {p.text}
+                {stopped && i === rows.length - 1 && lastCancelled ? "（已取消）" : ""}
+              </Typography>
+              {/* ml:auto 把展开箭头顶到行尾，与外层 CollapsibleBlock 头部的箭头对齐成一列 */}
+              {skill ? (expanded
+                ? <ExpandLessIcon sx={{ fontSize: 14, color: "text.disabled", ml: "auto", flexShrink: 0 }} />
+                : <ExpandMoreIcon sx={{ fontSize: 14, color: "text.disabled", ml: "auto", flexShrink: 0 }} />) : null}
+            </Box>
+            {expanded ? <SkillDetail name={skill!} /> : null}
           </Box>
         );
       })}

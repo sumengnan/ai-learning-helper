@@ -19,7 +19,8 @@ def test_create_list_snapshot_roundtrip():
 
 def test_delete_many():
     s = WrongAnswerStore(":memory:")
-    ids = [s.create("u1", "q", "e", _snap(), 0) for _ in range(3)]
+    # 题干各异，避免同题去重把三条并成一条
+    ids = [s.create("u1", "q", "e", _snap_of("single", f"题{i}"), 0) for i in range(3)]
     s.delete_many("u1", ids[:2])
     assert [r["id"] for r in s.list("u1")] == [ids[2]]
 
@@ -90,10 +91,10 @@ def test_count_respects_user_isolation():
 
 def test_sample_returns_snapshots_within_count():
     s = WrongAnswerStore(":memory:")
-    for _ in range(3):
-        s.create("u1", "q", "e", _snap(), 0)
+    for i in range(3):
+        s.create("u1", "q", "e", _snap_of("single", f"题{i}"), 0)   # 题干各异，避免去重
     got = s.sample("u1", 2)
-    assert len(got) == 2 and all(r["snapshot"] == _snap() for r in got)
+    assert len(got) == 2
 
 
 def test_sample_respects_user_isolation():
@@ -110,24 +111,63 @@ def test_sample_empty_returns_empty_list():
 
 def test_count_by_question_and_user_isolation():
     s = WrongAnswerStore(":memory:")
-    s.create("u1", "qA", "e", _snap(), 0)
-    s.create("u1", "qA", "e", _snap(), 0)          # 同题两条
-    s.create("u1", "qB", "e", _snap(), 0)
-    s.create("u2", "qA", "e", _snap(), 0)          # 他人错题不计
-    assert s.count_by_question("u1", ["qA"]) == 2
-    assert s.count_by_question("u1", ["qA", "qB"]) == 3
+    # 同题去重后每道题至多一条，故按题给不同题干；count_by_question 按 question_id 计
+    s.create("u1", "qA", "e", _snap_of("single", "题A"), 0)
+    s.create("u1", "qB", "e", _snap_of("single", "题B"), 0)
+    s.create("u2", "qA", "e", _snap_of("single", "题A"), 0)   # 他人错题不计
+    assert s.count_by_question("u1", ["qA"]) == 1
+    assert s.count_by_question("u1", ["qA", "qB"]) == 2
     assert s.count_by_question("u1", ["qZ"]) == 0
     assert s.count_by_question("u1", []) == 0
 
 
 def test_delete_by_question_removes_only_matching():
     s = WrongAnswerStore(":memory:")
-    s.create("u1", "qA", "e", _snap(), 0)
-    s.create("u1", "qA", "e", _snap(), 0)
-    s.create("u1", "qB", "e", _snap(), 0)
-    s.create("u2", "qA", "e", _snap(), 0)          # 他人错题不受影响
+    s.create("u1", "qA", "e", _snap_of("single", "题A"), 0)
+    s.create("u1", "qB", "e", _snap_of("single", "题B"), 0)
+    s.create("u2", "qA", "e", _snap_of("single", "题A"), 0)   # 他人错题不受影响
     removed = s.delete_by_question("u1", ["qA"])
-    assert removed == 2
+    assert removed == 1
     assert [r["question_id"] for r in s.list("u1")] == ["qB"]
     assert len(s.list("u2")) == 1
     assert s.delete_by_question("u1", []) == 0
+
+
+def test_create_dedups_same_question_replacing_data():
+    """同一道题（题型+题干相同）再次入错题集：不新增，用新数据整条替换旧的。"""
+    s = WrongAnswerStore(":memory:")
+    first = s.create("u1", "", "chat", _snap_of("single", "光合作用在哪"), 0)
+    second = s.create("u1", "qX", "exam", _snap_of("single", "光合作用在哪"), 1)
+    assert second == first                        # 同一条 id：替换而非新增
+    rows = s.list("u1")
+    assert len(rows) == 1                          # 未新增
+    assert rows[0]["user_answer"] == 1             # 新作答
+    assert rows[0]["question_id"] == "qX" and rows[0]["exam_id"] == "exam"   # 新来源
+
+
+def test_create_dedup_trims_stem_and_is_per_user():
+    """判重对题干去首尾空白（与题库口径一致），且按用户隔离。"""
+    s = WrongAnswerStore(":memory:")
+    a = s.create("u1", "", "chat", _snap_of("single", "同一题"), 0)
+    b = s.create("u1", "", "chat", _snap_of("single", "  同一题  "), 1)
+    assert b == a and len(s.list("u1")) == 1       # 去空白后判为同题
+    s.create("u2", "", "chat", _snap_of("single", "同一题"), 0)
+    assert len(s.list("u2")) == 1                   # 他人同题各自保留
+
+
+def test_create_distinct_questions_not_deduped():
+    """题干不同或题型不同 → 不判重，各自入库。"""
+    s = WrongAnswerStore(":memory:")
+    s.create("u1", "", "chat", _snap_of("single", "题一"), 0)
+    s.create("u1", "", "chat", _snap_of("single", "题二"), 0)       # 题干不同
+    s.create("u1", "", "chat", _snap_of("truefalse", "题一"), 0)   # 题型不同
+    assert len(s.list("u1")) == 3
+
+
+def test_create_dedup_replace_bumps_to_top():
+    """替换后刷新 seq，该题回到列表顶部（最近错的在前）。"""
+    s = WrongAnswerStore(":memory:")
+    s.create("u1", "", "chat", _snap_of("single", "老题"), 0)
+    s.create("u1", "", "chat", _snap_of("single", "新题"), 0)      # 老题在下
+    s.create("u1", "", "chat", _snap_of("single", "老题"), 1)      # 重做老题 → 回到顶部
+    assert [r["snapshot"]["stem"] for r in s.list("u1")] == ["老题", "新题"]

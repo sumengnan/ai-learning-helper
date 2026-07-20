@@ -15,7 +15,7 @@ def test_load_valid_agent_multiline_and_list(tmp_path):
           你是研究员。
           第二行。
         tool_names:
-          - search_memory
+          - search_knowledge
           - http_request
     """)
     specs, warns = load_roster(str(tmp_path))
@@ -25,7 +25,7 @@ def test_load_valid_agent_multiline_and_list(tmp_path):
     assert s.name == "researcher"
     assert s.description == "检索"
     assert "第二行" in s.system_prompt
-    assert s.tool_names == ["search_memory", "http_request"]
+    assert s.tool_names == ["search_knowledge", "http_request"]
 
 
 def test_missing_dir_returns_empty(tmp_path):

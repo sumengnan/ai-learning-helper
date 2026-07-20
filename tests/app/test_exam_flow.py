@@ -90,6 +90,20 @@ async def test_end_intent_ends_without_grading():
     assert ws.list("u1") == [] and "结束" in note
 
 
+async def test_restart_intent_ends_stale_exam_without_grading():
+    """考试进行中收到「重开/换考」意图：结束旧场、放行（不判分/不存/不推进），让模型重新开考。
+
+    覆盖 Bug：残留的旧考试会把新的「考考我」当作对当前题的作答吞掉，使新考试永远起不来。"""
+    es, ws = _setup()                                    # 有一场 active 客观题考试
+    for msg in ("考考我", "换一套题", "重新考", "再来一套"):
+        es, ws = _setup()
+        note, active = await grade_exam_turn(es, ws, _never_judge,
+                                             user_id="u1", conv_id="c1", message=msg)
+        assert note == "" and active is False            # 放行：无注入提示、考试不再活跃
+        assert es.get_active("u1", "c1") is None          # 旧场已结束
+        assert ws.list("u1") == []                        # 未被当作作答存错题
+
+
 async def test_short_question_uses_judge_and_saves_on_wrong():
     async def judge(system, user):
         return '{"correct": false, "feedback": "答非所问"}'

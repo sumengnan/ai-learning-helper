@@ -54,6 +54,33 @@ async def test_sandboxed_html_raw_flag_returns_original():
     assert "<nav>" in out
 
 
+async def test_sandboxed_skips_103_early_hints_and_parses_html():
+    """CDN 先发 103 Early Hints（curl -i 会把它打印在 200 之前）——应跳过 1xx 头块，
+    正确解析最终 200 的 content-type，从而识别 HTML 并提取正文，而非原样打印整段 HTML。"""
+    raw = (
+        "HTTP/2 103 \r\n"
+        "link: </a.css>; rel=preload; as=style\r\n"
+        "link: </b.css>; rel=preload; as=style\r\n\r\n"
+        "HTTP/2 200 \r\n"
+        "content-type: text/html; charset=utf-8\r\n\r\n"
+        f"{_ARTICLE}"
+    )
+    sb = FakeSandbox([raw])
+    tool = SandboxedHttpRequestTool(sb, [], block_private=False)
+    out = await tool.run(tool.Params(url="https://example.com/"))
+    assert "标题：光合作用" in out
+    assert "光合作用是绿色植物" in out
+    assert "<!DOCTYPE" not in out and "<nav>" not in out   # 已提取正文，不是原样 HTML
+    assert "103" not in out.splitlines()[0]                 # 状态取 200，不是 103
+
+
+async def test_parse_response_skips_100_continue():
+    from harness.tools.builtins.sandbox_http_tool import _parse_response
+    raw = "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 201 Created\r\nContent-Type: application/json\r\n\r\n{\"id\":1}"
+    status, location, ctype, body = _parse_response(raw)
+    assert status == 201 and ctype == "application/json" and body == '{"id":1}'
+
+
 async def test_sandboxed_json_passthrough():
     sb = FakeSandbox(['HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{"ok": true}'])
     tool = SandboxedHttpRequestTool(sb, [], block_private=False)

@@ -2,24 +2,41 @@
 from __future__ import annotations
 
 from harness.context.manager import ContextManager
-from harness.events import RunError, RunFinished
+from harness.events import ModelUsage, ReasoningDelta, RunError, RunFinished
 from harness.loop.agent_loop import AgentLoop
 from harness.tools.base import ToolRegistry
 
+from .orchestration.usage_ctx import record_reasoning, record_usage
 
-def build_completer(client, model_name: str):
+
+def build_completer(client, model_name: str, *, max_prompt_tokens: int = 0,
+                    count_model: str | None = None):
     """返回 async (system_prompt, user_prompt) -> str：跑一轮无工具 AgentLoop，取最终文本。
 
     复用 harness 的重试/预算/OTel 封装；不给 harness 加任何能力。
+    max_prompt_tokens>0 时给上下文包一层 ClampedContextManager，对总输入按 (count_model, 上限)
+    确定性硬裁——单轮 completer（如 judge）只有 system+一条 user，会对巨型 user 做中段截断（保头保尾）。
+    默认 0=不裁（零开销、行为不变）。
     """
+    cap = int(max_prompt_tokens or 0)
+    cmodel = count_model or model_name
+
     async def complete(system_prompt: str, user_prompt: str) -> str:
+        ctx = ContextManager(system_prompt)
+        if cap > 0:
+            from harness.context.clamp import ClampedContextManager
+            ctx = ClampedContextManager(ctx, cmodel, cap)
         loop = AgentLoop(client=client, registry=ToolRegistry(),
-                         context=ContextManager(system_prompt),
-                         max_steps=1, model_name=model_name)
+                         context=ctx, max_steps=1, model_name=model_name)
         final = ""
         async for ev in loop.run(user_prompt):
             if isinstance(ev, RunFinished):
                 final = ev.message.content or ""
+            elif isinstance(ev, ModelUsage):   # 记进编排器用量累加器（非编排器路径 no-op）
+                record_usage(ev.usage, ev.cost_usd, ev.model,
+                             ev.latency_ms, ev.attempts)
+            elif isinstance(ev, ReasoningDelta):   # 思考记进 sink（仅 planner 调用期挂 sink；否则 no-op）
+                record_reasoning(ev.text)
             elif isinstance(ev, RunError):
                 raise RuntimeError(ev.error)
         return final
@@ -42,21 +59,40 @@ def _alt_config(config, model: str, base_url: str, api_key: str):
     })
 
 
-def _build_alt_completer(client, config, model: str, base_url: str, api_key: str):
+def _build_alt_completer(client, config, model: str, base_url: str, api_key: str,
+                         *, max_prompt_tokens: int = 0):
     """按角色配置产出 base completer：配了独立 model 就起独立 client，否则回退主 client。
 
     注意：build_completer 的 model_name 仅作计费标签，实际模型固化在 client 的 config 里，
     所以换模型必须新建 client（而非仅传不同 model_name）。
+    max_prompt_tokens>0 时给该角色的输入加确定性硬上限（按其实际模型的分词器计数）。
     """
     cfg = _alt_config(config, model, base_url, api_key)
     if cfg is None:
-        return build_completer(client, config.model)
+        return build_completer(client, config.model, max_prompt_tokens=max_prompt_tokens)
     from harness.llm.openai_compat import OpenAICompatibleClient
     from harness.reliability.retry import RetryingModelClient
     alt = RetryingModelClient(
         OpenAICompatibleClient(cfg),
         max_retries=config.max_retries, base_delay=config.retry_base_delay)
-    return build_completer(alt, model)
+    return build_completer(alt, model, max_prompt_tokens=max_prompt_tokens)
+
+
+def build_fast_client(client, config):
+    """返回 (client, model_name)：配了 fast_model 就起指向快速模型的独立 client，否则回退主 client/主模型。
+
+    供需要「带工具的快速档 AgentLoop」的场景用（如编排器执行步）——那里要的是完整工具循环，
+    不是 build_fast_completer 的单轮无工具 completer，故单独提供 client 版。
+    """
+    cfg = _alt_config(config, config.fast_model, config.fast_base_url, config.fast_api_key)
+    if cfg is None:
+        return client, config.model
+    from harness.llm.openai_compat import OpenAICompatibleClient
+    from harness.reliability.retry import RetryingModelClient
+    alt = RetryingModelClient(
+        OpenAICompatibleClient(cfg),
+        max_retries=config.max_retries, base_delay=config.retry_base_delay)
+    return alt, config.fast_model
 
 
 def _with_thinking(base, enabled: bool):
@@ -86,7 +122,8 @@ def build_judge_completer(client, config):
     judge 恒定关闭思考模式——打分/判断无需思考链，省 token 与延迟。
     """
     base = _build_alt_completer(
-        client, config, config.judge_model, config.judge_base_url, config.judge_api_key)
+        client, config, config.judge_model, config.judge_base_url, config.judge_api_key,
+        max_prompt_tokens=getattr(config, "context_max_prompt_tokens_judge", 0))
     return _with_thinking(base, False)
 
 
