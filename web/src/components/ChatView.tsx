@@ -75,6 +75,23 @@ function pendingActionIds(steps?: { tool: string; result?: string }[]) {
   return out;
 }
 
+// 判断本轮的计划块是不是**编排器**发的。编排器的计划步带 id（见 orchestrator._plan_progress），
+// 工具明细靠 id 挂到步下；而简单直答路径里模型自己调 update_plan 发的 ReAct 清单只有
+// title/status、没有 id，明细永远挂不上去。
+// 两者都用 scope="plan"，若不加区分就会出事：ReAct 清单一到，下面的扁平工具块被隐藏，
+// 而清单本身又展不开明细——用户看到工具块闪现后消失、点开步骤空空如也。
+function isOrchestratorPlan(progress?: { scope: string; text?: string }[]) {
+  const items = (progress || []).filter((p) => p.scope === "plan");
+  const last = items[items.length - 1];
+  if (!last?.text) return false;
+  try {
+    const steps = JSON.parse(last.text);
+    return Array.isArray(steps) && steps.some((s: any) => s && s.id);
+  } catch {
+    return false;
+  }
+}
+
 // 等待 AI 回复时的“正在输入”三点动画（framer-motion 循环，风格与全站统一）
 function TypingDots() {
   return (
@@ -631,10 +648,11 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                   </>
                 );
               })()}
-              {/* 扁平工具步骤列表：仅在「无计划」（ReAct/简单直答）时展示；编排器复杂路径有计划时，
-                  工具已在上方计划树的执行明细里，故隐藏此列表避免重复（原始 ToolStarted 仍会到达用于统计）。*/}
+              {/* 扁平工具步骤列表：只有**编排器**的计划树才隐藏它（工具明细已挂在计划步下，
+                  再平铺一份是重复）。简单直答里模型调 update_plan 发的 ReAct 清单没有 id、
+                  挂不了明细，此时必须保留本列表——否则工具调用会凭空消失且无处可看。*/}
               {showTools && m.role === "assistant" && m.steps && m.steps.length > 0
-                && !m.progress?.some((p) => p.scope === "plan") && (
+                && !isOrchestratorPlan(m.progress) && (
                 <AgentProgress steps={m.steps}
                   live={busy && i === messages.length - 1 && m.status === "streaming"}
                   stopped={m.status === "stopped"} />

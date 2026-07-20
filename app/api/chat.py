@@ -197,6 +197,23 @@ _KB_ID_RE = re.compile(r"〔知识ID:([^〕]+)〕")
 _Q_ID_RE = re.compile(r"〔题目ID:([^〕]+)〕")
 
 
+def _plan_from_orchestrator(progress: list[dict]) -> bool:
+    """本轮最后一条 plan 进度是不是编排器发的（其步骤带 id）。
+
+    简单直答路径里模型会自己调 update_plan 发一份 ReAct 清单，同样是 scope="plan"，
+    但只有 title/status。两者必须区分：清单收尾 shim 是给「模型自述、可能忘了更新」的
+    清单用的，编排器的计划由状态机保证每步有终态，无需也不该补。
+    """
+    plans = [p for p in progress if p.get("scope") == "plan"]
+    if not plans:
+        return False
+    try:
+        steps = json.loads(plans[-1].get("text") or "[]")
+    except (ValueError, TypeError):
+        return False
+    return isinstance(steps, list) and any(isinstance(s, dict) and s.get("id") for s in steps)
+
+
 def _side_effect_ids(steps: list[dict]) -> dict[str, list[str]]:
     """提取本轮各副作用工具成功产物的 id（下载/知识/题目），供失败轮清理。
 
@@ -1204,8 +1221,11 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 # 清单收尾：交付门开与不开两条路径都会漏，故放在二者汇合处。仅当模型真的
                 # 没把清单更新完才会花那一次调用（实测约 1/6 的多步任务会）。答案已定稿，
                 # 这里只动清单。errored 时不补：运行都没跑完，那些步骤本就该显示为未完成。
-                # 编排器路径跳过：其状态机保证每步有终态（done/failed/skipped），清单天然自洽（spec §6）。
-                if not errored and not used_orchestrator:
+                # 只有**编排器发的**计划才跳过：其状态机保证每步有终态（done/failed/skipped），
+                # 清单天然自洽（spec §6）。而简单直答里模型自己调 update_plan 发的 ReAct 清单
+                # 编排器状态机根本没管过——按 used_orchestrator 短路会把它一并跳过，它就永远
+                # 停在最后一次自述的状态上，前端渲染成一排 unknown + 「清单未更新完」。
+                if not errored and not _plan_from_orchestrator(progress):
                     _plan_ev = await _finalize_stale_plan(
                         _plan_finalizer, progress, steps, plan_trace)
                     if _plan_ev is not None:
