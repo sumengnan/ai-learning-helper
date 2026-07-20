@@ -34,13 +34,45 @@ PLANNER_SYSTEM = (
     "绝不要臆想本系统没有的外部产品或服务（如 Notion、Obsidian、邮箱、日历、第三方网盘）——"
     "用户说「保存到知识库」指的就是清单里的知识库保存工具，不是外部软件。"
     "若某件事清单里没有工具能做到，就不要把它排成步骤。\n"
+    "【只规划用户要的事】工具清单是能力边界，不是待办清单——有某个工具不等于该用它。"
+    "尤其是**带持久副作用的动作**（保存文件、写入知识库、增删改用户数据），"
+    "除非用户明确要求，否则一律不要排进计划：用户只要一份答复时，就把答复做好，"
+    "不要顺带产出他没要的文件或数据。也要留意工具描述里「仅用于…」这类限制，别越界使用。\n"
     '只输出一个 JSON 对象：{"steps":[{"id":...,"description":...,"expected":...,"depends_on":[...]}]}，'
     "不要多余文字。"
 )
 
-# 工具清单的裁剪上限：描述只取首句、并截断，避免几十个工具（含 MCP 远程工具）把规划
-# 提示词撑爆——规划器只需要知道"有什么、大致能干什么"，细节由执行子步自己看完整 schema。
+# 工具清单的裁剪上限：描述取首句 + 约束句，避免几十个工具（含 MCP 远程工具）把规划提示词
+# 撑爆——规划器只需要知道"有什么、什么时候不该用"，细节由执行子步自己看完整 schema。
 _ROSTER_DESC_MAX = 60
+# 约束句给足预算：这类句子常以「请改用 xxx」收尾，截断会把工具名砍半，指向一个不存在的
+# 名字，比不写还糟。宁可多几十字。
+_ROSTER_CONSTRAINT_MAX = 110
+_ROSTER_MAX_CONSTRAINTS = 2
+
+# 约束句的开头标志。只取首句会把护栏截掉：save_to_knowledge 的「仅用于用户明确要存进
+# 知识库的场景」正是第二句，丢了它规划器就把工具清单当菜单，挨个安排进计划。
+_CONSTRAINT_HEADS = ("仅", "只", "注意", "不要", "禁止", "务必", "若", "除非")
+
+# 不进规划清单的「内部机制」工具：它们服务于 AI 自身的记忆/经验/技能装载，不是用户可见的
+# 任务步骤。排进计划只会多一次往返，还把内部管道当成「任务进度」暴露给用户。执行子步仍握有
+# 这些工具、需要时自行调用——这里只是不让它们成为被规划出来的步骤。
+_PLANNER_HIDDEN = frozenset({
+    "recall_episodes", "record_episode", "remember", "search_memory",
+    "load_skill", "unload_skill", "read_skill_resource", "update_plan",
+})
+
+
+def _describe(desc: str) -> str:
+    """取首句 + 至多两句约束：既让规划器知道能干什么，也知道什么时候不该用。"""
+    sentences = [s.strip() for s in (desc or "").replace("\n", "").split("。") if s.strip()]
+    if not sentences:
+        return ""
+    head = sentences[0][:_ROSTER_DESC_MAX]
+    limits = [s[:_ROSTER_CONSTRAINT_MAX] for s in sentences[1:]
+              if s.startswith(_CONSTRAINT_HEADS) or "请改用" in s][:_ROSTER_MAX_CONSTRAINTS]
+    return f"{head}（{'；'.join(limits)}）" if limits else head
+
 
 def render_tool_roster(registry) -> str:
     """把 registry 渲染成紧凑的工具清单，供规划器知悉自己在为什么样的工具集做计划。"""
@@ -48,9 +80,10 @@ def render_tool_roster(registry) -> str:
         return ""
     lines = []
     for t in registry.tools():
-        desc = (t.description or "").strip()
-        head = desc.split("。")[0].split("\n")[0][:_ROSTER_DESC_MAX]
-        lines.append(f"- {t.name}：{head}" if head else f"- {t.name}")
+        if t.name in _PLANNER_HIDDEN:
+            continue
+        body = _describe(t.description or "")
+        lines.append(f"- {t.name}：{body}" if body else f"- {t.name}")
     return "\n".join(lines)
 
 
