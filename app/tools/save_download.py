@@ -22,6 +22,15 @@ _BINARY_DOC_EXTS = frozenset({
 _TEXT_EXTS_HINT = ".md、.txt、.html、.csv、.json"
 
 
+# 紧跟在结果里、机读标记之前的就近提醒。模型手上没有任何可用的下载地址，出于「给个入口」
+# 的好意就会自己编一个（实测编出指向 `#` 的 markdown 链接，点了停在当前页），用户看到的是
+# 死链。界面本就会据〔下载ID:...〕在该条消息下方渲染真正的下载按钮，正文里不需要也不该有链接。
+_NO_LINK_HINT = (
+    "（界面已在本条消息下方自动显示下载按钮。"
+    "不要在回答里写下载链接、URL 或 markdown 链接——你没有可用的地址，写出来必然是死链；"
+    "只需说明文件已生成即可。）")
+
+
 class SaveDownloadTool(Tool):
     name = "save_download"
     description = (
@@ -35,7 +44,8 @@ class SaveDownloadTool(Tool):
         "同一份内容只存一次——若前置步骤已保存过，不要再存第二份。"
         f"content 为文本内容，扩展名只能用文本格式（{_TEXT_EXTS_HINT}）；"
         "本系统不能生成 PDF/Word/Excel/PPT，用户即使说「导出 PDF」也要存成 .md 并在答复里说明。"
-        "若要保存图片等二进制，先把它 base64 编码并令 encoding=base64。")
+        "若要保存图片等二进制，先把它 base64 编码并令 encoding=base64。"
+        "注意：界面会自动在该条消息下方显示下载按钮，你不要在回答里写下载链接或 URL。")
 
     class Params(BaseModel):
         filename: str
@@ -72,5 +82,5 @@ class SaveDownloadTool(Tool):
         # 走 marker 而非拼进 text——它不进模型上下文，模型看不见就不会把这串 id 抄进回复正文。
         return ToolOutput(
             text=(f"已保存到下载区：{rec['filename']}（{rec['size']} 字节），"
-                  f"用户可在该条消息下方点按钮下载。"),
+                  f"用户可在该条消息下方点按钮下载。{_NO_LINK_HINT}"),
             marker=f"〔下载ID:{rec['id']}〕")

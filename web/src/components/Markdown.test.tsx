@@ -44,3 +44,25 @@ describe("Markdown 段内单换行", () => {
     expect(container.querySelectorAll("br").length).toBe(0);
   });
 });
+
+describe("死链降级", () => {
+  it("指向 # 的链接渲染成纯文本，不是可点链接", () => {
+    // 回归：模型没有下载地址，却常自己编 [下载 xx.md](#)。真正入口是消息下方的按钮，
+    // 点不动的链接比没有链接更糟——用户会以为下载功能坏了。
+    render(<Markdown>{"[下载 AI 学习计划.md](#)"}</Markdown>);
+    expect(screen.getByText("下载 AI 学习计划.md")).toBeTruthy();
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+
+  it("空 href 同样降级", () => {
+    render(<Markdown>{"[点我]()"}</Markdown>);
+    expect(screen.getByText("点我")).toBeTruthy();
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+
+  it("正常外链不受影响", () => {
+    render(<Markdown>{"[维基](https://zh.wikipedia.org/wiki/AI)"}</Markdown>);
+    const a = screen.getByRole("link") as HTMLAnchorElement;
+    expect(a.href).toBe("https://zh.wikipedia.org/wiki/AI");
+  });
+});

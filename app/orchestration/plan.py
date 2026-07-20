@@ -67,7 +67,20 @@ _ASK_USER_RE = re.compile(
     r"|了解用户(的)?[^，。；]{0,6}(需求|目标|水平|偏好|情况)")
 
 
-def validate_plan(steps: list[PlanStep]) -> str | None:
+# 「未经要求就写入知识库」的识别。知识库是用户自己策展的资料库，往里塞东西会污染他的检索
+# 结果、事后还得手动清理——这与 save_download「产出用户要的交付物」性质不同，后者本就是答案
+# 的文件形态，故不在此拦。要求「保存动词 + 知识库」相邻搭配，避免误伤「检索知识库中的资料」
+# 这类正当的读取步骤。
+_SAVE_KB_RE = re.compile(
+    r"(?:存|保存|写|录|加|放|沉淀|归档)入?[^，。；]{0,4}知识库"
+    r"|知识库[^，。；]{0,6}(?:保存|存档|入库|收藏)"
+    r"|save_to_knowledge")
+
+# 用户目标里出现这些词才算「要求过」，此时上面的步骤是正当的
+_KB_REQUESTED_RE = re.compile(r"知识库|收藏|存起来|入库|存档|保存下来")
+
+
+def validate_plan(steps: list[PlanStep], goal: str = "") -> str | None:
     """校验 DAG 合法性。返回人读错误串；合法返回 None。
 
     三条硬约束（守住则 Scheduler 永不死锁于非法结构）：id 唯一、依赖存在、无环。
@@ -76,7 +89,12 @@ def validate_plan(steps: list[PlanStep]) -> str | None:
     """
     if not steps:
         return "计划为空，至少需要一个步骤"
+    kb_asked = bool(_KB_REQUESTED_RE.search(goal or ""))
     for s in steps:
+        if not kb_asked and _SAVE_KB_RE.search(f"{s.description} {s.expected}"):
+            return (f"步骤 {s.id}「{s.description[:30]}」要把内容写入用户知识库，但用户并没有"
+                    "要求这么做。知识库是用户自己整理的资料库，擅自写入会污染他的检索结果、"
+                    "事后还得手动清理。请删掉这一步：用户只要一份答复或文件时，交付答复/文件即可。")
         if _ASK_USER_RE.search(f"{s.description} {s.expected}"):
             return (f"步骤 {s.id}「{s.description[:30]}」是在向用户提问，但计划会自主跑完、"
                     "没有与用户对话的通道，这一步永远得不到回答。请删掉它：缺少的非关键信息"
