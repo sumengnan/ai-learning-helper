@@ -46,7 +46,7 @@ def _client(make_mock, monkeypatch, *, orchestrator):
                       trajectory_store=traj, sink=TrajectorySink(traj),
                       system_prompt="你是助手", orchestrator=orchestrator)
     cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,
-                    enable_answer_gate=False)
+                    enable_answer_gate=False, sandbox_approval_timeout=0.3)
     store = ConversationStore(":memory:")
     app = create_app(config=cfg, harness=harness, store=store,
                      doc_store=DocumentStore(":memory:"))
@@ -248,3 +248,40 @@ def test_no_gate_open_when_verify_off(make_mock, monkeypatch):
     c, _ = _client(make_mock, monkeypatch, orchestrator=FileToolOrchestrator())
     events = _chat_verify(c, _auth(c), False)
     assert "Progress:verify" not in _kinds(events)
+
+
+# ---------- 危险命令人工审核：整条链路必须在编排器路径上通 ----------
+
+class ApprovalOrchestrator:
+    """模拟执行子步里工具命中危险命令时的行为：run_shell 检出后即调 request_approval。"""
+    async def run(self, message, verify=True, *, context=None, registry=None,
+                  recent_dialogue="", force_simple=False, run_id=None):
+        from harness.events import RunStarted, RunFinished
+        from harness.types import Message, Role
+        from harness.approval import request_approval
+        yield RunStarted(run_id=run_id or "r1")
+        ok = await request_approval("run_shell", "rm -rf /workspace", "递归/强制删除文件")
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content=f"approved={ok}"))
+
+
+def test_approval_required_reaches_sse_on_orchestrator_path(make_mock, monkeypatch):
+    """此前只有 approval 的单元测试与工具级测试，没有一条覆盖聊天路径——而
+    request_approval 在「拿不到审批上下文」时是**静默放行**的（approval.py: ctx is None
+    → return True）。上下文由 chat.py 的 pump() 设置；若编排器路径漏设，危险命令会被无声
+    执行、用户永远看不到弹窗。这条测试就是钉住这一点。"""
+    c, _ = _client(make_mock, monkeypatch, orchestrator=ApprovalOrchestrator())
+    h = _auth(c)
+    cid = c.post("/api/conversations", json={}, headers=h).json()["id"]
+    with c.stream("POST", "/api/chat",
+                  json={"conversation_id": cid, "message": "删掉工作区"}, headers=h) as r:
+        events = [json.loads(ln[6:]) for ln in r.iter_lines()
+                  if ln.startswith("data: ") and ln[6:] != "[DONE]"]
+
+    kinds = [e["type"] for e in events]
+    assert "ApprovalRequired" in kinds, "危险命令必须下发审批事件，否则前端无从弹窗"
+    req = next(e for e in events if e["type"] == "ApprovalRequired")
+    assert req["data"]["command"] == "rm -rf /workspace"
+    assert req["data"]["reason"] and req["data"]["approval_id"]
+    # 无人应答 → 超时自动拒绝，而不是放行
+    fin = next(e for e in events if e["type"] == "RunFinished")
+    assert fin["data"]["message"]["content"] == "approved=False"
