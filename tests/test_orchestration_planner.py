@@ -246,3 +246,8 @@ async def test_replan_scrubs_tool_names_from_step_description():
 
 def test_planner_system_forbids_writing_tool_names():
     assert "不要写工具名" in PLANNER_SYSTEM
+
+
+def test_planner_system_forbids_splitting_produce_and_save():
+    """内容加工与保存文件不可拆成两步——拆了两步都会各存一份。"""
+    assert "不要拆成两步" in PLANNER_SYSTEM

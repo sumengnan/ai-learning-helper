@@ -94,3 +94,15 @@ def test_description_states_supported_formats():
     desc = SaveDownloadTool.description
     assert ".md" in desc
     assert "PDF" in desc or "pdf" in desc      # 明确说明不支持
+
+
+def test_description_does_not_trigger_on_content_shaping():
+    """「整理成笔记」不能当触发语——它精准命中「内容加工」类子步，导致该步也存一份文件。
+
+    实例：计划第2步「把检索到的内容整理成结构化的学习笔记」、第3步「保存为可供下载的
+    成品文件」，两步都调了 save_download，用户下载区出现两份重复文件。
+    触发语只保留明确要文件的说法（导出/存成文件/供下载）。
+    """
+    desc = SaveDownloadTool.description
+    assert "整理成笔记" not in desc
+    assert "导出" in desc and "下载" in desc
