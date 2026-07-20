@@ -46,8 +46,19 @@ def _capture():
 
 # ---- 纯规则 ----
 
-def test_relevance_check_no_hit_and_empty():
-    assert relevance_check(NO_HIT_MARK).ok is False
+def test_no_hit_is_not_a_failure_but_still_hints():
+    """知识库空命中是合法结果，不标红——但仍要提醒模型别据此臆造。
+
+    判失败会给用户留一个消不掉的红标，且模型无法靠重试纠正（换关键词也变不出没存过
+    的文档）。与记忆检索同理：那边压根没包校验。
+    """
+    r = relevance_check(NO_HIT_MARK)
+    assert r.ok is True
+    assert r.hint, "不标红，但提醒必须还在——否则模型会拿空结果硬编"
+
+
+def test_empty_return_is_still_a_failure():
+    """空命中有哨兵文案；连哨兵都没有 = 检索没正常工作，这才是真失败。"""
     assert relevance_check("").ok is False
     assert relevance_check("   ").ok is False
 
@@ -59,14 +70,17 @@ def test_relevance_check_hit():
 
 # ---- result 型（检索）----
 
-async def test_search_no_hit_appends_hint_and_emits_error():
+async def test_search_no_hit_appends_hint_without_marking_error():
+    """回归：空命中曾被标成 error，用户每轮都看到「未命中知识库」一直报错。
+    提示要留（模型需要知道别臆造），红标要去（不是失败，重试也没用）。"""
     evs, tok = _capture()
     try:
         out = await ValidatingTool(_SearchStub(NO_HIT_MARK), relevance_check).run(_P())
     finally:
         reset_emitter(tok)
-    assert "[校验提示]" in out                                   # hint 追加，驱动自纠正
-    assert any(e.scope == "check" and e.status == "error" for e in evs)
+    assert "[校验提示]" in out                                   # hint 仍追加
+    checks = [e for e in evs if e.scope == "check"]
+    assert checks and not any(e.status == "error" for e in checks)
 
 
 async def test_search_hit_returns_verbatim_and_emits_ok():

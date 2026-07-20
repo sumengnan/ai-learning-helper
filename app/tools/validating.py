@@ -43,9 +43,18 @@ def _page_body(text: str) -> str:
 
 @dataclass
 class CheckResult:
+    """ok 与 hint 是两件独立的事，别把它们绑死：
+
+    - ok=False 意味着「这步算失败」——前端标红，且暗示重试有意义。
+    - hint 只是「给模型补一句话」，通过与否都可以带。
+
+    早先 hint 只在 ok=False 时生效，于是「想提醒模型」就只能连带标红。知识库空命中
+    正是这种情况：它是合法结果（新用户库本来就空），模型也无法靠重试把没存过的文档
+    搜出来，标红只会留一个消不掉的错和一轮白重试——但「别据此臆造」这句提醒仍然要给。
+    """
     ok: bool
     text: str            # 前端展示文案
-    hint: str = ""       # 追加到结果尾部、驱动自纠正的提示（仅 ok=False 生效）
+    hint: str = ""       # 追加到结果尾部的提示；与 ok 无关，通过时也会追加
 
 
 class ValidatingTool(Tool):
@@ -96,7 +105,7 @@ class ValidatingTool(Tool):
         emit(Progress(scope="check", text=verdict.text,
                       status="ok" if verdict.ok else "error",
                       key=f"check:{self.name}"))
-        if not verdict.ok and verdict.hint:
+        if verdict.hint:
             return _append_hint(raw, verdict.hint)
         return raw
 
@@ -138,10 +147,23 @@ def web_content_check(text: str) -> CheckResult:
 
 
 def relevance_check(text: str) -> CheckResult:
-    """检索结果相关性：起步只判空命中（工具未暴露相似度分数）。"""
+    """检索结果相关性：起步只判空命中（工具未暴露相似度分数）。
+
+    空命中**不算失败**。知识库为空或不含该话题是完全合法的状态——与记忆检索同理
+    （那边压根没包校验，理由写在 assembly.py：「记忆为空是常态，不是失败」）。而且
+    模型无法靠重试纠正它：换关键词再搜也变不出从没存过的文档。判失败的唯一效果是
+    给用户留一个消不掉的红标、再推着模型白跑一轮。
+    """
     t = (text or "").strip()
-    if not t or NO_HIT_MARK in t:
+    if NO_HIT_MARK in t:
         return CheckResult(
-            ok=False, text="未命中知识库",
-            hint="本次未检索到知识库依据，请勿臆造事实；如无把握请明确告知用户资料不足。")
+            ok=True, text="知识库无相关内容",
+            hint="知识库里没有与本次查询相关的资料。这是正常结果，不必反复重试检索。"
+                 "请勿据此臆造事实：改用其它来源，或如实告诉用户知识库中暂无相关资料。")
+    if not t:
+        # 连空命中哨兵都没返回 → 不是「没搜到」，是检索本身没正常工作，值得标红
+        return CheckResult(
+            ok=False, text="检索无返回",
+            hint="检索工具没有返回任何内容（既非结果也非空命中提示），可能是调用异常。"
+                 "请勿据此臆断，可换个方式获取资料。")
     return CheckResult(ok=True, text="检索命中")
