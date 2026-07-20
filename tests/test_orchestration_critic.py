@@ -106,3 +106,30 @@ async def test_review_with_unfinished_step():
     plan = Plan(goal="g", steps=[_step(), PlanStep(id="s2", description="第二步", expected="产出2", status="failed")])
     r = await critic.review("g", plan, {"s1": Artifact(summary="ok")})  # 故意缺 s2
     assert r.accept is False
+
+
+# ---------- 澄清豁免：让子步「信息不足先问」，就不能因为它问了而罚它 ----------
+
+def test_validate_system_exempts_clarification():
+    """executor.CLARIFY_GUIDE 要求子步信息不足先问不要猜；若 critic 再把提问判成未达成，
+    就是一边让它问、一边因它问而罚它——重试压力下模型只会改去瞎猜。"""
+    from app.orchestration.critic import VALIDATE_SYSTEM
+    assert "澄清豁免" in VALIDATE_SYSTEM
+    assert "判为通过" in VALIDATE_SYSTEM
+    # 必须同时防敷衍，否则模型可以用「信息不足」万能过关
+    assert "说不出缺哪一项" in VALIDATE_SYSTEM
+
+
+def test_review_system_delivers_question_instead_of_replanning():
+    """缺口只能由用户回答时必须放行：重规划拿不到用户没给过的信息，只会空转后瞎猜。"""
+    from app.orchestration.critic import REVIEW_SYSTEM
+    assert "澄清豁免" in REVIEW_SYSTEM
+    assert "只能由用户回答" in REVIEW_SYSTEM
+    assert "accept=true" in REVIEW_SYSTEM
+
+
+def test_synth_system_surfaces_the_question_to_user():
+    """汇总环节若把问题揉进正文或自行假设填补，前两道豁免就白做了。"""
+    from app.orchestration.orchestrator import SYNTH_SYSTEM
+    assert "明确提给用户" in SYNTH_SYSTEM
+    assert "不要自行假设填补" in SYNTH_SYSTEM or "不要自行假设" in SYNTH_SYSTEM
