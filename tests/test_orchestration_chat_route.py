@@ -332,3 +332,58 @@ def test_orchestrator_reset_clears_streaming_partial(make_mock, monkeypatch):
         f"写出了两版拼接的在途文本：{[w for w in writes if '甲' in w and '乙' in w][:1]}")
     # 清空之后再没写回过第一版
     assert "甲" not in (writes[-1] or "")
+
+
+# ---------- 交付门结构化留痕：编排器的校验结论必须落进 verify 列 ----------
+
+class VerifyTraceOrchestrator:
+    """模拟编排器收尾时发的结构化留痕。"""
+    async def run(self, message, verify=True, *, context=None, registry=None,
+                  recent_dialogue="", force_simple=False, run_id=None):
+        from harness.events import Progress, RunStarted, RunFinished
+        from harness.types import Message, Role
+        from app.orchestration.orchestrator import VERIFY_TRACE_KEY
+        yield RunStarted(run_id=run_id or "r1")
+        if verify:
+            yield Progress(scope="verify", text="", key=VERIFY_TRACE_KEY,
+                           detail={"attempts": 2, "retries": 1, "ok": True,
+                                   "degraded": False, "gate_error": False,
+                                   "history": [{"failed": ["review"], "feedback": "缺 X"}]})
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content="答"))
+
+
+def test_orchestrator_verify_trace_lands_in_verify_column(make_mock, monkeypatch):
+    """回归：编排器每轮都做终局校验，但结论只以中文文案落进 progress，没有结构化落点——
+    verify 列恒为 NULL，统计页的一次过率/重答次数/「哪一层拦下的」整块恒为 0，
+    用户会以为「从来没有回答被拦下过」。"""
+    import sqlite3
+    c, store = _client(make_mock, monkeypatch, orchestrator=VerifyTraceOrchestrator())
+    h = _auth(c)
+    cid = c.post("/api/conversations", json={}, headers=h).json()["id"]
+    with c.stream("POST", "/api/chat",
+                  json={"conversation_id": cid, "message": "做点复杂的事", "verify": True},
+                  headers=h) as r:
+        list(r.iter_lines())
+
+    row = store._conn.execute(
+        "SELECT verify FROM conversation_messages WHERE conv_id=? AND role='assistant'"
+        " ORDER BY seq DESC LIMIT 1", (cid,)).fetchone()
+    assert row and row[0], "编排器的校验结论必须写进 verify 列"
+    vt = json.loads(row[0])
+    assert vt["retries"] == 1 and vt["ok"] is True
+    assert vt["history"][0]["failed"] == ["review"]
+
+
+def test_no_verify_trace_when_verify_off(make_mock, monkeypatch):
+    """关校验的轮次不发留痕——也不该在 verify 列写出「校验过」的假象。"""
+    c, store = _client(make_mock, monkeypatch, orchestrator=VerifyTraceOrchestrator())
+    h = _auth(c)
+    cid = c.post("/api/conversations", json={}, headers=h).json()["id"]
+    with c.stream("POST", "/api/chat",
+                  json={"conversation_id": cid, "message": "问", "verify": False},
+                  headers=h) as r:
+        list(r.iter_lines())
+    row = store._conn.execute(
+        "SELECT verify FROM conversation_messages WHERE conv_id=? AND role='assistant'"
+        " ORDER BY seq DESC LIMIT 1", (cid,)).fetchone()
+    assert row and not row[0]
