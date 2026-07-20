@@ -107,3 +107,15 @@ def test_proxy_exposes_sandbox_for_only_when_routing():
     routed = _cfg(_env_file=None,
                   sandbox_images={"python": "python:3.12-slim", "node": "node:20-slim"})
     assert getattr(SandboxProxy(SandboxManager(routed)), "sandbox_for", None) is not None
+
+
+def test_guide_tells_model_to_use_save_download_for_deliverables():
+    """回归：模型把 write_file→save_download 当固定流水线用，白跑一次往返；子步一重试
+    这套组合还会整个再来一遍。沙箱里的文件是过程中间物、随沙箱销毁，用户根本拿不到。"""
+    from types import SimpleNamespace
+    from app.sandbox_manager import sandbox_guide
+    g = sandbox_guide(SimpleNamespace(sandbox_workspace="/workspace", sandbox_backend="local"))
+    assert "成品文件直接用 save_download" in g
+    assert "不需要" in g and "write_file" in g
+    assert "用户拿不到" in g
+    assert "后续步骤还要在沙箱里读取" in g   # 保留正当用法，不是一刀切禁用
