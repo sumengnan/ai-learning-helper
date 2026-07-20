@@ -374,7 +374,18 @@ class Orchestrator:
                 _hidden.add("save_to_knowledge")
             exec_reg = HidingRegistry(registry, _hidden) if registry is not None else None
 
-            if force_simple or _obvious_simple(user_message) or await self._is_simple(user_message):
+            # 命中技能即走完整规划：技能剧本本身就是一套多步流程，该交给 planner 拆成计划步，
+            # 而不是塞进单循环当「参考」——后者既不出计划步，模型还可能自己发一份没有 id 的
+            # ReAct 清单，把工具块吞掉且展不开明细。
+            # force_simple（考试等有状态单循环）永远优先，写在 or 左边先短路。
+            # 注意它下面 skill_hint **可能非空**：技能路由的关闭条件是 in_stateful_exam（正在逐题
+            # 作答），比 force_simple 窄——「讲讲我的错题」含考试触发词故 force_simple 为真，却仍
+            # 该命中错题精讲技能。这类轮次走单循环 + 剧本作参考前缀（_simple_answer 收 skill_hint），
+            # 既不拆成多步打乱逐题推进，也不丢技能。
+            # 顺带省掉一次 triage 调用：命中技能时结论已定，不必再问模型。
+            if force_simple or (not skill_hint
+                                and (_obvious_simple(user_message)
+                                     or await self._is_simple(user_message))):
                 # 考试轮（force_simple）且开了结果校验 → 补一道终局校验 + 就地重答。
                 # 判分/错题入库/游标推进都是服务端确定性完成的，模型只负责讲解与呈现下一题；
                 # 讲解讲错（判定说反、漏告知「已存入错题集」、篡改下一题）此前无人兜底。

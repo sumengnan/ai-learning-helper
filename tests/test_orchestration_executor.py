@@ -210,6 +210,35 @@ def test_executor_system_prompt_includes_clarify_guide():
     assert "信息不足先问" in _system_with_guide("基座提示", "\n\n【沙箱工作目录】x")
 
 
+def test_executor_system_prompt_includes_search_guidance():
+    """执行子步系统提示词必须带「联网检索的提问方式」指引。
+
+    覆盖 Bug：AI 把用户原话整句照抄进 MCP 搜索的 query。这段指引原先只拼在
+    harness.system_prompt 上——主聊天与简单直答经 context 拿得到，而执行子步的 base 是裸的
+    config.app_system_prompt（见 assembly.py 构造 Executor 处）。多步任务里联网检索恰恰归
+    子步做，于是指引根本没到真正调工具的那个上下文，只剩 EXECUTOR_GUIDE 的「优先用搜索
+    工具」——教了用什么，没教怎么写 query。
+    """
+    from app.orchestration.executor import _system_with_guide
+    for sandbox_text in ("", "\n\n【沙箱工作目录】x"):
+        sp = _system_with_guide("基座提示", sandbox_text)
+        assert "联网检索的提问方式" in sp
+        assert "时间必须锚定" in sp        # 相对时间要换算成绝对年份
+        assert "正交的子查询" in sp        # 宽泛问题要拆
+        assert "不要为拆而拆" in sp        # 简单事实查询别被拖慢
+
+
+def test_search_guidance_date_wording_fits_both_contexts():
+    """指引里对「今天」的引用不能钉死某一处的写法。
+
+    主聊天用 _today_guide() 的「【当前日期】今天是 X 年 X 月 X 日」，执行子步用
+    _system_with_guide 的「今日日期：YYYY-MM-DD」——措辞若只认前者，子步里就成了悬空引用。
+    """
+    from app.search_guidance import SEARCH_SYSTEM_GUIDANCE
+    assert "【当前日期】" not in SEARCH_SYSTEM_GUIDANCE
+    assert "今天日期" in SEARCH_SYSTEM_GUIDANCE
+
+
 def test_orchestrator_simple_answer_carries_clarify_guide():
     """全编排器/编排器模式下简单直答面向用户，其系统提示应带澄清指引。"""
     from app.orchestration.orchestrator import Orchestrator
