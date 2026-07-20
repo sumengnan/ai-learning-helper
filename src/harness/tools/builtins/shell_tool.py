@@ -5,6 +5,8 @@ from pydantic import BaseModel
 
 from ..base import Tool, ToolError
 from ...approval import request_approval
+from ...events import Progress
+from ...progress import emit
 from ...sandbox.base import Sandbox
 from ...shell.policy import classify_command
 from ._sandbox_util import format_exec
@@ -28,7 +30,21 @@ class RunShellTool(Tool):
         if danger is not None:
             approved = await request_approval("run_shell", params.command, danger.reason)
             if not approved:
-                raise ToolError(f"命令被用户拒绝执行（{danger.reason}）：{params.command}")
+                # 只陈述「被拒绝」不够：模型的默认倾向是把任务讲圆，实测会照着预期编出
+                # 「目录已删除、当前已不存在」这类根本没发生的结果——在安全关键动作上撒谎。
+                # 故这里必须连「该怎么向用户交代」一起说死。
+                # 确定性可见记录：上面那段是给模型的约束，属软约束，管不住它撒谎。这条
+                # 走 scope=check 进度（落库、刷新后仍在、前端红色展示），即便正文谎称
+                # 「已删除」，用户也能在同一条消息上看到「被拒绝、未执行」的事实。
+                emit(Progress(scope="check",
+                              text=f"危险命令已被你拒绝，未执行：{params.command}",
+                              status="error", key=f"denied:{params.command}"))
+                raise ToolError(
+                    f"命令未执行：用户拒绝了该操作（{danger.reason}）：{params.command}\n"
+                    "该命令一行都没有运行，系统状态没有任何改变。"
+                    "你必须如实告诉用户「该命令未执行，因为你拒绝了」——"
+                    "绝对不要声称它已执行，也不要描述任何执行结果、影响或后续状态。"
+                    "若该步骤因此无法完成，就说明卡在这里、并给出替代做法。")
         res = await self._sandbox.exec(["sh", "-c", params.command], self._timeout)
         out = format_exec(res, self._max_chars)
         if res.exit_code != 0 or res.timed_out:   # 非零退出/超时 → 标记失败

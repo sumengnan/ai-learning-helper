@@ -85,13 +85,27 @@ async def test_run_python_nonzero_exit_is_error():
 async def test_dangerous_shell_requires_approval_deny():
     # 有审批上下文时，危险命令被拒 → ToolError（is_error），且不执行
     sb = LocalSandbox(); await sb.start()
-    etoken = progress.set_emitter(lambda e: None)
+    events = []
+    etoken = progress.set_emitter(events.append)
     ctoken = approval.set_context(run_id="r1", timeout=0.05)  # 无人应答 → 超时拒绝
     try:
         ex = await _executor(sb)
         r = await ex.execute(ToolCall(id="c1", name="run_shell",
                                       arguments={"command": "rm -rf /workspace"}))
         assert r.is_error is True and "拒绝" in r.content
+        # 回归：只说「被拒绝」不够——实测模型会照着预期编出「目录已删除、当前已不存在」
+        # 这类根本没发生的结果，在安全关键动作上撒谎。结果里必须连「怎么向用户交代」一起说死。
+        assert "命令未执行" in r.content
+        assert "没有任何改变" in r.content
+        assert "不要声称它已执行" in r.content
+        assert "不要描述任何执行结果" in r.content
+        # 确定性可见记录：提示词管不住模型撒谎，故另发一条 scope=check 进度（落库、
+        # 刷新后仍在）。即便正文谎称「已删除」，用户仍能在同一条消息上看到事实。
+        from harness.events import Progress
+        denied = [e for e in events if isinstance(e, Progress) and e.scope == "check"
+                  and "未执行" in (e.text or "")]
+        assert denied and denied[0].status == "error"
+        assert "rm -rf /workspace" in denied[0].text
     finally:
         approval.reset_context(ctoken)
         progress.reset_emitter(etoken)
