@@ -1,4 +1,5 @@
 from harness.events import Progress, RunError, RunFinished, RunStarted, TextDelta
+from harness.tools.base import ToolRegistry
 from app.orchestration.orchestrator import Orchestrator
 from app.orchestration.plan import Artifact, Plan, PlanStep, Verdict, Review
 from app.orchestration.planner import PlannerError
@@ -880,3 +881,96 @@ def test_synth_user_does_not_glue_step_id_to_content():
     out = _synth_user("目标", {"s1": Artifact(summary="# 标题\n正文")})
     assert "[s1] # 标题" not in out
     assert "# 标题" in out and "s1" in out
+
+
+# ---- 考试轮的终局校验（force_simple + verify）----
+#
+# 考试的判分/错题入库/游标推进都由服务端 grade_exam_turn 确定性完成，模型只负责讲解与
+# 呈现下一题。此前 force_simple 把整条编排器路径连同终局 Critic 一起关掉，讲解讲错
+# （判定说反、漏告知「已存入错题集」、篡改下一题题面）无人兜底，且前端"结果校验"开关
+# 在考试轮完全失效——开着也收不到一条 verify 事件。
+
+def _exam_orch(reviews, captured):
+    """构造考试轮编排器：_simple_answer 产出 TextDelta，并记录每次调用拿到的 registry。"""
+    from harness.types import Message, Role
+
+    async def cap_simple(msg, budget=None, *, context=None, registry=None,
+                         prefer_main=False, skill_hint=""):
+        captured.append({"msg": msg, "registry": registry, "prefer_main": prefer_main})
+        text = f"第{len(captured)}版讲解"
+        yield TextDelta(text=text)
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content=text))
+
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(reviews=reviews), [])
+    orch._simple_answer = cap_simple
+    return orch
+
+
+async def test_exam_turn_runs_final_review():
+    """考试轮 + 结果校验开 → 跑终局 Critic，并发出前端徽章依赖的 verify 事件。"""
+    cap = []
+    orch = _exam_orch((True,), cap)
+    events = [ev async for ev in orch.run("B", verify=True, force_simple=True)]
+    vp = [e.text for e in events if isinstance(e, Progress) and e.scope == "verify"]
+    assert vp == ["结果校验中…", "结果校验通过"]
+    assert len(cap) == 1                               # 通过 → 不重答
+    assert events[-1].message.content == "第1版讲解"
+
+
+async def test_exam_turn_verify_off_skips_review():
+    """考试轮 + 结果校验关 → 一条 verify 事件都不发（维持原有的快路径）。"""
+    cap = []
+    orch = _exam_orch((True,), cap)
+    events = [ev async for ev in orch.run("B", verify=False, force_simple=True)]
+    assert not [e for e in events if isinstance(e, Progress) and e.scope == "verify"]
+    assert len(cap) == 1
+
+
+async def test_exam_turn_failed_review_redoes_without_exam_tools():
+    """校验不过 → 清屏 + 就地重答一次；重答给空工具表。
+
+    重答留着工具，模型可能再调一次 start_exam 把考试进度整个重置——这正是当初
+    整条关掉校验的理由。考试轮的原料（判定结论/正确答案/解析/下一题题面）都已在
+    上下文里，重答只是重新组织文字，不需要任何工具。
+    """
+    cap = []
+    orch = _exam_orch((False, True), cap)
+    base_reg = ToolRegistry()
+    events = [ev async for ev in orch.run("B", verify=True, force_simple=True,
+                                          registry=base_reg)]
+    scopes = [(e.scope, e.text) for e in events if isinstance(e, Progress)]
+    assert ("verify", "补一下X") in scopes             # 未过的原因透给前端
+    assert ("reset", "") in scopes                     # 清屏，避免两版拼接
+    assert len(cap) == 2                               # 重答了一次
+    assert cap[0]["registry"] is base_reg              # 第一版：正常工具表
+    assert cap[1]["registry"].tools() == []            # 重答：空工具表，碰不到 start_exam
+    assert "结果校验" in cap[1]["msg"]                  # 重答指令带上了 Critic 的意见
+    assert events[-1].message.content == "第2版讲解"    # 交付的是重答那版
+
+
+async def test_exam_turn_first_run_finished_suppressed_until_review():
+    """第一版的 RunFinished 必须压到校验有结论之后才发。
+
+    它是终结信号，提前发出去前端立刻标「已完成」，而这一版随时可能被重答顶掉。
+    """
+    cap = []
+    orch = _exam_orch((False, True), cap)
+    events = [ev async for ev in orch.run("B", verify=True, force_simple=True)]
+    assert len([e for e in events if isinstance(e, RunFinished)]) == 1
+    # 校验事件必须早于唯一那条 RunFinished
+    vi = next(i for i, e in enumerate(events)
+              if isinstance(e, Progress) and e.scope == "verify")
+    fi = next(i for i, e in enumerate(events) if isinstance(e, RunFinished))
+    assert vi < fi
+
+
+async def test_plain_simple_turn_still_skips_review():
+    """非考试的简单轮维持原样：不校验。
+
+    校验寒暄没有意义，且每轮多一次主模型往返会拖慢最快的那条路径。
+    """
+    cap = []
+    orch = _exam_orch((True,), cap)
+    events = [ev async for ev in orch.run("你好", verify=True)]   # 命中 _obvious_simple
+    assert not [e for e in events if isinstance(e, Progress) and e.scope == "verify"]
+    assert len(cap) == 1

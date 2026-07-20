@@ -78,7 +78,8 @@ async def test_text_friendly_extensions_still_allowed(tmp_path, name):
     """文本格式一律放行——本修复只拦「文本内容套二进制文档壳」这一种情况。"""
     tool, store = _tool(tmp_path)
     out = await tool.run(tool.Params(filename=name, content="内容"))
-    assert "已保存" in out and len(store.list("u1")) == 1
+    # 成功返回 ToolOutput（正文 + 只给机器看的〔下载ID:x〕marker）；失败才是纯 str
+    assert "已保存" in out.text and len(store.list("u1")) == 1
 
 
 @pytest.mark.asyncio
@@ -87,7 +88,7 @@ async def test_base64_pdf_still_allowed(tmp_path):
     tool, store = _tool(tmp_path)
     b64 = base64.b64encode(b"%PDF-1.4 fake").decode()
     out = await tool.run(tool.Params(filename="真报告.pdf", content=b64, encoding="base64"))
-    assert "已保存" in out
+    assert "已保存" in out.text
     assert store.list("u1")[0]["content_type"] == "application/pdf"
 
 
