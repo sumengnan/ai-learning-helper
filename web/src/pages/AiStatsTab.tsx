@@ -27,7 +27,7 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
       <Eyebrow note={rangeLabel(days)}>运行概览</Eyebrow>
       <Box sx={{ display: "grid", gap: 1.75,
         gridTemplateColumns: { xs: "1fr 1fr", sm: "repeat(3,1fr)", md: "repeat(6,1fr)" } }}>
-        <StatTile label="运行次数" value={String(ops.totals.runs)} stripe={theme.palette.primary.main} />
+        <StatTile label="总聊天次数" value={String(ops.totals.runs)} hint={`总聊天会话 ${ops.totals.conversations}`}  stripe={theme.palette.primary.main} />
         <StatTile label="总 Token（所有模型）" value={fmtTokens(ops.totals.total_tokens)} hint={`${ops.totals.model_calls} 次调用 · 合计各模型`} stripe={theme.palette.primary.main} />
         <StatTile label="估算成本（所有模型）"
           value={ops.totals.cost_usd == null ? `${cur} —` : `${cur}${ops.totals.cost_usd}`}
@@ -35,7 +35,7 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
           stripe={theme.palette.warning.main} />
         <StatTile label="成功率" value={fmtPct(ops.totals.success_rate)} hint={`${ops.totals.runs_finished} / ${ops.totals.runs}`} stripe={theme.palette.success.main} />
         <StatTile label="P95 延迟" value={fmtLatency(ops.totals.p95_latency_ms)} hint={`均值 ${fmtLatency(ops.totals.avg_latency_ms)}`} stripe={theme.palette.warning.main} />
-        <StatTile label="重试次数" value={String(ops.totals.retries)} hint={`全站会话 ${ops.totals.conversations}`} stripe={theme.palette.primary.main} />
+        <StatTile label="LLM 网络重试次数" value={String(ops.totals.retries)} hint={"主/快速/judge模型总和"} stripe={theme.palette.primary.main} />
       </Box>
 
       {/* 分模型用量：总 token/调用次数/成本按不同模型（主/快速/judge…）拆开，及汇总 */}
