@@ -338,6 +338,15 @@ class Orchestrator:
                                status="ok" if review.accept else "error")
                 if review.accept or replan_count >= self._max_replan:
                     break
+                # 命中技能 → 不重规划。技能剧本就是这类任务的既定流程，重新拆解等于把它推翻，
+                # 用户会看到步骤中途凭空变样。重规划本是用来纠正「计划拆错了」的，而剧本恰恰
+                # 规定了拆法；单步做砸由 max_step_retry 在原步骤内重试兜住，与此无关。
+                # 故这里保持步骤不变，带现有产物去定稿。
+                if skill_hint:
+                    yield Progress(scope="verify",
+                                   text="按技能既定流程执行，不重新拆解步骤",
+                                   status="ok")
+                    break
                 replan_count += 1
                 for s in plan.steps:
                     if s.status in ("pending", "running"):
@@ -345,7 +354,7 @@ class Orchestrator:
                 out2: dict = {}   # 重规划思考也流式发，在新计划之前
                 async for ev in self._plan_streaming(
                         self._planner.replan(user_message, plan, review.feedback,
-                                             tools_desc=tools_desc), out2):
+                                             skill_hint, tools_desc=tools_desc), out2):
                     yield ev
                 if "error" in out2:
                     break
