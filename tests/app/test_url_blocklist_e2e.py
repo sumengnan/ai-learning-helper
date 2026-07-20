@@ -79,9 +79,11 @@ def _tool_results(events):
 
 
 def test_dead_url_is_recorded_then_skipped_on_next_turn(make_mock, tool_turn, text_turn):
+    # 刻意不用 example.com 系域名：它们是 RFC 2606 保留域名，会被抓取前的占位域名
+    # 守卫直接拦下、请求根本发不出去，本用例要测的「死链登记」也就无从发生。
     """第一轮撞 404 → 登记；第二轮模型又想抓同一个 → 不发请求，直接告诉它换一个。"""
     http = _FakeHttp("HTTP 404\nNot Found")
-    args = json.dumps({"url": "https://dead.example.com/page"})
+    args = json.dumps({"url": "https://dead-site.test-host.org/page"})
     client, _ = _client(
         make_mock,
         [tool_turn("http_request", args), text_turn("第一轮：没抓到"),      # 轮1：抓→404
@@ -97,7 +99,7 @@ def test_dead_url_is_recorded_then_skipped_on_next_turn(make_mock, tool_turn, te
     r2 = _tool_results(ev2)
     assert r2 and r2[0]["is_error"] is True                 # 变成显式失败，模型必须处理
     assert "请改用其它网址或来源" in r2[0]["content"]
-    assert http.calls == ["https://dead.example.com/page"]  # 全程只真发过 1 次请求
+    assert http.calls == ["https://dead-site.test-host.org/page"]  # 全程只真发过 1 次请求
 
 
 def test_403_skips_whole_domain_on_next_turn(make_mock, tool_turn, text_turn):
