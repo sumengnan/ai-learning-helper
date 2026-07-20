@@ -5,7 +5,10 @@ import HomeView from "./HomeView";
 import { statsApi, type StatsOverview } from "../api/stats";
 import { profileApi } from "../api/profile";
 
-vi.mock("../api/stats", () => ({ statsApi: { overview: vi.fn(), memory: vi.fn(), deleteMemory: vi.fn() } }));
+vi.mock("../api/stats", () => ({ statsApi: {
+  overview: vi.fn(), memory: vi.fn(), deleteMemory: vi.fn(),
+  deleteMemories: vi.fn(), consolidateMemory: vi.fn(),
+} }));
 vi.mock("../api/profile", () => ({
   profileApi: { get: vi.fn().mockResolvedValue({ identity: "", goal: "", explain_prefs: [], tone: "", notes: "" }) },
   isProfileSet: () => false,
@@ -79,6 +82,26 @@ describe("HomeView", () => {
     // 工程黑话不出现在学习主场（默认落在「概览」视图，运维指标在「AI 运行统计」切换项下）
     expect(screen.queryByText("P95 延迟")).toBeNull();
     expect(screen.queryByRole("button", { name: "工程台" })).toBeNull();  // 切换页签已移除
+  });
+
+  it("打开偏好抽屉按总数请求，删除一条后卡片数字同步递减", async () => {
+    (statsApi.overview as any).mockResolvedValue(OV);
+    (statsApi.memory as any).mockResolvedValue([
+      { id: "m1", text: "偏好甲", collection: "conversation:c1", mem_type: "semantic", created_at: "2026-07-18T00:00:00+00:00" },
+      { id: "m2", text: "偏好乙", collection: "conversation:c1", mem_type: "semantic", created_at: "2026-07-18T00:00:00+00:00" },
+    ]);
+    (statsApi.deleteMemory as any).mockResolvedValue(undefined);
+    renderHome();
+    await waitFor(() => expect(screen.getByText("52")).toBeTruthy());   // 初始总数（overview 口径）
+
+    fireEvent.click(screen.getByText("AI 记的偏好"));                    // 点卡片开抽屉
+    await screen.findByText("偏好甲");
+    expect(statsApi.memory).toHaveBeenCalledWith(52);                   // 按总数请求 → 展示全部
+
+    fireEvent.click(screen.getAllByLabelText("删除这条记忆")[0]);        // 删一条
+    await waitFor(() => expect(statsApi.deleteMemory).toHaveBeenCalledWith("m1"));
+    await waitFor(() => expect(screen.getByText("51")).toBeTruthy());   // 卡片 52 → 51
+    expect(screen.queryByText("52")).toBeNull();
   });
 
   it("提供「概览」「AI 运行统计」切换按钮，点后者切到运维指标", async () => {

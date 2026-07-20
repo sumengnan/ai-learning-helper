@@ -187,6 +187,7 @@ def test_memory_items_listing():
     assert len(items) == 3
     assert {i["text"] for i in items} == {"a", "b", "c"}
     assert all("created_at" in i for i in items)
+    assert all(i["mem_type"] == "semantic" for i in items)   # 类型随条目返回，供前端展示
 
 
 def test_memory_items_isolated_by_user():
@@ -216,7 +217,7 @@ class _FakeMemStore:
 
     def get(self, ids):
         from types import SimpleNamespace
-        return [SimpleNamespace(owner_id=self._o[i]) for i in ids if i in self._o]
+        return [SimpleNamespace(id=i, owner_id=self._o[i]) for i in ids if i in self._o]
 
     def delete(self, ids):
         self.deleted.extend(ids)
@@ -233,6 +234,46 @@ def test_delete_memory_owned():
     fake = _FakeMemStore({"m1": "cv1"})            # cv1 属于用户 u（见 _app_conn）
     assert _svc_with_store(fake).delete_memory("u", "m1") is True
     assert fake.deleted == ["m1"]
+
+
+def test_delete_memories_batch_filters_by_owner():
+    # 批量删除：只删本人会话(cv1)的，别人的(cvX)跳过
+    fake = _FakeMemStore({"m1": "cv1", "m2": "cv1", "mx": "cvX"})
+    deleted = _svc_with_store(fake).delete_memories("u", ["m1", "m2", "mx"])
+    assert set(deleted) == {"m1", "m2"}
+    assert set(fake.deleted) == {"m1", "m2"}
+
+
+def test_delete_memories_empty_or_no_store():
+    assert _svc_with_store(_FakeMemStore({"m1": "cv1"})).delete_memories("u", []) == []
+    svc = StatsService(trajectory_conn=_traj_conn(), app_conn=_app_conn(),
+                       memory_conn=_mem_conn(), memory_store=None, now=lambda: FIXED_NOW)
+    assert svc.delete_memories("u", ["m1"]) == []
+
+
+class _FakeMaintainer:
+    """记录 consolidate_semantic 调用；每次返回固定合并统计。"""
+    def __init__(self):
+        self.calls = []
+    async def consolidate_semantic(self, owner_id, kind):
+        self.calls.append((owner_id, kind))
+        return {"clusters": 1, "merged": 2, "created": 1}
+
+
+async def test_consolidate_memories_aggregates_over_conversations():
+    fake = _FakeMaintainer()
+    svc = StatsService(trajectory_conn=_traj_conn(), app_conn=_app_conn(),
+                       memory_conn=_mem_conn(), maintainer=fake, now=lambda: FIXED_NOW)
+    out = await svc.consolidate_memories("u")
+    assert fake.calls                                       # 遍历了 u 的会话
+    assert all(kind == "conversation" for _, kind in fake.calls)
+    assert out["created"] >= 1 and out["merged"] >= 2       # 统计累加
+
+
+async def test_consolidate_memories_no_maintainer():
+    svc = StatsService(trajectory_conn=_traj_conn(), app_conn=_app_conn(),
+                       memory_conn=_mem_conn(), now=lambda: FIXED_NOW)
+    assert await svc.consolidate_memories("u") == {"clusters": 0, "merged": 0, "created": 0}
 
 
 def test_delete_memory_rejects_other_users_record():

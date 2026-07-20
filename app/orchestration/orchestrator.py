@@ -97,7 +97,7 @@ class Orchestrator:
                  fast_complete, fast_client=None, fast_model: str | None = None,
                  fast_max_prompt_tokens: int = 0,
                  budget=None, budget_factory=None,
-                 max_step_retry: int = 2, max_replan: int = 2) -> None:
+                 max_step_retry: int = 2, max_replan: int = 2, skill_matcher=None) -> None:
         self._client = client
         self._registry = registry
         self._model = model
@@ -118,6 +118,8 @@ class Orchestrator:
         self._budget_factory = budget_factory
         self._max_step_retry = max_step_retry
         self._max_replan = max_replan
+        # 技能路由器：按触发词把用户消息确定性匹配到技能，命中剧本注入 planner/直答（None=不启用）
+        self._skill_matcher = skill_matcher
 
     @staticmethod
     async def _plan_streaming(coro, out: dict):
@@ -167,7 +169,7 @@ class Orchestrator:
             return False   # 判不了就走完整编排（宁可多做不可少做）
 
     async def _simple_answer(self, message: str, budget=None, *, context=None, registry=None,
-                             prefer_main: bool = False):
+                             prefer_main: bool = False, skill_hint: str = ""):
         """简单问答短路：单个全能力 AgentLoop 直答，透传其事件（跳过其 RunStarted，避免重复）。
 
         承载绝大多数流量（问答/追问/考试）。context 为本轮每请求上下文（系统提示+全部指引+会话
@@ -178,6 +180,10 @@ class Orchestrator:
         需可靠地按系统注入的「[考试系统判定]…请呈现下一题」提示逐题推进；快速档小模型常漏掉
         「呈现下一题」这一步（编排器化之前考试本就跑在主模型上，属回归修复）。且主档窗口更大，
         无需按快速档再收窗口——否则携带下一题文本的最后一条消息可能被 Clamp 截断而丢题。"""
+        if skill_hint:   # 路由命中的技能剧本：作为参考前缀注入（方向3：主动挂载，不等模型 load_skill）
+            message = (
+                "【可参考的技能流程】以下是处理这类请求的推荐步骤，请据此完成本次请求"
+                f"（仍以用户实际需求为准）：\n\n{skill_hint}\n\n---\n用户请求：{message}")
         ctx = context if context is not None else ContextManager(SYNTH_SYSTEM + CLARIFY_GUIDE)
         client = self._client if prefer_main else self._fast_client
         model = self._model if prefer_main else self._fast_model
@@ -259,9 +265,22 @@ class Orchestrator:
         try:
             # 强制单循环（考试等有状态交互）优先，其次零成本短路（纯寒暄），最后才让 LLM 判简单/复杂。
             # force_simple 的场景（考试）走主模型（prefer_main）：需可靠逐题推进，快速档易漏「呈现下一题」。
+            # 技能路由（方向2+3）：按触发词匹配命中的技能剧本，注入直答（参考）与 planner（拆解蓝本）。
+            # force_simple（考试等有状态单循环）不叠加——技能剧本会干扰逐题推进。
+            skill_hint = ""
+            _matcher = getattr(self, "_skill_matcher", None)   # __new__ 构造的测试实例可能未设该属性
+            if _matcher is not None and not force_simple:
+                _matched = _matcher.match(user_message)
+                if _matched is not None:
+                    skill_hint = _matched.body
+                    # 命中即发 skill 进度事件：前端「技能」块据此展示（与 load_skill 同 scope，复用渲染）
+                    yield Progress("skill", f"已启用技能「{_matched.name}」：{_matched.description}",
+                                   status="ok")
+
             if force_simple or _obvious_simple(user_message) or await self._is_simple(user_message):
                 async for ev in self._simple_answer(user_message, budget, context=context,
-                                                    registry=registry, prefer_main=force_simple):
+                                                    registry=registry, prefer_main=force_simple,
+                                                    skill_hint=skill_hint):
                     yield ev
                 return
 
@@ -271,12 +290,13 @@ class Orchestrator:
             tools_desc = render_tool_roster(exec_reg if exec_reg is not None else registry)
             out: dict = {}   # 边规划边流式发规划思考（顶部"任务计划思考"块），先于计划
             async for ev in self._plan_streaming(
-                    self._planner.plan(user_message, recent_dialogue,
+                    self._planner.plan(user_message, recent_dialogue, skill_hint,
                                        tools_desc=tools_desc), out):
                 yield ev
             if "error" in out:
                 async for ev in self._simple_answer(user_message, budget,   # 降级
-                                                    context=context, registry=registry):
+                                                    context=context, registry=registry,
+                                                    skill_hint=skill_hint):
                     yield ev
                 return
             plan = out["plan"]

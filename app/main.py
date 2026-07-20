@@ -190,6 +190,7 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
         stats_service = StatsService(trajectory_conn=traj_conn, app_conn=stats_app_conn,
                                      memory_conn=mem_conn,
                                      memory_store=getattr(harness, "memory_store", None),
+                                     maintainer=getattr(harness, "memory_maintainer", None),
                                      price_tiers=config.model_price_tiers,
                                      price_tiers_by_model=config.model_price_tiers_by_model,
                                      price_map=config.price_map,

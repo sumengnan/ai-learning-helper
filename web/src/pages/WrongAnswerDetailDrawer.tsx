@@ -3,9 +3,10 @@ import {
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import CloseIcon from "@mui/icons-material/Close";
+import AccessTimeIcon from "@mui/icons-material/AccessTime";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
-import { fromNow } from "./statsShared";
+import { fromNow, recencyColor } from "./statsShared";
 
 export interface WrongItem {
   id: string;
@@ -68,7 +69,7 @@ export function WrongAnswerDetailDrawer({ item, onClose }: {
   item: WrongItem | null; onClose: () => void;
 }) {
   return (
-    <Dialog open={item !== null} onClose={onClose} maxWidth="sm" fullWidth
+    <Dialog open={item !== null} onClose={onClose} maxWidth="md" fullWidth
       slotProps={{ paper: { sx: { maxHeight: "85vh" } } }}>
       {item && (() => {
         const { type, stem, options, answer, explanation } = item.snapshot;
@@ -85,7 +86,7 @@ export function WrongAnswerDetailDrawer({ item, onClose }: {
             <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1 }}>
               <Chip size="small" color={typeColor(type)} label={TYPE_LABEL[type] ?? type} />
               <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                {fromNow(item.created_at)}答错
+                <Box component="span" sx={{ color: recencyColor(item.created_at) }}><AccessTimeIcon sx={{ fontSize: "1em", verticalAlign: "-0.125em", mr: 0.25 }} />{fromNow(item.created_at)}</Box>答错
               </Typography>
             </Stack>
             <Divider />

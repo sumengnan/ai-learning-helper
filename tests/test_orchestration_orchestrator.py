@@ -10,7 +10,7 @@ class FakePlanner:
         self._plans = list(plans); self._i = 0
         self._raise_on_plan = raise_on_plan
         self.seen_tools = []          # 记录每次收到的工具清单，供断言编排器确实传了
-    async def plan(self, goal, recent_dialogue="", *, tools_desc=""):
+    async def plan(self, goal, recent_dialogue="", skill_hint="", *, tools_desc=""):
         self.seen_tools.append(tools_desc)
         if self._raise_on_plan:
             raise PlannerError("boom")
@@ -49,7 +49,7 @@ def _mk(planner, critic, order, triage_simple=False, synth="最终答复", max_r
     async def fake_synth(goal, artifacts, recent_dialogue=""):
         from harness.events import TextDelta
         yield TextDelta(text=synth)
-    async def fake_simple(msg, budget=None, *, context=None, registry=None, prefer_main=False):
+    async def fake_simple(msg, budget=None, *, context=None, registry=None, prefer_main=False, skill_hint=""):
         yield RunFinished(message=__import__("harness.types", fromlist=["Message"]).Message(
             role=__import__("harness.types", fromlist=["Role"]).Role.ASSISTANT, content="简单答复"))
     orch = Orchestrator.__new__(Orchestrator)
@@ -104,6 +104,20 @@ async def test_triage_short_circuit():
     events = await _run(orch, "你好")
     assert events[-1].message.content == "简单答复"
     assert order == []   # 未进编排
+
+
+async def test_skill_match_emits_skill_progress():
+    """路由命中技能时发 scope=skill 进度事件，前端「技能」块据此展示。"""
+    from types import SimpleNamespace
+    from harness.events import Progress
+    order = []
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), order, triage_simple=True)
+    orch._skill_matcher = SimpleNamespace(match=lambda msg: SimpleNamespace(
+        name="错题精讲", description="精讲错题并举一反三", body="剧本正文"))
+    events = await _run(orch, "帮我讲讲错题")
+    skill_evs = [e for e in events if isinstance(e, Progress) and e.scope == "skill"]
+    assert skill_evs, "命中技能应发 scope=skill 进度事件"
+    assert "错题精讲" in skill_evs[0].text
 
 
 async def test_reject_then_replan_then_accept():
@@ -198,7 +212,7 @@ async def test_planner_reasoning_emitted_before_plan():
     from app.orchestration.usage_ctx import record_reasoning
 
     class RPlanner:
-        async def plan(self, goal, recent_dialogue="", *, tools_desc=""):
+        async def plan(self, goal, recent_dialogue="", skill_hint="", *, tools_desc=""):
             record_reasoning("先分析怎么拆")
             return _plan(_s("s1"))
         async def replan(self, g, p, f, *, tools_desc=""):
@@ -240,7 +254,7 @@ async def test_run_aggregates_all_usage_incl_planner_critic():
             record_usage(Usage(0, 0, 20), 0.002); return Review(accept=True, feedback="")
 
     class UPlanner:
-        async def plan(self, goal, recent_dialogue="", *, tools_desc=""):
+        async def plan(self, goal, recent_dialogue="", skill_hint="", *, tools_desc=""):
             record_usage(Usage(0, 0, 30), 0.003); return _plan(_s("s1"), _s("s2"))
         async def replan(self, g, p, f, *, tools_desc=""):
             return _plan(_s("s1"))
@@ -509,7 +523,7 @@ async def test_early_abort_cancels_pending_workers():
 async def test_run_threads_context_and_registry_to_simple_answer():
     """每请求 context/registry 应透传给简单直答（多轮/用户工具靠它）。"""
     seen = {}
-    async def cap_simple(msg, budget=None, *, context=None, registry=None, prefer_main=False):
+    async def cap_simple(msg, budget=None, *, context=None, registry=None, prefer_main=False, skill_hint=""):
         seen["ctx"], seen["reg"] = context, registry
         yield RunFinished(message=__import__("harness.types", fromlist=["Message"]).Message(
             role=__import__("harness.types", fromlist=["Role"]).Role.ASSISTANT, content="简单答复"))
@@ -542,7 +556,7 @@ async def test_run_passes_recent_dialogue_to_planner_and_synth():
     """最近对话应喂给 Planner（上下文相关拆分）与最终汇总。"""
     seen = {}
     class CapPlanner:
-        async def plan(self, goal, recent_dialogue="", *, tools_desc=""):
+        async def plan(self, goal, recent_dialogue="", skill_hint="", *, tools_desc=""):
             seen["plan_rd"] = recent_dialogue
             return _plan(_s("s1"))
         async def replan(self, g, p, f, *, tools_desc=""):
@@ -591,7 +605,7 @@ async def test_greeting_short_circuits_without_llm_triage():
         calls["triage"] += 1
         return False
     hit = {"simple": 0}
-    async def cap_simple(msg, budget=None, *, context=None, registry=None, prefer_main=False):
+    async def cap_simple(msg, budget=None, *, context=None, registry=None, prefer_main=False, skill_hint=""):
         hit["simple"] += 1
         yield RunFinished(message=Message(role=Role.ASSISTANT, content="hi"))
     orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [])
@@ -624,7 +638,7 @@ async def test_force_simple_bypasses_triage_and_planning():
     order = []
 
     class SpyPlanner:
-        async def plan(self, goal, recent_dialogue="", *, tools_desc=""):
+        async def plan(self, goal, recent_dialogue="", skill_hint="", *, tools_desc=""):
             calls["plan"] += 1
             return _plan(_s("s1"))
         async def replan(self, goal, plan, feedback, *, tools_desc=""):
@@ -635,7 +649,7 @@ async def test_force_simple_bypasses_triage_and_planning():
         return False   # 判复杂：只有真正短路才不会走到规划
 
     seen = {}
-    async def cap_simple(msg, budget=None, *, context=None, registry=None, prefer_main=False):
+    async def cap_simple(msg, budget=None, *, context=None, registry=None, prefer_main=False, skill_hint=""):
         seen["prefer_main"] = prefer_main
         yield RunFinished(message=Message(role=Role.ASSISTANT, content="简单答复"))
 
@@ -720,7 +734,7 @@ async def test_run_emits_per_model_usage():
             record_usage(Usage(0, 0, 20), 0.002, "main-model"); return Review(accept=True, feedback="")
 
     class MPlanner:
-        async def plan(self, goal, recent_dialogue="", *, tools_desc=""):
+        async def plan(self, goal, recent_dialogue="", skill_hint="", *, tools_desc=""):
             record_usage(Usage(0, 0, 30), 0.003, "main-model"); return _plan(_s("s1"))
         async def replan(self, g, p, f, *, tools_desc=""):
             return _plan(_s("s1"))

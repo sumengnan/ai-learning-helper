@@ -25,7 +25,7 @@ class _PlannerOutput(BaseModel):
 
 
 PLANNER_SYSTEM = (
-    "你是任务规划器。把用户目标拆成 3-6 个高层子任务，输出一个有向无环图（DAG）。\n"
+    "你是任务规划器。把用户目标拆成 2-10 个高层子任务，输出一个有向无环图（DAG）。\n"
     "每个子任务含：id（如 s1，全局唯一）、description（要做什么）、expected（应产出什么，"
     "供质检比对）、depends_on（依赖的子任务 id 列表，无依赖填 []）。\n"
     "能并行的子任务不要人为串联（depends_on 留空）；只有真正需要前一步产出时才建立依赖。\n"
@@ -42,7 +42,6 @@ PLANNER_SYSTEM = (
 # 提示词撑爆——规划器只需要知道"有什么、大致能干什么"，细节由执行子步自己看完整 schema。
 _ROSTER_DESC_MAX = 60
 
-
 def render_tool_roster(registry) -> str:
     """把 registry 渲染成紧凑的工具清单，供规划器知悉自己在为什么样的工具集做计划。"""
     if registry is None:
@@ -55,10 +54,16 @@ def render_tool_roster(registry) -> str:
     return "\n".join(lines)
 
 
-def _plan_user(goal: str, recent_dialogue: str = "", tools_desc: str = "") -> str:
+def _plan_user(goal: str, recent_dialogue: str = "", tools_desc: str = "",
+               skill_hint: str = "") -> str:
     ctx = f"最近对话（供理解上下文相关的请求，如指代/追问）：\n{recent_dialogue}\n\n" if recent_dialogue else ""
+    # 工具清单在技能剧本之前：剧本是「怎么做」的蓝本，清单是「能做什么」的边界，
+    # 边界先立，剧本里若提到本系统没有的手段也不至于被照抄成步骤。
     tools = f"可用工具清单：\n{tools_desc}\n\n" if tools_desc else ""
-    return f"{ctx}{tools}用户目标：\n{goal}\n\n请拆成 DAG 计划。"
+    # 路由命中的技能剧本：作为拆解蓝本注入（方向2），让 planner 按其步骤确定子任务与顺序
+    hint = (f"参考以下技能流程来拆解计划（据此确定子任务与顺序，仍要贴合用户目标）：\n{skill_hint}\n\n"
+            if skill_hint else "")
+    return f"{ctx}{tools}{hint}用户目标：\n{goal}\n\n请拆成 DAG 计划。"
 
 
 def _replan_user(goal: str, done: list[PlanStep], feedback: str, tools_desc: str = "") -> str:
@@ -84,10 +89,11 @@ class Planner:
         self._complete = complete
         self._max_retries = max_retries
 
-    async def plan(self, goal: str, recent_dialogue: str = "", *,
+    async def plan(self, goal: str, recent_dialogue: str = "", skill_hint: str = "", *,
                    tools_desc: str = "") -> Plan:
+        # skill_hint 保持位置参数（dev 的技能路由按位置传），tools_desc 只收关键字
         steps = await self._generate(
-            PLANNER_SYSTEM, _plan_user(goal, recent_dialogue, tools_desc))
+            PLANNER_SYSTEM, _plan_user(goal, recent_dialogue, tools_desc, skill_hint))
         return Plan(goal=goal, steps=steps, version=1)
 
     async def replan(self, goal: str, plan: Plan, feedback: str, *,

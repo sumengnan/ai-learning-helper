@@ -25,15 +25,35 @@ export const fmtLatency = (ms: number): string =>
 // "2026-07-11" → "07-11"
 export const shortDate = (iso: string): string => (iso || "").slice(5);
 
+const _pad2 = (n: number) => String(n).padStart(2, "0");
+
+// 绝对日期时间：YYYY-MM-DD HH:mm（本地时区）
+function fmtDateTime(d: Date): string {
+  return `${d.getFullYear()}-${_pad2(d.getMonth() + 1)}-${_pad2(d.getDate())} `
+    + `${_pad2(d.getHours())}:${_pad2(d.getMinutes())}`;
+}
+
 export function fromNow(iso?: string): string {
   if (!iso) return "";
-  const t = new Date(iso).getTime();
+  const d = new Date(iso);
+  const t = d.getTime();
   if (Number.isNaN(t)) return "";
   const s = Math.max(0, (Date.now() - t) / 1000);
   if (s < 60) return "刚刚";
   if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
   if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
-  return `${Math.floor(s / 86400)} 天前`;
+  if (s < 7 * 86400) return `${Math.floor(s / 86400)} 天前`;
+  return fmtDateTime(d);   // 超过 7 天：显示具体日期和时间，而非“N 天前”
+}
+
+// 时间远近上色：越新越「暖绿」，越旧越淡，一眼看出新鲜度（返回 MUI palette 路径，可用于 color/sx）
+export function recencyColor(iso?: string): string {
+  if (!iso) return "text.disabled";
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 86400) return "success.main";        // 一天内
+  if (s < 7 * 86400) return "info.main";        // 一周内
+  if (s < 30 * 86400) return "warning.main";    // 一月内
+  return "text.disabled";                       // 更久
 }
 
 export const cardSx = (t: Theme) => ({

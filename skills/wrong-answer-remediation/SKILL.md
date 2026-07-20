@@ -1,6 +1,7 @@
 ---
 name: wrong-answer-remediation
 description: 错题精讲与举一反三——抽取错题、按知识点归因讲解、针对薄弱点生成相似题并可入库巩固
+triggers: 错题, 我的错题, 我哪里薄弱, 讲讲错题, 针对错题, 再练几道
 ---
 # 错题精讲·举一反三
 

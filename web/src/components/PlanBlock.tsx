@@ -127,6 +127,10 @@ const SUFFIX: Partial<Record<Fate, string>> = {
   incomplete: "（未完成）",
 };
 
+// 任务步骤各行统一的最小高度（px）：让可展开步（Accordion）与纯行等高，
+// 收起态不再「一会高一会低」；内容超高（标题换行）时仍可自然撑开
+const STEP_ROW_MIN_H = 32;
+
 // 任务步骤：可折叠（issue 3）；用户停止后运行中的步骤标「已取消」（issue 2）
 // subItems：编排器 executor 的执行明细；带 id 的计划步会把对应 executor:<id> 的工具调用
 // 嵌到该步下、可逐层展开（计划步 → 执行 agent+工具 → 工具入参/返回）。
@@ -231,7 +235,7 @@ export function PlanBlock({ text, live = false, stopped = false, status, subItem
           : [];
         if (!toolRows.length) {
           return (
-            <Box key={i} sx={{ display: "flex", alignItems: "center", gap: 0.75, py: 0.5, ...sep }}>
+            <Box key={i} sx={{ display: "flex", alignItems: "center", gap: 0.75, minHeight: STEP_ROW_MIN_H, py: 0.5, ...sep }}>
               {rowContent}
             </Box>
           );
@@ -240,16 +244,19 @@ export function PlanBlock({ text, live = false, stopped = false, status, subItem
           <Accordion key={i} disableGutters elevation={0}
             sx={{ bgcolor: "transparent", "&:before": { display: "none" }, ...sep }}>
             <AccordionSummary expandIcon={<ExpandMoreIcon fontSize="small" />}
-              sx={{ minHeight: 0, px: 0,
-                    "& .MuiAccordionSummary-content": { my: 0.2, alignItems: "center", gap: 0.75 } }}>
+              sx={{ minHeight: STEP_ROW_MIN_H, px: 0,
+                    "&.Mui-expanded": { minHeight: STEP_ROW_MIN_H },
+                    "& .MuiAccordionSummary-content": { my: 0, alignItems: "center", gap: 0.75 },
+                    "& .MuiAccordionSummary-content.Mui-expanded": { my: 0 } }}>
               {rowContent}
             </AccordionSummary>
             <AccordionDetails sx={{ px: 0, pt: 0, pl: 2 }}>
               <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 0.25 }}>
-                <Typography variant="caption" color="text.disabled">执行智能体</Typography>
-                <Chip label="executor" size="small" color="secondary" variant="outlined"
+                {/* 编排器每步由一个通用「执行智能体」执行（无花名册角色名），
+                    用中文角色名替代内部 id executor:sN，避免向用户暴露黑话 */}
+                <Chip label="执行智能体" size="small" color="secondary" variant="outlined"
                   sx={{ height: 16, "& .MuiChip-label": { px: 0.5, fontSize: 10, fontWeight: 700 } }} />
-                <Typography variant="caption" sx={{ fontWeight: 600 }}>{s.id}</Typography>
+                <Typography variant="caption" color="text.disabled">执行明细</Typography>
               </Box>
               <ToolCallRows rows={toolRows} live={live} />
             </AccordionDetails>

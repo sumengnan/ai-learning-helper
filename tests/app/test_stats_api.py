@@ -157,7 +157,8 @@ def test_memory_list_and_delete_endpoint():
     store = ConversationStore(conn=app_conn)
     mem_conn = sqlite3.connect(":memory:")
     mem_conn.execute("CREATE TABLE memory_records(id TEXT, owner_id TEXT, kind TEXT, "
-                     "superseded INTEGER DEFAULT 0, text TEXT, created_at TEXT)")
+                     "mem_type TEXT DEFAULT 'semantic', superseded INTEGER DEFAULT 0, "
+                     "text TEXT, created_at TEXT)")
     fake = _FakeMemStore({})
     stats = StatsService(trajectory_conn=_traj_conn_with_run(), app_conn=app_conn,
                          memory_conn=mem_conn, memory_store=fake)

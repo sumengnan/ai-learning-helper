@@ -255,6 +255,7 @@ def build_harness(config) -> Harness:
     from app.orchestration.planner import Planner
     from app.orchestration.critic import Critic
     from app.orchestration.executor import Executor, HidingRegistry
+    from harness.skills.matcher import SkillMatcher
     from app.sandbox_manager import sandbox_guide
     from harness.reliability.budget import BudgetTracker
     _plan_complete = build_completer(client, config.model)     # 规划 + 终局 review 用主模型（判断质量要求高）
@@ -281,7 +282,9 @@ def build_harness(config) -> Harness:
         # 每次 run 新建独立预算封顶时长/token（超限带现有成果收尾）；单例并发安全
         budget_factory=lambda: BudgetTracker(config.max_tokens_budget, config.max_wall_seconds),
         max_step_retry=config.orchestrator_max_step_retry,
-        max_replan=config.orchestrator_max_replan)
+        max_replan=config.orchestrator_max_replan,
+        # 技能路由：有技能时按触发词匹配、命中剧本注入 planner/直答（无技能则 None，零行为变更）
+        skill_matcher=SkillMatcher(skill_registry) if skill_registry is not None else None)
 
     traj = TrajectoryStore(config.persistence_db_path)
     return Harness(
