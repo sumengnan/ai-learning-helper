@@ -45,7 +45,7 @@ def sandbox_guide(config) -> str:
     """
     ws = getattr(config, "sandbox_workspace", "/workspace")
     guide = (
-        f"\n\n【沙箱工作目录】run_shell / run_python / run_shell / run_node 等沙箱工具的当前工作目录（cwd）"
+        f"\n\n【沙箱工作目录】run_python / run_shell / run_node 等沙箱工具的当前工作目录（cwd）"
         f"就是 {ws}。读写文件用相对路径（相对 {ws}），或以 {ws}/ 开头的绝对路径；"
         f"生成的文件也放在这里。用户上传的附件在 {ws}/uploads/ 下。"
         f"不要使用宿主机路径（如 /Users、/home、/tmp）或其它臆想的目录——那些在沙箱里并不存在。")

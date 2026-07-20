@@ -66,7 +66,7 @@ class PlanStep(BaseModel):
 
 PLAN_SYSTEM_GUIDANCE = (
     "\n\n## 任务步骤清单\n"
-    "面对需要多步才能完成的任务时，第一步先调用 update_plan 工具，列出 2-10 个高层子任务"
+    "面对需要多步才能完成的任务时，第一步先调用 update_plan 工具，列出 3-6 个高层子任务"
     "（status 全为 pending）。之后每完成或失败一步，就再次调用 update_plan、传入完整的最新"
     "清单：已完成的置 done、正在做的置 running。若某步失败并需重试，把该步置 failed 并在其后"
     "新增一条重试步骤（running），继续执行。简单问答（打招呼、寒暄、单句事实问答）不要调用"
