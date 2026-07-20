@@ -122,17 +122,41 @@ class _FakeRegistry:
         return self._tools
 
 
-def test_render_tool_roster_takes_first_sentence_and_truncates():
+def test_render_tool_roster_keeps_head_and_constraints():
+    """首句给能力、约束句给边界。回归：只取首句会把「仅用于用户明确要求」这类护栏截掉，
+    规划器便把工具清单当菜单，给「总结一下」这种请求顺带排上存知识库、存文件。"""
     reg = _FakeRegistry([
-        _FakeTool("save_to_knowledge", "把内容作为「可检索的知识素材」存入用户知识库。"
-                                       "注意：这不是生成给用户的成品文档。"),
+        _FakeTool("save_to_knowledge", "把内容存入用户知识库。"
+                                       "仅用于用户明确要「存进知识库」的场景。"
+                                       "注意：要成品文档请改用 save_download。"),
         _FakeTool("calculator", "四则运算"),
     ])
     roster = render_tool_roster(reg)
-    assert "- save_to_knowledge：" in roster
-    assert "存入用户知识库" in roster
-    assert "这不是生成给用户的成品文档" not in roster   # 只取首句
-    assert "- calculator：四则运算" in roster
+    assert "存入用户知识库" in roster                      # 首句：能干什么
+    assert "仅用于用户明确要" in roster                     # 约束句：什么时候不该用
+    assert "请改用 save_download" in roster                # 指向的工具名不能被截半
+    assert "- calculator：四则运算" in roster               # 无约束句时不加括号
+
+
+def test_render_tool_roster_hides_internal_machinery():
+    """记忆/经验/技能装载是 AI 的内部机制，不该被规划成用户可见的任务步骤
+    （执行子步仍握有这些工具，只是不由规划器排进计划）。"""
+    reg = _FakeRegistry([
+        _FakeTool("search_knowledge", "检索用户知识库。"),
+        _FakeTool("recall_episodes", "检索过往相似任务的经验。"),
+        _FakeTool("search_memory", "检索你自己记下的长期记忆。"),
+        _FakeTool("remember", "写入长期记忆。"),
+        _FakeTool("load_skill", "装载技能。"),
+    ])
+    names = [ln.split("：")[0][2:] for ln in render_tool_roster(reg).splitlines()]
+    assert names == ["search_knowledge"]
+
+
+def test_planner_system_forbids_unrequested_side_effects():
+    """规划器必须被明确告知：有工具 != 该用它，带持久副作用的动作不能擅自排进计划。"""
+    from app.orchestration.planner import PLANNER_SYSTEM
+    assert "只规划用户要的事" in PLANNER_SYSTEM
+    assert "持久副作用" in PLANNER_SYSTEM
 
 
 def test_render_tool_roster_none_registry_is_empty():
