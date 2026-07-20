@@ -159,6 +159,29 @@ def test_planner_system_forbids_unrequested_side_effects():
     assert "持久副作用" in PLANNER_SYSTEM
 
 
+def test_planner_system_does_not_upgrade_content_request_to_file():
+    """「整理成笔记」不得被规划成文件产出。
+
+    覆盖 Bug：「整理检索到的AI资料，归纳成结构化的学习笔记」这类只要内容的请求，
+    却生成了下载文件。根因是【一个交付物只排一步】原本举例说 expected 该写成
+    「可供下载的学习笔记文件」——它为修「两步各存一份、下载区重复文件」而加，却把
+    「整理成笔记」默认成了要文件，与上一条【只规划用户要的事】（除非明确要求，
+    不得排保存文件）直接打架，而且它更具体，赢了。
+
+    expected 会原样进执行子步提示（executor._build_prompt 的「预期产出：…」），
+    还是 Critic.validate 的质检基准——写成文件，子步就必须调 save_download 才能过质检。
+    """
+    from app.orchestration.planner import PLANNER_SYSTEM
+    # 「整理成笔记」这类说法必须与「写进答复正文」绑定，而不是与文件绑定
+    assert "写进答复正文" in PLANNER_SYSTEM
+    assert "整理成笔记" in PLANNER_SYSTEM
+    # 「可供下载」只能出现在「用户明说要文件」那一支里
+    head, _, tail = PLANNER_SYSTEM.partition("可供下载")
+    assert "明说" in head[-120:] or "导出" in head[-120:], (
+        "「可供下载」必须紧跟在「用户明说要导出/存成文件」的条件之后，"
+        "不能作为「整理成笔记」的默认交付形态")
+
+
 def test_render_tool_roster_none_registry_is_empty():
     assert render_tool_roster(None) == ""
 

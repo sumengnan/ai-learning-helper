@@ -305,7 +305,8 @@ class Orchestrator:
     # ---- 主入口 ----
     async def run(self, user_message: str, verify: bool = True, *,
                   context=None, registry=None, recent_dialogue: str = "",
-                  force_simple: bool = False, run_id: str | None = None):
+                  force_simple: bool = False, in_stateful_exam: bool = False,
+                  run_id: str | None = None):
         """verify：对应前端结果校验开关。开 → 终局 Critic 把关 + 可重规划；关 → 跑完一轮
         直接汇总交付，不做终局 review/重规划（更快，但不把关）。
 
@@ -315,6 +316,12 @@ class Orchestrator:
         多步再汇总，start_exam 的原样呈现指令会被执行子步/终局汇总两层概括吞掉，且 Critic 判某步
         不合格触发重试会再次 start_exam、把考试进度重置。chat 路由在命中考试语境（注入 EXAM_GUIDE）
         时置真。
+
+        in_stateful_exam：是否**正在**逐题作答（考试会话进行中，或近期确实调过考试工具）。
+        比 force_simple 窄一档，只用来关技能路由。二者必须分开：force_simple 宽是对的
+        （「考我10道题」这类开考请求也得走单循环），但技能剧本只在真正逐题推进时才会
+        干扰；若跟着 force_simple 一起关，「讲讲我的错题」只因含「错题」二字就被判成考试
+        语境，错题精讲技能反被自己的触发词挡在门外。
 
         每请求依赖（由 chat 路由传入，使编排器可作为唯一主流程而不丢失既有能力）：
         - context：本轮上下文（系统提示+全部指引+会话历史+记忆）。用于简单直答与最终汇总——
@@ -341,16 +348,22 @@ class Orchestrator:
             # 强制单循环（考试等有状态交互）优先，其次零成本短路（纯寒暄），最后才让 LLM 判简单/复杂。
             # force_simple 的场景（考试）走主模型（prefer_main）：需可靠逐题推进，快速档易漏「呈现下一题」。
             # 技能路由（方向2+3）：按触发词匹配命中的技能剧本，注入直答（参考）与 planner（拆解蓝本）。
-            # force_simple（考试等有状态单循环）不叠加——技能剧本会干扰逐题推进。
+            # 正在逐题作答时不叠加（in_stateful_exam）——技能剧本会干扰逐题推进。刻意不用
+            # force_simple 把关：那个宽一档（含「考我10道题」这类尚未开考的请求），跟着它一起
+            # 关会让「讲讲我的错题」因含「错题」二字就丢掉错题精讲技能。命中的剧本对简单直答
+            # 同样有效（_simple_answer 收 skill_hint 作参考前缀），故这里放行不影响单循环。
             skill_hint = ""
             _matcher = getattr(self, "_skill_matcher", None)   # __new__ 构造的测试实例可能未设该属性
-            if _matcher is not None and not force_simple:
+            if _matcher is not None and not in_stateful_exam:
                 _matched = _matcher.match(user_message)
                 if _matched is not None:
                     skill_hint = _matched.body
-                    # 命中即发 skill 进度事件：前端「技能」块据此展示（与 load_skill 同 scope，复用渲染）
+                    # 命中即发 skill 进度事件：前端「技能」块据此展示（与 load_skill 同 scope，复用渲染）。
+                    # detail 带技能名（不带正文）：前端据此点开时去 /api/skills/{name} 取 md 正文——
+                    # 正文是静态资源，随事件下发会在每条命中技能的消息里各存一份 2-3KB。
+                    # 从 text 里反解技能名太脆弱（文案一改就断），故走 detail 这条稳定通道。
                     yield Progress("skill", f"已启用技能「{_matched.name}」：{_matched.description}",
-                                   status="ok")
+                                   status="ok", detail={"skill": _matched.name})
 
 
             # 执行子步的工具视图。恒隐藏 update_plan（子步调它会覆盖总计划）。
@@ -368,8 +381,11 @@ class Orchestrator:
             # 命中技能即走完整规划：技能剧本本身就是一套多步流程，该交给 planner 拆成计划步，
             # 而不是塞进单循环当「参考」——后者既不出计划步，模型还可能自己发一份没有 id 的
             # ReAct 清单，把工具块吞掉且展不开明细。
-            # force_simple（考试等有状态单循环）永远优先：它连技能路由都不做（见上方），
-            # skill_hint 恒为空，故两者不会冲突。
+            # force_simple（考试等有状态单循环）永远优先，写在 or 左边先短路。
+            # 注意它下面 skill_hint **可能非空**：技能路由的关闭条件是 in_stateful_exam（正在逐题
+            # 作答），比 force_simple 窄——「讲讲我的错题」含考试触发词故 force_simple 为真，却仍
+            # 该命中错题精讲技能。这类轮次走单循环 + 剧本作参考前缀（_simple_answer 收 skill_hint），
+            # 既不拆成多步打乱逐题推进，也不丢技能。
             # 顺带省掉一次 triage 调用：命中技能时结论已定，不必再问模型。
             if force_simple or (not skill_hint
                                 and (_obvious_simple(user_message)

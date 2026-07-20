@@ -16,6 +16,7 @@ from harness.loop.agent_loop import AgentLoop
 from harness.progress import reset_current_agent, set_current_agent
 from harness.tools.base import ToolRegistry
 
+from ..search_guidance import SEARCH_SYSTEM_GUIDANCE
 from .plan import Artifact, PlanStep
 from .usage_ctx import record_usage
 
@@ -88,11 +89,16 @@ CLARIFY_GUIDE = (
 
 
 def _system_with_guide(base: str, sandbox_guide_text: str = "") -> str:
-    """给执行子步的系统提示词补上工具偏好引导 + 信息不足先问 + 当前日期（时效/未来趋势类任务需知"现在"）。
+    """给执行子步的系统提示词补上工具偏好引导 + 检索提问方式 + 信息不足先问 + 当前日期
+    （时效/未来趋势类任务需知"现在"）。
 
     sandbox_guide_text 由装配层按配置预渲染（工作目录/镜像/联网，与主聊天路径共用 sandbox_guide，
     DRY），有沙箱时非空——让执行子步用对路径、并知道能否联网装包、该选哪个命令。"""
-    guide = (f"{base}{EXECUTOR_GUIDE}{CLARIFY_GUIDE}"
+    # SEARCH_SYSTEM_GUIDANCE 紧跟 EXECUTOR_GUIDE：后者只说「优先用搜索工具」，没说 query 该怎么写，
+    # 子步于是把用户原话整句照抄进 query。这段指引原本只拼在 harness.system_prompt 上（主聊天与
+    # 简单直答经 context 拿得到），而执行子步的 base 是裸的 config.app_system_prompt——多步任务里
+    # 联网检索恰恰归子步做，指引根本没到真正调工具的那个上下文。
+    guide = (f"{base}{EXECUTOR_GUIDE}{SEARCH_SYSTEM_GUIDANCE}{CLARIFY_GUIDE}"
              f"\n\n今日日期：{date.today().isoformat()}（涉及时效或未来趋势时以此为基准）。")
     return guide + (sandbox_guide_text or "")
 

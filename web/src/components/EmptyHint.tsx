@@ -24,7 +24,7 @@ export const SUGGESTIONS: Suggestion[] = [
   { text: "把知识库里 AI 的内容整理成学习笔记", icon: <AutoStoriesIcon />, color: "#db2777" },
   { text: "生成 5 道 AI 相关的单选题，保存到题库", icon: <QuizIcon />, color: "#7c3aed" },
   { text: "从题库抽取 5 道 AI 题，考考我", icon: <SchoolIcon />, color: "#d97706" },
-  { text: "生成一段 Python、Java 或 JS 代码执行", icon: <TerminalIcon />, color: "#475569" },
+  { text: "随机生成一段 Python 代码展示，沙箱执行", icon: <TerminalIcon />, color: "#475569" },
   { text: "根据我的错题，再出 5 道相似的题考考我", icon: <AutorenewIcon />, color: "#4f46e5" },
 ];
 

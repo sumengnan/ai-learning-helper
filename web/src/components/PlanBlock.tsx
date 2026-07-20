@@ -254,9 +254,9 @@ export function PlanBlock({ text, live = false, stopped = false, status, subItem
               <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 0.25 }}>
                 {/* 编排器每步由一个通用「执行智能体」执行（无花名册角色名），
                     用中文角色名替代内部 id executor:sN，避免向用户暴露黑话 */}
-                <Chip label="执行智能体" size="small" color="secondary" variant="outlined"
+                <Chip label={`executor智能体:${s.id}`} size="small" color="secondary" variant="outlined"
                   sx={{ height: 16, "& .MuiChip-label": { px: 0.5, fontSize: 10, fontWeight: 700 } }} />
-                <Typography variant="caption" color="text.disabled">执行明细</Typography>
+                <Typography variant="caption" color="text.disabled">工具调用</Typography>
               </Box>
               <ToolCallRows rows={toolRows} live={live} />
             </AccordionDetails>

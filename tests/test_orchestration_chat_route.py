@@ -30,7 +30,7 @@ def _sqlite_allow_cross_thread(monkeypatch):
 class FakeOrchestrator:
     """签名与真 Orchestrator.run 一致（含每请求 context/registry/recent_dialogue/force_simple），只 yield 既有 Event。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
-                  recent_dialogue="", force_simple=False, run_id=None):
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False, run_id=None):
         from harness.events import RunStarted, TextDelta, RunFinished
         from harness.types import Message, Role
         yield RunStarted(run_id="r1")
@@ -75,7 +75,7 @@ def _last_assistant(store, cid):
 class DetailOrchestrator:
     """发一条带 detail 的子代理工具进度 + 正常收尾。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
-                  recent_dialogue="", force_simple=False, run_id=None):
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False, run_id=None):
         from harness.events import RunStarted, Progress, TextDelta, RunFinished
         from harness.types import Message, Role
         yield RunStarted(run_id="r1")
@@ -119,7 +119,7 @@ class RunIdToolOrchestrator:
     """尊重 run_id 参数（真 Orchestrator 已如此），并发一个 ToolStarted/ToolFinished——
     用于验证工具埋点落到 chat 登记进 conversation_runs 的 run_id 下（否则统计滤掉）。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
-                  recent_dialogue="", force_simple=False, run_id=None):
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False, run_id=None):
         from harness.events import RunStarted, ToolStarted, ToolFinished, TextDelta, RunFinished
         from harness.types import Message, Role, ToolCall, ToolResult
         yield RunStarted(run_id=run_id or "internal")
@@ -155,7 +155,7 @@ def test_orchestrator_events_recorded_under_registered_run_id(make_mock, monkeyp
 class EmbeddingUsageOrchestrator:
     """模拟 run 期间有 embedding/子调用经 emit 上报逐模型用量（带模型名）。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
-                  recent_dialogue="", force_simple=False, run_id=None):
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False, run_id=None):
         from harness.events import RunStarted, TextDelta, RunFinished, ModelUsage
         from harness.usage import Usage
         from harness.progress import emit
@@ -194,7 +194,7 @@ def test_emit_model_usage_reaches_sse_and_trajectory(make_mock, monkeypatch):
 class FileToolOrchestrator:
     """模拟执行子步调 save_download：ToolFinished 里带〔下载ID:x〕机读标记。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
-                  recent_dialogue="", force_simple=False, run_id=None):
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False, run_id=None):
         from harness.events import RunStarted, ToolStarted, ToolFinished, RunFinished
         from harness.types import Message, Role, ToolCall, ToolResult
         yield RunStarted(run_id=run_id or "r1")
@@ -255,7 +255,7 @@ def test_no_gate_open_when_verify_off(make_mock, monkeypatch):
 class ApprovalOrchestrator:
     """模拟执行子步里工具命中危险命令时的行为：run_shell 检出后即调 request_approval。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
-                  recent_dialogue="", force_simple=False, run_id=None):
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False, run_id=None):
         from harness.events import RunStarted, RunFinished
         from harness.types import Message, Role
         from harness.approval import request_approval
@@ -290,7 +290,7 @@ def test_approval_required_reaches_sse_on_orchestrator_path(make_mock, monkeypat
 class RedoOrchestrator:
     """模拟考试轮校验未过 → 清屏重答。两版都发够 25+ 个 TextDelta，以触发去抖 flush_partial。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
-                  recent_dialogue="", force_simple=False, run_id=None):
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False, run_id=None):
         from harness.events import RunStarted, Progress, TextDelta, RunFinished
         from harness.types import Message, Role
         yield RunStarted(run_id="r1")
