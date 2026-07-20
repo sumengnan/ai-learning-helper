@@ -12,7 +12,7 @@ from harness.tools.builtins.calculator import CalculatorTool
 from harness.tools.builtins.http_tool import HttpRequestTool
 
 from .tools.plan_tool import UpdatePlanTool, PLAN_SYSTEM_GUIDANCE
-from .tools.validating import ValidatingTool, relevance_check
+from .tools.validating import ValidatingTool, relevance_check, web_content_check
 
 
 # 执行子步的隐藏工具视图 HidingRegistry 已移至 app.orchestration.executor（供编排器与装配层共用）。
@@ -83,7 +83,11 @@ def build_harness(config) -> Harness:
             config.http_allowed_domains, config.http_block_private, config.http_timeout,
             config.http_max_response_bytes, config.http_max_redirects,
             user_agent=config.http_user_agent)
-    _reg(http_tool)
+    # 联网抓取包 web_content_check：拦「抓取成功但抓到的是占位域名/空壳页」——
+    # 模型编造的网址往往落在 example.com 这类真实存在且恒返回 200 的域名上，
+    # 靠状态码和错误页判据是拦不住的。
+    _reg(ValidatingTool(http_tool, web_content_check)
+         if config.enable_step_check else http_tool)
 
     # 记忆（有 api_key 即可注册；知识库为空时检索返回空，不报错）
     if config.api_key or config.embedding_api_key:
@@ -183,7 +187,8 @@ def build_harness(config) -> Harness:
             config.http_allowed_domains, config.http_block_private,
             config.browser_nav_timeout, config.browser_wait_until, config.browser_output_max_chars,
             sandbox=sandbox)   # 有沙箱则 DNS 解析下沉到容器内（与 http_request 对称）
-        _reg(browse_tool)
+        _reg(ValidatingTool(browse_tool, web_content_check)
+             if config.enable_step_check else browse_tool)
         # 自动兜底：http_request 抓取出错或疑似被防抓/需 JS 时，改用浏览器抓取同一 URL
         http_tool.set_browser_fallback(
             lambda url: browse_tool.run(BrowseTool.Params(url=url)))
