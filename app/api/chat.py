@@ -159,6 +159,26 @@ def _needs_exam_guide(message: str, history, exam_active: bool) -> bool:
     return False
 
 
+def _in_stateful_exam(history, exam_active: bool) -> bool:
+    """是否真的**身处**有状态的考试流程中（考试会话进行中，或模型自驱的多轮练习途中）。
+
+    与 _needs_exam_guide 的分工：那个判「要不要注入考试指引」，刻意偏向命中——漏注入
+    会让「答错必存」等保证静默失效（高代价），多注入只费约 0.3% 窗口（低代价），故纯
+    触发词也算数。本函数用于代价高得多的判断（是否关掉技能路由），所以只认两个**真有
+    状态**的信号：进行中的考试会话、近期确实调过考试工具。单凭本条消息提到「错题/刷题」
+    不算——那多半是在提要求，而不是正在答题。
+
+    覆盖 Bug：「讲讲我的错题」命中考试触发词「错题」→ 技能路由被整段跳过，而
+    wrong-answer-remediation 技能的触发词恰恰就是「错题/我的错题/讲讲错题」这些词——
+    技能被自己的核心触发词挡在门外，实测只有「我哪里薄弱」这类不含考试词的说法能命中。
+    """
+    if exam_active:
+        return True
+    return any(tc.name in _EXAM_TOOLS
+               for m in (history or [])[-_EXAM_HISTORY_WINDOW:]
+               for tc in (m.tool_calls or []))
+
+
 ATTACHMENT_GUIDE = (
     "\n\n用户可能在消息中上传附件（文件内容默认不在上下文里，需要时再取）：\n"
     "- 用 list_attachments 查看本对话的附件清单（id/文件名/类型）。\n"
@@ -664,6 +684,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         # plan→execute→synthesize 会把它拆成多步再二次概括，吞掉「原样呈现第一题」，且 Critic 判某步
         # 不合格触发重试会再次 start_exam 把考试重置。故凡注入考试指引（=命中考试语境）即钉死简单直答。
         force_simple = bool(exam_guide)
+        # 技能路由的关闭条件比 force_simple 窄一档：force_simple 宽是对的（「考我10道题」
+        # 这类开考请求必须走单循环，否则第一题会被多步汇总吞掉），但它顺带把技能路由也
+        # 关了——「讲讲我的错题」只因含「错题」二字就被判成考试语境，而错题精讲技能的触发词
+        # 正是这些词，技能被自己的触发词挡在门外。技能剧本只在**正在逐题作答**时才真会干扰
+        # 推进，故这里只认真有状态的信号。
+        in_stateful_exam = _in_stateful_exam(history, exam_active)
         # 清单收尾结果 → 并进 context 列，供统计「模型多久不收一次尾 / 补救成没成」
         plan_trace: dict = {}
         ctx_trace: dict = {}      # 上下文组装结果 → finish_turn 落 context 列，供 stats 统计
@@ -952,6 +978,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         run=lambda m: harness.orchestrator.run(
                             m, verify=req.verify, context=_octx, registry=registry,
                             recent_dialogue=recent_dialogue, force_simple=force_simple,
+                            in_stateful_exam=in_stateful_exam,
                             run_id=run_id_a))   # 事件归到 conversation_runs 登记的 run_id，统计才认
                     # 告诉在途客户端「本轮开了校验门」。必须赶在编排器跑之前发：执行子步的
                     # save_download 远早于编排器那条「结果校验中…」（后者要等所有步骤跑完），

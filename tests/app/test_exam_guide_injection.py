@@ -77,3 +77,39 @@ def test_multimodal_content_does_not_crash():
     history = [Message(role=Role.USER, content=[{"type": "text", "text": "考我"}])]
     # list 型 content 不做触发词匹配（只匹配 str），这里应回退为 False 而非抛错
     assert _needs_exam_guide("写段代码", history, False) is False
+
+
+# ---- _in_stateful_exam：比 _needs_exam_guide 窄一档，专用于「是否关掉技能路由」 ----
+
+def _tool_msg(name):
+    return Message(role=Role.ASSISTANT, tool_calls=[ToolCall(id="c", name=name, arguments={})])
+
+
+def test_stateful_exam_false_for_mere_trigger_word():
+    """只是嘴上提到「错题」不算身处考试——否则错题精讲技能会被自己的触发词挡住。
+
+    覆盖 Bug：「讲讲我的错题」命中考试触发词后技能路由被跳过，实测只有「我哪里薄弱」
+    这类不含考试词的说法才命中得了 wrong-answer-remediation。
+    """
+    from app.api.chat import _in_stateful_exam, _needs_exam_guide
+    assert _needs_exam_guide("讲讲我的错题", [], False) is True    # 指引照常注入（宽）
+    assert _in_stateful_exam([], False) is False                  # 但不算有状态（窄）
+
+
+def test_stateful_exam_true_while_exam_active():
+    """考试会话进行中 → 有状态：此刻用户在逐题作答，技能剧本会打乱推进。"""
+    from app.api.chat import _in_stateful_exam
+    assert _in_stateful_exam([], True) is True
+
+
+def test_stateful_exam_true_after_exam_tool_called():
+    """近期调过考试工具 → 有状态：覆盖模型自驱的多轮练习（中间轮无触发词、无 session）。"""
+    from app.api.chat import _in_stateful_exam
+    assert _in_stateful_exam([_tool_msg("start_exam")], False) is True
+    assert _in_stateful_exam([_tool_msg("sample_questions")], False) is True
+
+
+def test_stateful_exam_ignores_unrelated_tools():
+    """非考试工具不算数，否则任何用过工具的会话都会被当成考试中。"""
+    from app.api.chat import _in_stateful_exam
+    assert _in_stateful_exam([_tool_msg("save_download"), _tool_msg("browse")], False) is False
