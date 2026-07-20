@@ -187,3 +187,64 @@ def test_emit_model_usage_reaches_sse_and_trajectory(make_mock, monkeypatch):
     traj_events = traj.load("r1")
     tmu = [e for e in traj_events if e["type"] == "ModelUsage" and e["data"].get("model") == "emb-model"]
     assert tmu and tmu[0]["data"]["usage"]["total"] == 42, "emit 的用量应落 trajectory"
+
+
+# ---------- 交付门开门信号：生成的文件在校验完成前不得显示 ----------
+
+class FileToolOrchestrator:
+    """模拟执行子步调 save_download：ToolFinished 里带〔下载ID:x〕机读标记。"""
+    async def run(self, message, verify=True, *, context=None, registry=None,
+                  recent_dialogue="", force_simple=False, run_id=None):
+        from harness.events import RunStarted, ToolStarted, ToolFinished, RunFinished
+        from harness.types import Message, Role, ToolCall, ToolResult
+        yield RunStarted(run_id=run_id or "r1")
+        yield ToolStarted(tool_call=ToolCall(id="c1", name="save_download",
+                                             arguments={"filename": "报告.md"}))
+        yield ToolFinished(result=ToolResult(
+            "c1", "已保存到下载区：报告.md（12 字节）。〔下载ID:dl1〕", is_error=False))
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content="给你报告"))
+
+
+def _chat_verify(c, h, verify):
+    cid = c.post("/api/conversations", json={}, headers=h).json()["id"]
+    with c.stream("POST", "/api/chat",
+                  json={"conversation_id": cid, "message": "写份报告", "verify": verify},
+                  headers=h) as r:
+        return [json.loads(ln[6:]) for ln in r.iter_lines()
+                if ln.startswith("data: ") and ln[6:] != "[DONE]"]
+
+
+def _kinds(events):
+    return [e["type"] if e["type"] != "Progress" else f"Progress:{e['data']['scope']}"
+            for e in events]
+
+
+def test_gate_open_precedes_any_tool_event(make_mock, monkeypatch):
+    """回归：开门信号原先只在 ReAct+交付门分支里发，而编排器已是唯一主流程，于是整套
+    「交付前盖住生成的文件」形同虚设——文件在校验开始前就显示出来了。
+
+    信号必须早于**任何**工具事件：save_download 远早于编排器那条「结果校验中…」
+    （后者要等所有步骤跑完），只断言「发过了」不足以保证不闪一下。"""
+    from app.api.chat import GATE_OPEN_KEY
+    c, _ = _client(make_mock, monkeypatch, orchestrator=FileToolOrchestrator())
+    events = _chat_verify(c, _auth(c), True)
+    kinds = _kinds(events)
+
+    assert "Progress:verify" in kinds, "编排器路径应下发开门信号"
+    first_verify = kinds.index("Progress:verify")
+    for tool_ev in ("ToolStarted", "ToolFinished"):
+        assert tool_ev in kinds and first_verify < kinds.index(tool_ev), \
+            f"开门信号必须早于 {tool_ev}，否则文件会先显示出来"
+
+    sig = next(e for e in events
+               if e["type"] == "Progress" and e["data"]["scope"] == "verify")
+    assert sig["data"]["key"] == GATE_OPEN_KEY      # 前端靠这个 key 认出它
+    assert sig["data"]["status"] == "running"
+
+
+def test_no_gate_open_when_verify_off(make_mock, monkeypatch):
+    """关校验时不得下发：编排器此时一条 verify 事件都不发，前端见不到信号即照常显示。
+    若这里误发，文件会被盖住直到流结束——比提前显示更糟（可能永远不显示）。"""
+    c, _ = _client(make_mock, monkeypatch, orchestrator=FileToolOrchestrator())
+    events = _chat_verify(c, _auth(c), False)
+    assert "Progress:verify" not in _kinds(events)

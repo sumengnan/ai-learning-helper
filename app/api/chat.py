@@ -939,6 +939,17 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             m, verify=req.verify, context=_octx, registry=registry,
                             recent_dialogue=recent_dialogue, force_simple=force_simple,
                             run_id=run_id_a))   # 事件归到 conversation_runs 登记的 run_id，统计才认
+                    # 告诉在途客户端「本轮开了校验门」。必须赶在编排器跑之前发：执行子步的
+                    # save_download 远早于编排器那条「结果校验中…」（后者要等所有步骤跑完），
+                    # 不先发这条，前端就会在校验还没开始时把生成的文件显示出来。
+                    # 这条信号原先只在下方 ReAct+交付门分支里发，而编排器已是唯一主流程，
+                    # 于是整套「交付前盖住文件」的机制形同虚设——前端遮挡条件本身是对的。
+                    # 仅 req.verify 时发：关校验的轮次编排器一条 verify 事件都不发，前端
+                    # 见不到信号即照常显示，不会出现「永远不显示」。
+                    # 刻意不落库（不走 _emit_verify）：刷新后由已存的终态记录决定展示即可；
+                    # 落库反而会在用户中途停止时留下一条永远转圈的「生成中…」。
+                    if req.verify:
+                        yield Progress("verify", "生成中…", status="running", key=GATE_OPEN_KEY)
                     async for s in _drain(_orch_src, run_id_a, model_message, True, collect):
                         yield _acc(s)
                     errored = collect["final"] is None
