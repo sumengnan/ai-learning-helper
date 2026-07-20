@@ -4,6 +4,9 @@
 技能是 Markdown，没有编译期检查，写错了只能等线上表现暴露。而技能剧本是**最贴近任务
 的指令**，与系统提示词冲突时它会赢——study-plan 曾明写「导出计划表（… + 配套题 id）」，
 直接抵消了 EXAM_GUIDE 和工具结果里「别外露 id」的两处约束。故在此钉死几条底线。
+
+（study-plan 本身已随 4 个技能一并删除，针对它的专项用例也随之移除；下面的参数化守规
+对现存及日后新增的技能继续生效。）
 """
 from pathlib import Path
 
@@ -33,10 +36,3 @@ def test_skill_does_not_write_question_ids_into_user_output(path: Path):
     banned = ("+ 配套题 id", "+ 题 id", "题目 id）", "题 id）")
     hits = [b for b in banned if b in text]
     assert not hits, f"{path.parent.name} 指示把题目 id 写进用户可见产物：{hits}"
-
-
-def test_study_plan_exports_stems_not_ids():
-    """study-plan 是该问题的原发地：导出步骤必须落在题干上，并显式禁止 id。"""
-    text = (_SKILLS_DIR / "study-plan" / "SKILL.md").read_text(encoding="utf-8")
-    assert "配套练习题的**题干**" in text, "导出计划表应配题干"
-    assert "题目 id 绝不写进计划表或回答" in text, "缺少显式禁令"
