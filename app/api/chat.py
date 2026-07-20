@@ -1011,13 +1011,6 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         yield Progress("verify", "生成中…", status="running", key=GATE_OPEN_KEY)
                     async for s in _drain(_orch_src, run_id_a, model_message, True, collect):
                         yield _acc(s)
-                    # 编排器的终局校验结论（结构化）：Progress 里只有中文文案，统计侧解不出
-                    # 「过没过 / 重答几次 / 拦在哪层」。此前 verify_trace 只在下方交付门分支
-                    # 赋值，而那条分支已是死代码——统计页的整块交付门指标因此恒为全 0。
-                    for _p in progress:
-                        if _p.get("key") == VERIFY_TRACE_KEY and _p.get("detail"):
-                            verify_trace = _p["detail"]
-                            break
                     errored = collect["final"] is None
                     if not errored:
                         delivered = collect["final"]
@@ -1283,6 +1276,14 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 final_content = delivered or "".join(parts) or "（本轮未完成）"
                 _usage = collect.get("usage") or {}
                 _elapsed = round((time.time() - turn_start) * 1000)
+                # 编排器的终局校验结论（结构化）：Progress 里只有给人看的中文，统计侧解不出
+                # 「过没过 / 重答几次 / 拦在哪层」。放在落库前提取，不依赖上游分支的执行顺序。
+                # 交付门分支若已自行填过 verify_trace，则不覆盖（那条路有更细的逐层记录）。
+                if verify_trace is None:
+                    for _p in progress or []:
+                        if _p.get("key") == VERIFY_TRACE_KEY and _p.get("detail"):
+                            verify_trace = _p["detail"]
+                            break
                 store.finish_turn(req.conversation_id, turn_run_id, final_content,
                                   steps=steps or None, progress=progress or None,
                                   status=status, sources=delivered_sources or None,
