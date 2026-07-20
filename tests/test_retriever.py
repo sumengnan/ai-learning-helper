@@ -282,3 +282,18 @@ async def test_rerank_failure_does_not_empty_the_library(mock_embedder):
     hits = await _retriever(b, emb, cfg, NoOpReranker()).retrieve(   # 无分数 = 降级
         "查询", MemoryFilter(owner_id="u1"), k=10)
     assert len(hits) == 2, "精排挂掉时必须放行全部，不能整库判空"
+
+
+async def test_all_dropped_is_logged_not_silent(mock_embedder, caplog):
+    """全滤光时必须留一条警告：「查询确实无关」与「换模型后阈值失准」结果一模一样，
+    都是知识库看起来空的。不记一笔，后者会静默劣化成「资料没存进去」。"""
+    import logging
+    emb = mock_embedder(dimension=64)
+    b = await _two_doc_backend(emb)
+    cfg = RetrievalConfig(use_keyword=False, use_mmr=False, rerank_min_score=0.35)
+    with caplog.at_level(logging.WARNING, logger="harness.memory.retriever"):
+        hits = await _retriever(b, emb, cfg,
+                                _ScoringReranker({"hi": 0.25, "lo": 0.10})).retrieve(
+            "厨具", MemoryFilter(owner_id="u1"), k=10)
+    assert hits == []
+    assert any("相关性下限" in r.getMessage() for r in caplog.records), "全部滤光必须留痕"
