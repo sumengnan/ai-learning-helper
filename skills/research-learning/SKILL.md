@@ -15,7 +15,6 @@ triggers: 搞懂最新, 查一下, 最新进展, 联网查, 最近有什么进�
 4. **入库**：`save_to_knowledge(title, text)` 把整理后的调研笔记存入知识库，日后可检索复用。
 5. **出题固化**：`generate_questions(topic=主题)` 就这份新知识库内容出几道题入库，或 `add_questions` 现编，帮用户把「读过」变「记住」。
 6. **导出（可选）**：`save_download` 导出调研报告/笔记文件。
-7. **收尾**：`unload_skill("research-learning")` 释放上下文。
 
 ## 注意
 - 时效性内容必须联网，别用可能过时的记忆硬答；信息带上来源。

@@ -12,12 +12,11 @@ triggers: 整理这份, 变成能学, 据此出题, 消化资料, 把这份资�
 1. **读料**：`list_attachments` 看有哪些附件，`read_attachment(attachment_id)` 读取用户要处理的那份。
 2. **提炼结构**：通读后梳理出**知识点大纲**（章节/主题 → 要点），点出重点与难点；太长的资料分主题处理。
 3. **入知识库**：`save_to_knowledge(title, text)` 把整理后的要点存入知识库（供以后检索与 grounding）。按主题分条存，标题清晰便于日后检索。
-4. **出题入库**：对每个核心知识点 `generate_questions(topic=知识点, count=n)` 从知识库出题并自动入题库（自带去重）；知识库覆盖不到的补充点用 `add_questions(questions=[...])` 现编入库。记住返回末尾 `〔题目ID:...〕` 里的 id。
+4. **出题入库**：对每个核心知识点 `generate_questions(topic=知识点, count=n)` 从知识库出题并自动入题库（**不去重**，每个知识点只调一次，别对同一主题反复调）；知识库覆盖不到的补充点用 `add_questions(questions=[...])` 现编入库（与题库已有题自动去重）。记住返回末尾 `〔题目ID:...〕` 里的 id。
 5. **复习提纲**：`save_download` 导出一份 Markdown 复习提纲（大纲 + 重点 + 「已入库 N 道题」提示），方便用户离线复习。
 6. **交接**：告诉用户「资料已入库、出了 N 道题」，并提示可以「就考这几道」（用 `start_exam(source="ids", question_ids=[...])`）或之后「讲讲某个点」。
-7. **收尾**：`unload_skill("material-to-knowledge")` 释放上下文。
 
 ## 注意
 - 入库前先提炼结构，别把原文整段灌进去——知识库要的是「可检索的要点」。
-- 出题走 `generate_questions`/`add_questions`（自带去重），不要手动重复添加同题。
+- 出题走 `generate_questions`/`add_questions`，不要用别的方式塞题。只有 `add_questions` 与题库已有题去重；`generate_questions` 不去重，同一主题别反复调用。
 - 资料很长时分主题多次 `save_to_knowledge`，每条标题独立清晰。
