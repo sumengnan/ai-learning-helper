@@ -15,7 +15,7 @@ class FakePlanner:
         if self._raise_on_plan:
             raise PlannerError("boom")
         p = self._plans[0]; return p
-    async def replan(self, goal, plan, feedback, *, tools_desc=""):
+    async def replan(self, goal, plan, feedback, skill_hint="", *, tools_desc=""):
         self.seen_tools.append(tools_desc)
         self._i += 1
         return self._plans[min(self._i, len(self._plans) - 1)]
@@ -215,7 +215,7 @@ async def test_planner_reasoning_emitted_before_plan():
         async def plan(self, goal, recent_dialogue="", skill_hint="", *, tools_desc=""):
             record_reasoning("先分析怎么拆")
             return _plan(_s("s1"))
-        async def replan(self, g, p, f, *, tools_desc=""):
+        async def replan(self, g, p, f, skill_hint="", *, tools_desc=""):
             return _plan(_s("s1"))
 
     orch = _mk(RPlanner(), FakeCritic(reviews=(True,)), [])
@@ -256,7 +256,7 @@ async def test_run_aggregates_all_usage_incl_planner_critic():
     class UPlanner:
         async def plan(self, goal, recent_dialogue="", skill_hint="", *, tools_desc=""):
             record_usage(Usage(0, 0, 30), 0.003); return _plan(_s("s1"), _s("s2"))
-        async def replan(self, g, p, f, *, tools_desc=""):
+        async def replan(self, g, p, f, skill_hint="", *, tools_desc=""):
             return _plan(_s("s1"))
 
     async def usynth(goal, arts, recent_dialogue=""):
@@ -559,7 +559,7 @@ async def test_run_passes_recent_dialogue_to_planner_and_synth():
         async def plan(self, goal, recent_dialogue="", skill_hint="", *, tools_desc=""):
             seen["plan_rd"] = recent_dialogue
             return _plan(_s("s1"))
-        async def replan(self, g, p, f, *, tools_desc=""):
+        async def replan(self, g, p, f, skill_hint="", *, tools_desc=""):
             return _plan(_s("s1"))
     async def cap_synth(goal, artifacts, recent_dialogue=""):
         seen["synth_rd"] = recent_dialogue
@@ -641,7 +641,7 @@ async def test_force_simple_bypasses_triage_and_planning():
         async def plan(self, goal, recent_dialogue="", skill_hint="", *, tools_desc=""):
             calls["plan"] += 1
             return _plan(_s("s1"))
-        async def replan(self, goal, plan, feedback, *, tools_desc=""):
+        async def replan(self, goal, plan, feedback, skill_hint="", *, tools_desc=""):
             return _plan(_s("s1"))
 
     async def counting_triage(msg):
@@ -736,7 +736,7 @@ async def test_run_emits_per_model_usage():
     class MPlanner:
         async def plan(self, goal, recent_dialogue="", skill_hint="", *, tools_desc=""):
             record_usage(Usage(0, 0, 30), 0.003, "main-model"); return _plan(_s("s1"))
-        async def replan(self, g, p, f, *, tools_desc=""):
+        async def replan(self, g, p, f, skill_hint="", *, tools_desc=""):
             return _plan(_s("s1"))
 
     async def msynth(goal, arts, recent_dialogue=""):
@@ -791,3 +791,48 @@ async def test_planner_receives_exec_registry_roster_without_update_plan():
     roster = planner.seen_tools[0]
     assert "save_to_knowledge" in roster
     assert "update_plan" not in roster        # 执行子步看不到它，规划器也不该看到
+
+
+# ---------- 命中技能后不重拆步骤 ----------
+
+class _FakeMatched:
+    name = "联网调研"
+    description = "搜集资料并整理"
+    body = "1. 搜索  2. 筛选  3. 汇总"
+
+
+class _FakeMatcher:
+    def match(self, msg):
+        return _FakeMatched()
+
+
+async def test_skill_hit_does_not_replan_on_review_reject():
+    """命中技能时，终局校验不通过也不重新拆解——技能剧本就是既定流程，重拆等于推翻它，
+    用户会看到步骤中途凭空变样。单步做砸由 max_step_retry 在原步骤内兜住，与此无关。"""
+    planner = FakePlanner([_plan(_s("s1")), _plan(_s("s2"))])
+    orch = _mk(planner, FakeCritic(validate_ok=True, reviews=(False, True)), [])
+    orch._skill_matcher = _FakeMatcher()
+    events = await _run(orch)
+
+    # replan 未被调用：FakePlanner 的第二份计划（s2）不该出现
+    assert planner._i == 0, "命中技能不应触发重规划"
+    plans = [e for e in events if isinstance(e, Progress) and e.scope == "plan"]
+    assert all("s2" not in (p.text or "") for p in plans), "步骤被重新拆解了"
+    assert isinstance(events[-1], RunFinished)          # 仍带现有产物定稿
+    assert any(isinstance(e, Progress) and e.scope == "verify"
+               and "不重新拆解步骤" in (e.text or "") for e in events)
+
+
+async def test_no_skill_still_replans_on_reject():
+    """反向：没命中技能时，重规划照旧——别把这条护栏做成全局禁用重规划。"""
+    planner = FakePlanner([_plan(_s("s1")), _plan(_s("s2"))])
+    orch = _mk(planner, FakeCritic(validate_ok=True, reviews=(False, True)), [])
+    await _run(orch)
+    assert planner._i == 1, "无技能时应正常重规划"
+
+
+async def test_replan_receives_skill_hint():
+    """防漏传：replan 的签名要能接住技能剧本，否则新计划在「不知道有技能」的前提下重拆。"""
+    import inspect
+    from app.orchestration.planner import Planner
+    assert "skill_hint" in inspect.signature(Planner.replan).parameters

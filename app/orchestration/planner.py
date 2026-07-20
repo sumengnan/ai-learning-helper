@@ -133,10 +133,15 @@ def _plan_user(goal: str, recent_dialogue: str = "", tools_desc: str = "",
     return f"{ctx}{tools}{hint}用户目标：\n{goal}\n\n请拆成 DAG 计划。"
 
 
-def _replan_user(goal: str, done: list[PlanStep], feedback: str, tools_desc: str = "") -> str:
+def _replan_user(goal: str, done: list[PlanStep], feedback: str, tools_desc: str = "",
+                 skill_hint: str = "") -> str:
     done_txt = "\n".join(f"- [{s.id}] {s.description}（已完成）" for s in done) or "（无）"
     tools = f"可用工具清单：\n{tools_desc}\n\n" if tools_desc else ""
-    return (f"{tools}用户目标：\n{goal}\n\n已完成的步骤：\n{done_txt}\n\n"
+    # 重规划同样要带上技能剧本：漏了它，新计划会在「不知道有技能」的前提下重拆，
+    # 步骤凭空变样。（编排器在命中技能时本就不走重规划，这里是防止其它调用路径漏传。）
+    hint = (f"参考以下技能流程来拆解计划（据此确定子任务与顺序，仍要贴合用户目标）：\n{skill_hint}\n\n"
+            if skill_hint else "")
+    return (f"{tools}{hint}用户目标：\n{goal}\n\n已完成的步骤：\n{done_txt}\n\n"
             f"质检反馈（上一版计划的不足）：\n{feedback}\n\n"
             "请只为尚未完成的部分重新规划，输出新的 DAG 计划（不要重复已完成步骤）。")
 
@@ -173,11 +178,11 @@ class Planner:
             PLANNER_SYSTEM, _plan_user(goal, recent_dialogue, tools_desc, skill_hint))
         return Plan(goal=goal, steps=_scrub(steps, tools_desc), version=1)
 
-    async def replan(self, goal: str, plan: Plan, feedback: str, *,
+    async def replan(self, goal: str, plan: Plan, feedback: str, skill_hint: str = "", *,
                      tools_desc: str = "") -> Plan:
         done = [s for s in plan.steps if s.status == "done"]
         steps = await self._generate(
-            PLANNER_SYSTEM, _replan_user(goal, done, feedback, tools_desc))
+            PLANNER_SYSTEM, _replan_user(goal, done, feedback, tools_desc, skill_hint))
         return Plan(goal=goal, steps=_scrub(steps, tools_desc), version=plan.version + 1)
 
     async def _generate(self, system: str, user: str) -> list[PlanStep]:
