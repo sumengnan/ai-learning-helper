@@ -215,22 +215,36 @@ class ListQuestionsTool(Tool):
 class DeleteQuestionsTool(Tool):
     name = "delete_questions"
     description = (
-        "从用户题库中删除指定题目（按 question_id）。删除不可恢复，"
-        "调用前必须先向用户复述将删除的题目并取得确认。"
+        "请求从用户题库中删除指定题目（按 question_id）。"
+        "本工具**不会立即删除**：它只登记一条待确认操作，由用户在界面上点「确认删除」后才真正执行。"
+        "你只需照常调用，然后如实告诉用户「已列出待删题目，请确认」，不要谎称已经删掉，"
+        "也不要反复追问——确认动作在界面上完成，不在对话里。"
         "question_id 可先用 list_questions 获取。")
 
     class Params(BaseModel):
         question_ids: _IdList
 
-    def __init__(self, question_store, user_id: str) -> None:
+    def __init__(self, question_store, user_id: str, pending_store=None,
+                 conv_id: str | None = None) -> None:
         self._store = question_store
         self._uid = user_id
+        self._pending = pending_store
+        self._conv = conv_id
 
     async def run(self, params: "DeleteQuestionsTool.Params") -> str:
-        before = {q["id"] for q in self._store.list(self._uid)}
-        hit = [i for i in params.question_ids if i in before]
-        self._store.delete_many(self._uid, hit)
-        return f"已从题库删除 {len(hit)} 道题。"
+        hit = self._store.get_many(self._uid, list(params.question_ids))
+        if not hit:
+            return "没有匹配的题目（id 不存在或不属于你），未登记任何删除。"
+        if self._pending is None:      # 未接确认机制（老测试/精简装配）：退回直接删除
+            self._store.delete_many(self._uid, [q["id"] for q in hit])
+            return f"已从题库删除 {len(hit)} 道题。"
+        pid = self._pending.create(
+            self._uid, self._conv, "delete_questions",
+            {"ids": [q["id"] for q in hit],
+             "labels": [(q.get("stem") or "")[:_STEM_MAX] for q in hit]})
+        return (f"已登记删除请求，等待用户确认（{len(hit)} 道）：\n"
+                f"{_stem_list([q.get('stem', '') for q in hit])}\n"
+                f"尚未删除，用户在界面上确认后才会执行。〔待确认:{pid}〕")
 
 
 class SampleWrongAnswersTool(Tool):
@@ -257,21 +271,34 @@ class SampleWrongAnswersTool(Tool):
 class DeleteWrongAnswersTool(Tool):
     name = "delete_wrong_answers"
     description = (
-        "从用户「错题集」删除指定错题（按 wrong_answer_id，即 sample_wrong_answers 返回的 id）。"
-        "删除不可恢复，调用前必须先向用户复述将删除的题目并取得确认。")
+        "请求从用户「错题集」删除指定错题（按 wrong_answer_id，即 sample_wrong_answers 返回的 id）。"
+        "本工具**不会立即删除**：它只登记一条待确认操作，由用户在界面上点「确认删除」后才真正执行。"
+        "你只需照常调用，然后如实告诉用户「已列出待删错题，请确认」，不要谎称已经删掉。")
 
     class Params(BaseModel):
         wrong_answer_ids: _IdList
 
-    def __init__(self, wrong_store, user_id: str) -> None:
+    def __init__(self, wrong_store, user_id: str, pending_store=None,
+                 conv_id: str | None = None) -> None:
         self._store = wrong_store
         self._uid = user_id
+        self._pending = pending_store
+        self._conv = conv_id
 
     async def run(self, params: "DeleteWrongAnswersTool.Params") -> str:
-        before = {r["id"] for r in self._store.list(self._uid)}
-        hit = [i for i in params.wrong_answer_ids if i in before]
-        self._store.delete_many(self._uid, hit)
-        return f"已从错题集删除 {len(hit)} 道题。"
+        want = set(params.wrong_answer_ids)
+        hit = [r for r in self._store.list(self._uid) if r["id"] in want]
+        if not hit:
+            return "没有匹配的错题（id 不存在或不属于你），未登记任何删除。"
+        stems = [((r.get("snapshot") or {}).get("stem") or "") for r in hit]
+        if self._pending is None:      # 未接确认机制：退回直接删除
+            self._store.delete_many(self._uid, [r["id"] for r in hit])
+            return f"已从错题集删除 {len(hit)} 道题。"
+        pid = self._pending.create(
+            self._uid, self._conv, "delete_wrong_answers",
+            {"ids": [r["id"] for r in hit], "labels": [s[:_STEM_MAX] for s in stems]})
+        return (f"已登记删除请求，等待用户确认（{len(hit)} 道）：\n{_stem_list(stems)}\n"
+                f"尚未删除，用户在界面上确认后才会执行。〔待确认:{pid}〕")
 
 
 class StartExamTool(Tool):
