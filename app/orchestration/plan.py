@@ -79,6 +79,16 @@ _SAVE_KB_RE = re.compile(
 # 用户目标里出现这些词才算「要求过」，此时上面的步骤是正当的
 _KB_REQUESTED_RE = re.compile(r"知识库|收藏|存起来|入库|存档|保存下来")
 
+# 「引用前置产出却没连依赖」的识别。执行子步只有在 depends_on 非空时才会收到前置步骤的产出
+# （executor._build_prompt 的 `if deps:`），否则手里空空。一个写着「根据搜索结果整合」的步骤
+# 若依赖为空，子步拿不到任何搜索结果，就会自己再搜一遍——既浪费往返，也和前一步的结果对不上。
+# 只匹配明确指向「前面已经拿到的东西」的措辞；「搜索最新资料」这类自身即检索的步骤不算。
+_NEEDS_DEPS_RE = re.compile(
+    r"根据(?:搜索|检索|收集|调研|上述|前述|前面|以上)"
+    r"|基于(?:搜索|检索|收集|上一步|前置|前面|以上)"
+    r"|(?:搜索|检索|收集|调研)(?:结果|到的(?:信息|资料|内容))"
+    r"|(?:前置|前一步|上一步|前面步骤|各步)(?:的)?产出")
+
 
 def validate_plan(steps: list[PlanStep], goal: str = "") -> str | None:
     """校验 DAG 合法性。返回人读错误串；合法返回 None。
@@ -95,6 +105,11 @@ def validate_plan(steps: list[PlanStep], goal: str = "") -> str | None:
             return (f"步骤 {s.id}「{s.description[:30]}」要把内容写入用户知识库，但用户并没有"
                     "要求这么做。知识库是用户自己整理的资料库，擅自写入会污染他的检索结果、"
                     "事后还得手动清理。请删掉这一步：用户只要一份答复或文件时，交付答复/文件即可。")
+        if not s.depends_on and _NEEDS_DEPS_RE.search(f"{s.description} {s.expected}"):
+            return (f"步骤 {s.id}「{s.description[:30]}」要用前面步骤的产出，但 depends_on 是空的。"
+                    "执行时只有依赖里的步骤产出会被传给它，依赖为空它就什么也拿不到，"
+                    "只能自己重新检索一遍——既浪费往返，结果也和前一步对不上。"
+                    "请把它真正依赖的步骤 id 填进 depends_on。")
         if _ASK_USER_RE.search(f"{s.description} {s.expected}"):
             return (f"步骤 {s.id}「{s.description[:30]}」是在向用户提问，但计划会自主跑完、"
                     "没有与用户对话的通道，这一步永远得不到回答。请删掉它：缺少的非关键信息"

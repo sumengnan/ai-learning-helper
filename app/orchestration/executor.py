@@ -90,9 +90,14 @@ def _system_with_guide(base: str, sandbox_guide_text: str = "") -> str:
 def _build_prompt(step: PlanStep, deps: dict[str, Artifact], hint: str = "") -> str:
     lines = [f"你的子任务：{step.description}", f"预期产出：{step.expected}"]
     if deps:
-        lines.append("\n已知前置步骤的产出（供参考，不要重复其工作）：")
+        # 措辞刻意强硬：上面的 EXECUTOR_GUIDE 在推「优先用联网搜索工具」，两者方向相反。
+        # 原文只说「供参考」，压不过那股拉力——子步照样把前置结果晾在一边自己重搜一遍，
+        # 既多一轮往返，产出也和前一步对不上。
+        lines.append("\n前置步骤已经取得以下结果，**直接基于它们**完成本步：")
         for dep_id, art in deps.items():
             lines.append(f"[{dep_id}] {art.summary}")
+        lines.append("以上结果即为本步的输入，默认已经够用。不要为「再确认一遍」重复检索；"
+                     "只有当它们明显不足以完成本步时，才另行补充检索。")
     if hint:
         lines.append(f"\n上次尝试未通过质检，请改进：{hint}")
     # 节流引导：减少每步的联网/工具往返（延迟主要来自这些串行调用）
