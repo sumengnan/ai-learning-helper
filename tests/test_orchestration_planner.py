@@ -1,7 +1,8 @@
 import json
 import pytest
 
-from app.orchestration.planner import Planner, PlannerError, render_tool_roster
+from app.orchestration.planner import (
+    PLANNER_SYSTEM, Planner, PlannerError, render_tool_roster, roster_names, strip_tool_names)
 from app.orchestration.plan import Plan
 
 
@@ -184,3 +185,69 @@ async def test_replan_prompt_carries_tool_roster():
     plan = Plan(goal="g", steps=[], version=1)
     await Planner(complete).replan("g", plan, "反馈", tools_desc="- save_to_knowledge：存知识库")
     assert "save_to_knowledge" in calls["users"][0]
+
+
+# —— 步骤描述不得暴露工具名（前端「任务步骤」块直接渲染 description）——
+
+def test_strip_tool_names_removes_mcp_identifier_with_verb():
+    out = strip_tool_names("使用 mcp__websearch__bailian_web_search 搜索最新 AI 资讯",
+                           {"mcp__websearch__bailian_web_search"})
+    assert out == "搜索最新 AI 资讯"
+
+
+def test_strip_tool_names_removes_parenthetical_mention():
+    out = strip_tool_names("保存到知识库（使用 save_to_knowledge）", {"save_to_knowledge"})
+    assert out == "保存到知识库"
+
+
+def test_strip_tool_names_strips_unknown_mcp_style_names():
+    """名字带 __ 的一律视为工具标识符，即使不在清单里（MCP 远程工具随时增删）。"""
+    out = strip_tool_names("调用 mcp__foo__bar 抓取页面", set())
+    assert out == "抓取页面"
+
+
+def test_strip_tool_names_keeps_plain_text_untouched():
+    text = "整理错题并归纳薄弱知识点"
+    assert strip_tool_names(text, {"save_to_knowledge"}) == text
+
+
+def test_strip_tool_names_does_not_eat_normal_english_words():
+    text = "总结 AI 资讯要点"
+    assert strip_tool_names(text, {"save_to_knowledge"}) == text
+
+
+def test_roster_names_parses_tool_names():
+    roster = render_tool_roster(_FakeRegistry([
+        _FakeTool("save_to_knowledge", "把内容存入用户知识库。"),
+        _FakeTool("calculator", "四则运算。")]))
+    assert roster_names(roster) == {"save_to_knowledge", "calculator"}
+
+
+async def test_plan_scrubs_tool_names_from_step_description():
+    payload = json.dumps({"steps": [
+        {"id": "s1", "description": "使用 save_to_knowledge 存入知识库",
+         "expected": "已入库", "depends_on": []}]})
+    complete, _ = _complete_capturing(payload)
+    roster = render_tool_roster(_FakeRegistry([
+        _FakeTool("save_to_knowledge", "把内容存入用户知识库。")]))
+    plan = await Planner(complete).plan("保存到知识库", tools_desc=roster)
+    assert plan.steps[0].description == "存入知识库"
+
+
+async def test_replan_scrubs_tool_names_from_step_description():
+    payload = json.dumps({"steps": [
+        {"id": "s1", "description": "调用 mcp__websearch__bailian_web_search 搜资讯",
+         "expected": "拿到资讯", "depends_on": []}]})
+    complete, _ = _complete_capturing(payload)
+    plan = Plan(goal="g", steps=[], version=1)
+    out = await Planner(complete).replan("g", plan, "反馈", tools_desc="")
+    assert out.steps[0].description == "搜资讯"
+
+
+def test_planner_system_forbids_writing_tool_names():
+    assert "不要写工具名" in PLANNER_SYSTEM
+
+
+def test_planner_system_forbids_splitting_produce_and_save():
+    """内容加工与保存文件不可拆成两步——拆了两步都会各存一份。"""
+    assert "不要拆成两步" in PLANNER_SYSTEM

@@ -40,6 +40,47 @@ def strip_citations(text: str) -> str:
     return _CITATION_RE.sub("", text)
 
 
+# 编排器内部的步骤标记 [s1]/[s12]…（计划步 id）。与来源角标 [n] 形似但来路完全不同：
+# 它来自执行子步/汇总提示词里对前置产出的标注，模型复用内容时会连前缀一起抄出来。
+# 连同紧邻的前后空格一起吃掉：漏出来的形态是「[s2] # 标题」，只删记号会留下前导空格。
+_STEP_MARKER_RE = re.compile(r"[ \t]*\[s\d+\][ \t]*")
+
+
+# 围栏代码块 ```…``` 与行内代码 `…`：剥角标时整段跳过。
+# 代码里的 arr[1]/nums[0] 形态与角标 [n] 完全一致，_CITATION_RE 的前导空格又是可选的，
+# 不跳过就会把 arr[1] 削成 arr——导出的代码笔记直接被改坏。
+_CODE_SPAN_RE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
+
+
+def _outside_code(text: str, sub) -> str:
+    """只对代码块之外的部分做替换，代码原样保留。"""
+    out, last = [], 0
+    for m in _CODE_SPAN_RE.finditer(text):
+        out.append(sub(text[last:m.start()]))
+        out.append(m.group(0))
+        last = m.end()
+    out.append(sub(text[last:]))
+    return "".join(out)
+
+
+def strip_citations_outside_code(text: str) -> str:
+    """剥离正文角标 [n]，但跳过代码块（见 _outside_code）。用于交付给用户的成品文件。"""
+    if not text:
+        return text
+    return _outside_code(text, lambda s: _CITATION_RE.sub("", s))
+
+
+def strip_step_markers(text: str) -> str:
+    """去掉漏进正文的内部步骤标记 [sN]。
+
+    这是编排管道的内部记号，对用户毫无意义。根因已在 _build_prompt / _synth_user 里
+    改掉（id 不再紧贴正文），这里是交付给用户前的兜底——成品文件不该带管道残留。
+    """
+    if not text:
+        return text
+    return _STEP_MARKER_RE.sub("", text)
+
+
 def _domain(url: str) -> str:
     try:
         host = urlparse(url).hostname or url

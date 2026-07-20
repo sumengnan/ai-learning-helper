@@ -105,7 +105,10 @@ def _build_prompt(step: PlanStep, deps: dict[str, Artifact], hint: str = "") -> 
         # 既多一轮往返，产出也和前一步对不上。
         lines.append("\n前置步骤已经取得以下结果，**直接基于它们**完成本步：")
         for dep_id, art in deps.items():
-            lines.append(f"[{dep_id}] {art.summary}")
+            # 步骤 id 单独成行、与正文隔开：曾写成 f"[{dep_id}] {art.summary}"，前缀紧贴
+            # 正文首行（如「[s2] # AI发展与应用总结」），模型复用这份内容时把「[s2] 」
+            # 一起抄进产出，最终漏进用户下载的文件开头。
+            lines.append(f"—— 步骤 {dep_id} 的产出 ——\n{art.summary}\n—— 以上为 {dep_id} ——")
         lines.append("以上结果即为本步的输入，默认已经够用。不要为「再确认一遍」重复检索；"
                      "只有当它们明显不足以完成本步时，才另行补充检索。")
     if hint:

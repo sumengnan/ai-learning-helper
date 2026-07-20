@@ -10,6 +10,7 @@ from harness.persistence.serialize import message_from_dict, message_to_dict
 from harness.types import Message, Role, ToolCall
 
 from .db import migrate, open_db
+from .markers import strip_hidden_markers
 
 
 def _load_steps(steps_json: str) -> list[dict]:
@@ -68,8 +69,11 @@ class ConversationStore:
                     out.append(Message(role=Role.ASSISTANT, tool_calls=[
                         ToolCall(id=cid, name=st.get("tool", ""),
                                  arguments=st.get("args") or {})]))
+                    # 剥掉〔下载ID:x〕〔知识ID:x〕：落库的 steps 带着它们，回放就等于
+                    # 把当前轮特意挡住的 id 从后门递给模型，它照样会抄进正文
                     out.append(Message(role=Role.TOOL, tool_call_id=cid,
-                                       content=str(st.get("result") or "")))
+                                       content=strip_hidden_markers(
+                                           str(st.get("result") or ""))))
             out.append(message_from_dict({
                 "role": role, "content": content,
                 "tool_calls": json.loads(tool_calls) if tool_calls else [],

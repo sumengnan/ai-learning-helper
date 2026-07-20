@@ -162,10 +162,14 @@ async def test_thinking_adapted_to_deepseek_enabled(monkeypatch):
         reset_extra_body_override(tok)
 
 
+_QWEN_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+
 async def test_thinking_kept_as_enable_thinking_for_qwen(monkeypatch):
-    # 百炼(dashscope) 端点原生认 enable_thinking，保持不变、不翻译成 thinking
-    cfg = HarnessConfig(api_key="k",
-                        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    # 百炼(dashscope) 端点原生认 enable_thinking，保持不变、不翻译成 thinking。
+    # model 必须显式钉死：_adapt_thinking 模型名优先判厂商，不给就会读进 .env 的
+    # HARNESS_MODEL（开发机可能是 deepseek），断言随环境漂移。
+    cfg = HarnessConfig(api_key="k", model="qwen-turbo", base_url=_QWEN_URL,
                         llm_extra_body={"enable_thinking": False})
     client = OpenAICompatibleClient(cfg)
     events = [_FakeEvent(_FakeDelta(content="hi"))]
@@ -179,7 +183,9 @@ async def test_thinking_kept_as_enable_thinking_for_qwen(monkeypatch):
 
 
 async def test_extra_body_passed_when_configured(monkeypatch):
-    cfg = HarnessConfig(api_key="k", llm_extra_body={"enable_thinking": False})
+    # 厂商钉死为 Qwen：本例验证「非 DeepSeek 端点原样透传」，厂商若由 .env 决定则断言无意义
+    cfg = HarnessConfig(api_key="k", model="qwen-turbo", base_url=_QWEN_URL,
+                        llm_extra_body={"enable_thinking": False})
     client = OpenAICompatibleClient(cfg)
     events = [_FakeEvent(_FakeDelta(content="hi"))]
 
@@ -196,7 +202,8 @@ async def test_extra_body_override_merges_over_config(monkeypatch):
         reset_extra_body_override,
         set_extra_body_override,
     )
-    cfg = HarnessConfig(api_key="k", llm_extra_body={"a": 1})
+    cfg = HarnessConfig(api_key="k", model="qwen-turbo", base_url=_QWEN_URL,
+                        llm_extra_body={"a": 1})
     client = OpenAICompatibleClient(cfg)
     events = [_FakeEvent(_FakeDelta(content="hi"))]
 

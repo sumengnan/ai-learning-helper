@@ -72,11 +72,14 @@ class ToolExecutor:
         try:
             raw = await tool.run(params)
             if isinstance(raw, ToolOutput):
-                text, follow_up = raw.text, raw.follow_up
+                text, follow_up, marker = raw.text, raw.follow_up, raw.marker
             else:
-                text, follow_up = raw, []
-            return ToolResult(call.id, self._truncate(text), is_error=False,
-                              follow_up=follow_up)
+                text, follow_up, marker = raw, [], ""
+            # marker 接在截断之后：否则长结果会把机读标记连同正文一起截掉
+            text = self._truncate(text)
+            return ToolResult(call.id, text + marker, is_error=False,
+                              follow_up=follow_up,
+                              model_content=text if marker else None)
         except ToolError as e:  # 工具主动标记失败：内容原样回传
             return ToolResult(call.id, self._truncate(str(e)), is_error=True)
         except Exception as e:  # 工具内部异常兜成 is_error，喂回模型自纠正

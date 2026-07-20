@@ -26,13 +26,25 @@ class ToolResult:
     is_error: bool = False
     # 工具可要求在本条 tool 结果之后追加消息（如把图片作为 user 视觉块喂给模型）。
     follow_up: list["Message"] = field(default_factory=list)
+    # 回给模型的正文（不含 marker）。None 表示与 content 相同。
+    model_content: str | None = None
+
+    def for_model(self) -> str:
+        """喂进模型上下文的那份结果：剥掉只给机器看的 marker 尾巴。"""
+        return self.content if self.model_content is None else self.model_content
 
 
 @dataclass
 class ToolOutput:
-    """工具可返回它替代 str：text 为回给模型的 tool 结果，follow_up 为其后追加的消息。"""
+    """工具可返回它替代 str：text 为回给模型的 tool 结果，follow_up 为其后追加的消息。
+
+    marker 是只给机器看的尾巴（如〔下载ID:x〕）：进事件、落库、前端，但【不进模型上下文】。
+    模型看见 id 就会当成有用信息抄进正文（「知识库ID：ba87f8…」），而用户拿这串 id
+    做不了任何事——它是前端渲染下载按钮用的，用户根本不该看到。
+    """
     text: str
     follow_up: list["Message"] = field(default_factory=list)
+    marker: str = ""
 
 
 @dataclass

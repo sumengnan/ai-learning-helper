@@ -357,7 +357,7 @@ class _PlannerOutput(BaseModel):
 
 
 PLANNER_SYSTEM = (
-    "你是任务规划器。把用户目标拆成 2-10 个高层子任务，输出一个有向无环图（DAG）。\n"
+    "你是任务规划器。把用户目标拆成 3-6 个高层子任务，输出一个有向无环图（DAG）。\n"
     "每个子任务含：id（如 s1，全局唯一）、description（要做什么）、expected（应产出什么，"
     "供质检比对）、depends_on（依赖的子任务 id 列表，无依赖填 []）。\n"
     "能并行的子任务不要人为串联（depends_on 留空）；只有真正需要前一步产出时才建立依赖。\n"
