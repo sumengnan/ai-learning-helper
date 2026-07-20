@@ -57,3 +57,39 @@ def test_same_name_no_overwrite(tmp_path):
     assert a["id"] != b["id"]                                # 各自独立 id
     with open(s.path(a["id"]), "rb") as f: assert f.read() == b"AAAA"
     with open(s.path(b["id"]), "rb") as f: assert f.read() == b"BB"
+
+
+# ---------- 重复生成去重 ----------
+
+def test_same_file_saved_twice_is_deduped(tmp_path):
+    """回归：编排器单步重试会把 save_download 原样再调一遍（max_step_retry=2 即初次+1 次
+    重试），同一份笔记被存两次，消息下方冒出两个一模一样的下载按钮。"""
+    s = DownloadStore(str(tmp_path), ":memory:")
+    a = s.create("u1", "学习笔记.md", "# AI\n内容".encode(), "text/markdown")
+    b = s.create("u1", "学习笔记.md", "# AI\n内容".encode(), "text/markdown")
+    assert a["id"] == b["id"]
+    assert len(s.list("u1")) == 1
+
+
+def test_changed_content_is_a_new_file(tmp_path):
+    """内容变了就是新文件——重试后模型改进了笔记，不能被误合并成旧版。"""
+    s = DownloadStore(str(tmp_path), ":memory:")
+    a = s.create("u1", "笔记.md", b"v1", "text/markdown")
+    b = s.create("u1", "笔记.md", b"v2", "text/markdown")
+    assert a["id"] != b["id"] and len(s.list("u1")) == 2
+
+
+def test_same_content_different_name_kept_apart(tmp_path):
+    s = DownloadStore(str(tmp_path), ":memory:")
+    a = s.create("u1", "甲.md", b"same", "text/markdown")
+    b = s.create("u1", "乙.md", b"same", "text/markdown")
+    assert a["id"] != b["id"]
+
+
+def test_dedup_is_per_user(tmp_path):
+    """跨用户绝不能复用同一条记录——那会把 A 的文件泄露给 B。"""
+    s = DownloadStore(str(tmp_path), ":memory:")
+    a = s.create("u1", "笔记.md", b"same", "text/markdown")
+    b = s.create("u2", "笔记.md", b"same", "text/markdown")
+    assert a["id"] != b["id"]
+    assert len(s.list("u1")) == 1 and len(s.list("u2")) == 1

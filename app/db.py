@@ -92,7 +92,10 @@ _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
     "documents": {"user_id": "TEXT", "excerpt": "TEXT", "content_hash": "TEXT"},
     "questions": {"user_id": "TEXT"},
     "wrong_answers": {"user_id": "TEXT"},
-    "downloads": {"user_id": "TEXT"},
+    # content_hash：正文 sha256，用于「同一用户重复生成同一文件」的去重。
+    # 编排器的单步重试会把带副作用的工具原样再调一遍，同一份笔记于是被存两次、
+    # 消息下方冒出两个一模一样的下载按钮。旧库为 NULL：老记录不参与去重。
+    "downloads": {"user_id": "TEXT", "content_hash": "TEXT"},
 }
 
 _SCHEMA_VERSION = 1
