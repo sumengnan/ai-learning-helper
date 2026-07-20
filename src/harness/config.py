@@ -65,7 +65,7 @@ class HarnessConfig(BaseSettings):
     chunk_size: int = 1000
     chunk_overlap: int = 200
     chunk_hard_max: int = 2000        # 切分容量硬上限：表格/代码块在此上限内整块保留，绝不超此值
-    search_top_k: int = 5
+    search_top_k: int = 10
     memory_collection: str = "knowledge"
     retrieval_candidate_pool: int = 20
     retrieval_w_relevance: float = 1.0

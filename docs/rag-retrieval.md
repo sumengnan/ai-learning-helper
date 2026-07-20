@@ -102,7 +102,7 @@ RAG 检索和[记忆管理](memory-management.md)**共用同一套底层向量�
 | `HARNESS_EMBEDDING_DIMENSION` | `1536` | 向量维度(要与模型匹配) |
 | `HARNESS_CHUNK_SIZE` / `HARNESS_CHUNK_OVERLAP` | `1000` / `200` | 切块大小与相邻块重叠 |
 | `HARNESS_CHUNK_HARD_MAX` | `2000` | 切块硬上限(表格/代码块在此内尽量整块保留) |
-| `HARNESS_SEARCH_TOP_K` | `5` | 检索默认返回条数 |
+| `HARNESS_SEARCH_TOP_K` | `10` | 检索默认返回条数 |
 | `HARNESS_RETRIEVAL_CANDIDATE_POOL` | `20` | 每路召回的候选池大小 |
 | `HARNESS_RETRIEVAL_W_RELEVANCE / _W_RECENCY / _W_IMPORTANCE` | `1.0 / 0.2 / 0.1` | 打分三项权重 |
 | `HARNESS_RETRIEVAL_USE_KEYWORD` | `true` | 是否加关键词检索一路 |
