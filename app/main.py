@@ -213,6 +213,11 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
         async def _close_sandboxes() -> None:
             await sandbox_manager.close_all()
 
+    # 技能详情：前端展开「已启用技能…」时按需取正文（正文是静态资源，不随事件下发）
+    if getattr(harness, "skill_registry", None) is not None:
+        from .api.skills import make_skills_router
+        app.include_router(make_skills_router(harness))
+
     # MCP 客户端：startup 时连接 server 并把远程工具注册进全局 registry（请求期 _build_registry
     # 会全量复制，故自动进入每次对话）；关停时断开（防遗留 stdio 僵尸子进程）。连接失败只 warning，
     # 不影响 app 启动。

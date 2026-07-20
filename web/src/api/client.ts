@@ -176,6 +176,9 @@ export type ModelsInfo = {
   embedding: string | null; rerank: string | null;
 };
 
+// 技能详情：body 是 SKILL.md 正文（不含 frontmatter），前端按 markdown 渲染
+export type SkillDetail = { name: string; description: string; body: string };
+
 // 考试状态：active 为真时前端显示「考试中」标识（当前第 cursor+1/total 题、模式）
 export type ExamStatus = {
   active: boolean; cursor?: number; total?: number;
@@ -196,6 +199,14 @@ export type PendingAction = {
 export const api = {
   // 各角色当前模型名，供聊天区展示「当前模型」
   models: (): Promise<ModelsInfo> => authFetch("/api/models").then((r) => r.json()),
+  // 技能详情：展开「已启用技能…」时按需取正文（正文是静态资源，不随事件下发）
+  skills: {
+    get: (name: string): Promise<SkillDetail> =>
+      authFetch(`/api/skills/${encodeURIComponent(name)}`).then(async (r) => {
+        if (!r.ok) throw new Error(await detail(r, "技能不存在或已被移除"));
+        return r.json();
+      }),
+  },
   // 本会话考试状态，供聊天区展示「考试中」标识
   exam: {
     status: (conversationId: string): Promise<ExamStatus> =>
