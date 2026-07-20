@@ -35,6 +35,20 @@ def _clamp(count: int) -> int:
     return max(1, min(count, 50))
 
 
+# 题干在结果里的展示上限：够模型指代某道题即可，全文会把工具结果撑长、挤占上下文。
+_STEM_MAX = 40
+
+# 跟在题干清单后、机读标记之前。给模型最贴近的一次提醒：id 是系统内部凭证，不是给人看的。
+# 光在 EXAM_GUIDE 里说一次不够——真正诱使它写出 id 的正是这条工具结果本身。
+_ID_HINT = "（下方 id 仅供你调用工具时使用，不要写进给用户的回答；提到某道题请用题干）"
+
+
+def _stem_list(stems: list[str]) -> str:
+    """把题干渲染成编号清单，供模型向用户复述「生成了哪几道题」。"""
+    return "\n".join(f"{i}. {(s or '（无题干）').strip()[:_STEM_MAX]}"
+                     for i, s in enumerate(stems, 1))
+
+
 class SampleQuestionsTool(Tool):
     name = "sample_questions"
     description = (
@@ -121,19 +135,21 @@ class AddQuestionsTool(Tool):
     async def run(self, params: "AddQuestionsTool.Params") -> str:
         valid = [q for q in params.questions if _valid(q, ALL_TYPES)]
         added_ids: list[str] = []
+        stems: list[str] = []
         for q in valid:
             q.setdefault("source", "聊天整理")
             q["explanation"] = q.get("explanation", "")
             qid = self._store.create_deduped(self._uid, q)
             if qid is not None:
                 added_ids.append(qid)
+                stems.append(q.get("stem", ""))
         added = len(added_ids)
         skipped = len(params.questions) - added
         if added == 0:
             return f"没有新题入库（跳过 {skipped} 道：无效或与题库重复）。"
         # 末尾带机读标记〔题目ID:id,id〕：交付门据此在校验不通过时清理该轮误入库的题（前端剥离不展示）
-        return (f"已入库 {added} 道，跳过 {skipped} 道（无效或重复）。"
-                f"〔题目ID:{','.join(added_ids)}〕")
+        return (f"已入库 {added} 道，跳过 {skipped} 道（无效或重复）：\n{_stem_list(stems)}\n"
+                f"{_ID_HINT}〔题目ID:{','.join(added_ids)}〕")
 
 
 class GenerateQuestionsTool(Tool):
@@ -164,10 +180,13 @@ class GenerateQuestionsTool(Tool):
         except QuizError:
             return "出题失败：生成结果无有效题目，请调整主题或稍后重试。"
         ids = [q["id"] for q in qs if q.get("id")]
-        msg = f"已从知识库生成并入库 {len(qs)} 道题（主题：{params.topic}）。"
+        # 带上题干：模型要向用户复述「生成了哪几道题」时得有名字可用，否则它只有 id 可写，
+        # 就会把一串对用户毫无意义的哈希写进学习计划里。
+        msg = (f"已从知识库生成并入库 {len(qs)} 道题（主题：{params.topic}）：\n"
+               f"{_stem_list([q.get('stem', '') for q in qs])}")
         # 末尾带机读标记〔题目ID:id,id〕：交付门据此清理失败轮误入库的题（前端剥离不展示）；
         # 也让后续「就考刚才这几道」能用 start_exam(source=ids) 精确取到这批题
-        return f"{msg}〔题目ID:{','.join(ids)}〕" if ids else msg
+        return f"{msg}\n{_ID_HINT}〔题目ID:{','.join(ids)}〕" if ids else msg
 
 
 class ListQuestionsTool(Tool):
