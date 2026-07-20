@@ -106,3 +106,14 @@ def test_description_does_not_trigger_on_content_shaping():
     desc = SaveDownloadTool.description
     assert "整理成笔记" not in desc
     assert "导出" in desc and "下载" in desc
+
+
+@pytest.mark.asyncio
+async def test_strips_leaked_step_markers(tmp_path):
+    """存成品文件前剥掉内部步骤标记 [sN]——它对用户毫无意义，纯属管道残留。"""
+    tool, store = _tool(tmp_path)
+    await tool.run(tool.Params(filename="笔记.md", content="[s2] # 标题\n\n正文[s10]"))
+    did = store.list("u1")[0]["id"]
+    text = open(store.path(did), encoding="utf-8").read()
+    assert "[s2]" not in text and "[s10]" not in text
+    assert "# 标题" in text and "正文" in text

@@ -791,3 +791,12 @@ async def test_planner_receives_exec_registry_roster_without_update_plan():
     roster = planner.seen_tools[0]
     assert "save_to_knowledge" in roster
     assert "update_plan" not in roster        # 执行子步看不到它，规划器也不该看到
+
+
+def test_synth_user_does_not_glue_step_id_to_content():
+    """汇总提示词同样不能把步骤 id 粘在正文前，否则最终答复里会漏出 [s1] 残留。"""
+    from app.orchestration.orchestrator import _synth_user
+    from app.orchestration.plan import Artifact
+    out = _synth_user("目标", {"s1": Artifact(summary="# 标题\n正文")})
+    assert "[s1] # 标题" not in out
+    assert "# 标题" in out and "s1" in out

@@ -10,6 +10,8 @@ from pydantic import BaseModel
 
 from harness.tools.base import Tool
 
+from ..sources import strip_step_markers
+
 # 本系统只把 content 原样写成字节，没有任何排版/渲染能力（依赖里没有 reportlab、
 # weasyprint、pandoc 之流；python-docx 只用于「读」上传附件）。文本内容配上这些扩展名
 # 就是给用户一个打不开的坏文件——mimetypes 还会按文件名把它标成 application/pdf。
@@ -57,7 +59,7 @@ class SaveDownloadTool(Tool):
                 return (f"保存失败：本系统不能生成 {ext.upper()} 文件，只能写文本。"
                         f"请把 filename 换成文本扩展名（{_TEXT_EXTS_HINT}）重试，"
                         "并在给用户的答复里说明格式已改。")
-            data = params.content.encode("utf-8")
+            data = strip_step_markers(params.content).encode("utf-8")
         if len(data) > self._max:
             return f"保存失败：超过 {self._max // (1024 * 1024)}MB 上限。"
         content_type = mimetypes.guess_type(params.filename)[0] or "application/octet-stream"

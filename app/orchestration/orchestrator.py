@@ -74,7 +74,8 @@ def _synth_user(goal: str, artifacts: dict[str, Artifact], recent_dialogue: str 
         lines.append(f"最近对话（供理解上下文与延续语气）：\n{recent_dialogue}\n")
     lines += [f"用户目标：\n{goal}\n", "各步骤产出："]
     for sid, art in artifacts.items():
-        lines.append(f"[{sid}] {art.summary}")
+        # 与 _build_prompt 同理：id 不作前缀紧贴正文，否则最终答复会漏出 [s1] 残留
+        lines.append(f"—— 步骤 {sid} 的产出 ——\n{art.summary}\n—— 以上为 {sid} ——")
     lines.append("\n请综合以上，写出对用户的最终答复。")
     return "\n".join(lines)
 

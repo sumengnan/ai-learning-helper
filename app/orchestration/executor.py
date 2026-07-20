@@ -92,7 +92,10 @@ def _build_prompt(step: PlanStep, deps: dict[str, Artifact], hint: str = "") -> 
     if deps:
         lines.append("\n已知前置步骤的产出（供参考，不要重复其工作）：")
         for dep_id, art in deps.items():
-            lines.append(f"[{dep_id}] {art.summary}")
+            # 步骤 id 单独成行、与正文隔开：曾写成 f"[{dep_id}] {art.summary}"，前缀紧贴
+            # 正文首行（如「[s2] # AI发展与应用总结」），模型复用这份内容时把「[s2] 」
+            # 一起抄进产出，最终漏进用户下载的文件开头。
+            lines.append(f"—— 步骤 {dep_id} 的产出 ——\n{art.summary}\n—— 以上为 {dep_id} ——")
     if hint:
         lines.append(f"\n上次尝试未通过质检，请改进：{hint}")
     # 节流引导：减少每步的联网/工具往返（延迟主要来自这些串行调用）

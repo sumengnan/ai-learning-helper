@@ -40,6 +40,22 @@ def strip_citations(text: str) -> str:
     return _CITATION_RE.sub("", text)
 
 
+# 编排器内部的步骤标记 [s1]/[s12]…（计划步 id）。与来源角标 [n] 形似但来路完全不同：
+# 它来自执行子步/汇总提示词里对前置产出的标注，模型复用内容时会连前缀一起抄出来。
+_STEP_MARKER_RE = re.compile(r"[ \t]*\[s\d+\]")
+
+
+def strip_step_markers(text: str) -> str:
+    """去掉漏进正文的内部步骤标记 [sN]。
+
+    这是编排管道的内部记号，对用户毫无意义。根因已在 _build_prompt / _synth_user 里
+    改掉（id 不再紧贴正文），这里是交付给用户前的兜底——成品文件不该带管道残留。
+    """
+    if not text:
+        return text
+    return _STEP_MARKER_RE.sub("", text)
+
+
 def _domain(url: str) -> str:
     try:
         host = urlparse(url).hostname or url

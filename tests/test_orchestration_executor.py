@@ -51,7 +51,9 @@ def test_build_prompt_includes_deps_and_hint():
     from app.orchestration.executor import _build_prompt
     p = _build_prompt(_step(deps=["s0"]), {"s0": Artifact(summary="前置：X=42")}, hint="补充示例")
     assert "回答质数定义" in p and "质数定义" in p
-    assert "[s0]" in p and "前置：X=42" in p
+    assert "s0" in p and "前置：X=42" in p
+    # 步骤 id 不能作为前缀紧贴正文，否则模型会把「[s0] 」连同内容一起抄进产出
+    assert "[s0] 前置：X=42" not in p
     assert "补充示例" in p
 
 
@@ -249,3 +251,17 @@ def test_sandbox_guide_docker_reflects_sub_network_online():
     g = sandbox_guide(_sbx_cfg(
         sandbox_backend="docker", sandbox_network="none", sandbox_sub_network="bridge"))
     assert "可联网" in g and "禁止联网" in g        # 基础禁网、子沙箱可联网都如实出现
+
+
+def test_build_prompt_does_not_glue_step_id_to_content():
+    """前置产出的步骤 id 必须与正文分行。
+
+    实例：第3步的提示词里出现「[s2] # AI发展与应用总结\\n\\n## 1. ...」，模型复用这份
+    内容时把「[s2] 」前缀一起抄了出来，最终存进用户下载的文件开头。
+    """
+    from app.orchestration.executor import _build_prompt
+    art = Artifact(summary="# AI发展与应用总结\n\n## 1. 概述\n正文")
+    p = _build_prompt(_step(deps=["s2"]), {"s2": art})
+    assert "[s2] # AI发展与应用总结" not in p     # 前缀不得紧贴正文首行
+    assert "# AI发展与应用总结" in p              # 内容本身仍在
+    assert "s2" in p                              # 仍能看出这是哪一步的产出
