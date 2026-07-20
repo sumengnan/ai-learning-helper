@@ -78,6 +78,39 @@ def _no_real_content(result: str) -> bool:
     return "无可提取正文" in (result or "")
 
 
+# RFC 2606/6761 保留给文档示例的域名，以及常见的域名停放/待售页文案。
+# 这类页面真实存在、稳定返回 200、有标题有正文——所有「抓取是否成功」的判据都拦不住它们。
+# 模型编造网址时最容易撞上 example.com 这一族，命中即视为无效抓取（不是真实资料来源）。
+_PLACEHOLDER_HOSTS = frozenset({
+    "example.com", "example.org", "example.net", "example.edu",
+    "localhost", "127.0.0.1", "0.0.0.0",
+})
+_PLACEHOLDER_MARKS = (
+    "this domain is for use in documentation examples",
+    "domain is for use in illustrative examples",
+    "此域名可用于文档示例",
+    "this domain is parked", "domain is for sale", "buy this domain",
+)
+
+
+def final_url_of(result: str) -> str:
+    """从抓取结果里取「最终URL：」行（跟随重定向后的真实地址）；取不到返回空串。"""
+    for line in (result or "").splitlines():
+        if line.startswith("最终URL："):
+            return line[len("最终URL："):].strip()
+    return ""
+
+
+def looks_placeholder_page(result: str, url: str = "") -> bool:
+    """是否为占位/示例域名或域名停放页。优先按最终URL判域名，其次按页面文案。"""
+    host = (urlparse(url or final_url_of(result)).hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host in _PLACEHOLDER_HOSTS:
+        return True
+    return any(m in (result or "")[:600].lower() for m in _PLACEHOLDER_MARKS)
+
+
 # ---- 各工具的来源 builder：入参 (args, result)，出参 dict|None（不含 index）----
 
 def _b_search_knowledge(args: dict, result: str) -> dict | None:
@@ -97,8 +130,9 @@ def _b_search_knowledge(args: dict, result: str) -> dict | None:
 
 
 def _b_browse(args: dict, result: str) -> dict | None:
-    # 只收抓到真实内容的网页：拦截/错误页、无正文一律不记源
-    if _looks_error_page(result) or _no_real_content(result):
+    # 只收抓到真实内容的网页：拦截/错误页、无正文、占位/停放域名一律不记源
+    if (_looks_error_page(result) or _no_real_content(result)
+            or looks_placeholder_page(result, str(args.get("url") or ""))):
         return None
     title = url = ""
     for line in (result or "").splitlines():
@@ -120,7 +154,8 @@ def _b_http(args: dict, result: str) -> dict | None:
     status = _http_status(result)
     if status is not None and status != 200:
         return None
-    if _looks_error_page(result) or _no_real_content(result):
+    if (_looks_error_page(result) or _no_real_content(result)
+            or looks_placeholder_page(result, url)):
         return None
     return {"type": "web", "label": _domain(url), "url": url}
 

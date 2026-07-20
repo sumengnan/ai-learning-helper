@@ -48,9 +48,11 @@ def test_browse_extracts_title_and_url():
 
 
 def test_http_request_labels_domain():
-    d = build_source("http_request", {"url": "https://www.example.com/a/b?x=1"}, "HTTP 200\n<html>")
-    assert d["type"] == "web" and d["label"] == "example.com"
-    assert d["url"] == "https://www.example.com/a/b?x=1"
+    # 刻意不用 example.com：它是 RFC 2606 保留域名，已被 looks_placeholder_page 判为
+    # 无效抓取而不记源。这里测的是「域名标签提取」，换个真实域名即可。
+    d = build_source("http_request", {"url": "https://www.wikipedia.org/a/b?x=1"}, "HTTP 200\n<html>")
+    assert d["type"] == "web" and d["label"] == "wikipedia.org"
+    assert d["url"] == "https://www.wikipedia.org/a/b?x=1"
 
 
 def test_http_request_non_200_is_none():
@@ -299,3 +301,24 @@ async def test_paused_http_fetch_is_not_credited_as_source():
     with sink.paused():
         await wrapped.run(wrapped.Params(url="https://x.com/a"))
     assert sink.snapshot() == []
+
+
+# ---------- 占位/停放域名不记源 ----------
+
+def test_browse_placeholder_domain_is_none():
+    """抓取成功但落在 example.com：不是真实资料来源，不该出现在「参考来源」里。"""
+    r = ("标题：Example Domain\n最终URL：https://example.com/ai-agent-advancements\n\n"
+         "This domain is for use in documentation examples without needing permission.")
+    assert build_source("browse", {"url": "https://example.com/ai-agent-advancements"}, r) is None
+
+
+def test_http_placeholder_domain_is_none():
+    r = "HTTP 200\n标题：Example Domain\n最终URL：https://example.org/x\n\n示例内容"
+    assert build_source("http_request", {"url": "https://example.org/x"}, r) is None
+
+
+def test_browse_real_domain_still_recorded():
+    """反向：真实域名不受影响，照常记源（防止改动误伤正常抓取）。"""
+    r = "标题：光合作用 - 维基百科\n最终URL：https://zh.wikipedia.org/wiki/光合作用\n\n正文……"
+    d = build_source("browse", {"url": "https://zh.wikipedia.org/wiki/光合作用"}, r)
+    assert d is not None and d["type"] == "web"
