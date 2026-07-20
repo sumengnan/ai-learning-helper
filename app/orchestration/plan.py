@@ -2,6 +2,7 @@
 """编排器数据结构与纯 DAG 函数。零 LLM 调用、零 IO，可完全确定性单测。"""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -51,13 +52,36 @@ class Review:
     feedback: str
 
 
+# 「问用户」类步骤的识别。计划在一轮内自主跑完，执行子步没有与用户对话的通道（工具表里
+# 不存在任何提问工具），这种步骤既问不出来也等不到回答，只会输出「需要用户提供 X」，
+# 拖垮依赖它的后续步，最终汇总成「信息不足，无法完成」——用户什么都没拿到。
+# 模式刻意收窄到「交互动词 + 用户」的搭配：「为用户生成练习题」「整理用户上传的资料」
+# 这类正当步骤必须不被误伤（见 tests 里的反向用例）。
+_ASK_USER_RE = re.compile(
+    r"(向|与|和|跟)用户(沟通|确认|询问|提问|核实)"
+    r"|(询问|问|请教|咨询)用户"
+    r"|(请|让|要求)用户(提供|确认|回答|补充|告知|说明)"
+    r"|等待用户"
+    r"|待用户(回复|确认|提供|反馈)"
+    r"|收集用户(需求|信息|偏好)"
+    r"|了解用户(的)?[^，。；]{0,6}(需求|目标|水平|偏好|情况)")
+
+
 def validate_plan(steps: list[PlanStep]) -> str | None:
     """校验 DAG 合法性。返回人读错误串；合法返回 None。
 
     三条硬约束（守住则 Scheduler 永不死锁于非法结构）：id 唯一、依赖存在、无环。
+    外加一条可执行性约束：不得规划「问用户」步骤（本函数的返回值会被 Planner._generate
+    拼进下一次提示驱动重试，故这里的错误串要写成能指导模型改正的话）。
     """
     if not steps:
         return "计划为空，至少需要一个步骤"
+    for s in steps:
+        if _ASK_USER_RE.search(f"{s.description} {s.expected}"):
+            return (f"步骤 {s.id}「{s.description[:30]}」是在向用户提问，但计划会自主跑完、"
+                    "没有与用户对话的通道，这一步永远得不到回答。请删掉它：缺少的非关键信息"
+                    "按合理默认直接推进（在产出里写明所用假设），确有必须由用户拍板的关键"
+                    "信息时，也应在最终答复里提出，而不是排成一个步骤。")
     ids = [s.id for s in steps]
     if len(set(ids)) != len(ids):
         dup = [i for i in ids if ids.count(i) > 1]
