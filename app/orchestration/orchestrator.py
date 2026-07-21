@@ -42,10 +42,19 @@ from .usage_ctx import (
 VERIFY_TRACE_KEY = "verify:trace"
 
 TRIAGE_SYSTEM = (
-    "判断用户消息是否为简单问答（打招呼、寒暄、单句事实、闲聊）。"
+    "判断用户**本次消息**是否为简单问答（打招呼、寒暄、单句事实、闲聊）。"
     "多步任务、需要检索/代码/工具、需要规划的一律算复杂。"
+    # 只看孤立的一句话会把多步任务的追问判成简单：「再详细点」「那第三点呢」「继续」
+    # 单独读起来都像闲聊，于是跳过规划、退化成一轮 ReAct，该拆的步骤没拆。
+    "若给出了最近对话，务必据此判断本次消息是不是某个多步任务的延续——"
+    "承接前文任务的追问（如「再详细点」「那第三点呢」「继续」「换个角度」）算复杂，"
+    "哪怕它本身很短。只有与前文任务无关的寒暄/闲聊才算简单。"
     "只回一个词：simple 或 complex。"
 )
+
+# 喂给 triage 的最近对话上限。够判断「是不是在延续某个任务」即可，不必给全文——
+# triage 每轮都跑，是最快那条路径上的固定开销。
+_TRIAGE_DIALOGUE_MAX = 800
 
 # 无需 LLM 判别的「明显简单」：整条消息就是纯寒暄/致谢/短应答。命中即跳过 triage 的那次模型调用，
 # 直接走简单直答（省一次调用/延迟）。只放高置信度社交短句，且要求整条消息就是这些词、无其它实质
@@ -190,9 +199,19 @@ class Orchestrator:
                            detail={"elapsed_ms": _now_ms() - t0})
 
     # ---- triage ----
-    async def _is_simple(self, message: str) -> bool:
+    async def _is_simple(self, message: str, recent_dialogue: str = "") -> bool:
+        """本轮该不该短路成简单直答。
+
+        必须带上最近对话：只看孤立的一句，多步任务的追问（「再详细点」「继续」）会被判成
+        简单，于是跳过规划退化成一轮 ReAct——该拆的步骤没拆，前端也从「计划树」变成
+        「计划块 + 独立工具块」，同一个会话里忽合忽分。
+        """
+        user = message
+        if recent_dialogue:
+            tail = recent_dialogue[-_TRIAGE_DIALOGUE_MAX:]   # 保尾：越近的轮次越能说明当前意图
+            user = f"【最近对话】\n{tail}\n\n【本次消息】\n{message}"
         try:
-            raw = await self._fast_complete(TRIAGE_SYSTEM, message)
+            raw = await self._fast_complete(TRIAGE_SYSTEM, user)
             return raw.strip().lower().startswith("simple")
         except Exception:
             return False   # 判不了就走完整编排（宁可多做不可少做）
@@ -389,7 +408,7 @@ class Orchestrator:
             # 顺带省掉一次 triage 调用：命中技能时结论已定，不必再问模型。
             if force_simple or (not skill_hint
                                 and (_obvious_simple(user_message)
-                                     or await self._is_simple(user_message))):
+                                     or await self._is_simple(user_message, recent_dialogue))):
                 # 考试轮（force_simple）且开了结果校验 → 补一道终局校验 + 就地重答。
                 # 判分/错题入库/游标推进都是服务端确定性完成的，模型只负责讲解与呈现下一题；
                 # 讲解讲错（判定说反、漏告知「已存入错题集」、篡改下一题）此前无人兜底。
