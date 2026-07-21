@@ -27,6 +27,20 @@ def today_iso() -> str:
     return f"{today_cn():%Y-%m-%d}"
 
 
+DATE_MARK = "【当前日期】"
+
+
+def with_today(system_prompt: str) -> str:
+    """给系统提示词补上当前日期；已经带了就原样返回。
+
+    幂等是必需的：注入点在 build_completer（所有单轮模型调用的收口），而个别调用方
+    ——如 Planner——出于「日期是它的根因修复」会自己先拼一份。重复两段日期不致命，
+    但会浪费 token 且读起来像出了 bug。
+    """
+    s = system_prompt or ""
+    return s if DATE_MARK in s else s + today_guide()
+
+
 def today_guide() -> str:
     """完整的日期基准段落，供各类系统提示词拼接。
 
