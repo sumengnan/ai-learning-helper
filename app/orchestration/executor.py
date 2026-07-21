@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
 
 from harness.context.manager import ContextManager
 from harness.events import (
@@ -17,6 +16,8 @@ from harness.progress import reset_current_agent, set_current_agent
 from harness.tools.base import ToolRegistry
 
 from ..search_guidance import SEARCH_SYSTEM_GUIDANCE
+from app.today import today_guide
+
 from .plan import Artifact, PlanStep
 from .usage_ctx import record_usage
 
@@ -99,7 +100,7 @@ def _system_with_guide(base: str, sandbox_guide_text: str = "") -> str:
     # 简单直答经 context 拿得到），而执行子步的 base 是裸的 config.app_system_prompt——多步任务里
     # 联网检索恰恰归子步做，指引根本没到真正调工具的那个上下文。
     guide = (f"{base}{EXECUTOR_GUIDE}{SEARCH_SYSTEM_GUIDANCE}{CLARIFY_GUIDE}"
-             f"\n\n今日日期：{date.today().isoformat()}（涉及时效或未来趋势时以此为基准）。")
+             + today_guide())
     return guide + (sandbox_guide_text or "")
 
 

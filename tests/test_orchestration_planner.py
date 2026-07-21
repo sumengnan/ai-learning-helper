@@ -274,3 +274,39 @@ def test_planner_system_forbids_writing_tool_names():
 def test_planner_system_forbids_splitting_produce_and_save():
     """内容加工与保存文件不可拆成两步——拆了两步都会各存一份。"""
     assert "不要拆成两步" in PLANNER_SYSTEM
+
+
+# ---------- 规划器必须知道「今天」 ----------
+
+async def test_planner_system_carries_current_date():
+    """回归：用户问「总结 AI 未来 2 年的发展」，规划器写出「2025-2026」——已经过去的区间。
+
+    根因是规划器提示词里没有任何日期，它拿训练截止时间当「现在」。执行子步虽然自带
+    日期，但那时步骤描述已经把错年份烤死了，子步只是忠实执行一条写错的指令。
+    """
+    from datetime import datetime, timedelta, timezone
+    seen = {}
+
+    async def _fake_complete(system, user):
+        seen["system"] = system
+        return '{"steps":[{"id":"s1","description":"查资料","expected":"资料","depends_on":[]}]}'
+
+    await Planner(_fake_complete).plan("总结AI未来2年的发展情况")
+    year = f"{datetime.now(timezone(timedelta(hours=8))):%Y}"
+    assert "【当前日期】" in seen["system"], "规划器提示词必须带当前日期"
+    assert year in seen["system"], f"日期必须是今年（{year}），不能是写死的年份"
+
+
+async def test_replan_also_carries_current_date():
+    """重规划走的是另一条调用路径，同样不能漏掉日期。"""
+    from datetime import datetime, timedelta, timezone
+    seen = {}
+
+    async def _fake_complete(system, user):
+        seen["system"] = system
+        return '{"steps":[{"id":"s1","description":"查资料","expected":"资料","depends_on":[]}]}'
+
+    p = Planner(_fake_complete)
+    plan = await p.plan("目标")
+    await p.replan("目标", plan, "反馈")
+    assert f"{datetime.now(timezone(timedelta(hours=8))):%Y}" in seen["system"]
