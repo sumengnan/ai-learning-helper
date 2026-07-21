@@ -6,6 +6,7 @@ import re
 
 from pydantic import BaseModel, ValidationError
 
+from app.today import today_guide
 from app.verify import call_json
 
 from .plan import Plan, PlanStep, validate_plan
@@ -183,14 +184,16 @@ class Planner:
                    tools_desc: str = "") -> Plan:
         # skill_hint 保持位置参数（dev 的技能路由按位置传），tools_desc 只收关键字
         steps = await self._generate(
-            PLANNER_SYSTEM, _plan_user(goal, recent_dialogue, tools_desc, skill_hint), goal)
+            PLANNER_SYSTEM + today_guide(),
+            _plan_user(goal, recent_dialogue, tools_desc, skill_hint), goal)
         return Plan(goal=goal, steps=_scrub(steps, tools_desc), version=1)
 
     async def replan(self, goal: str, plan: Plan, feedback: str, skill_hint: str = "", *,
                      tools_desc: str = "") -> Plan:
         done = [s for s in plan.steps if s.status == "done"]
         steps = await self._generate(
-            PLANNER_SYSTEM, _replan_user(goal, done, feedback, tools_desc, skill_hint), goal)
+            PLANNER_SYSTEM + today_guide(),
+            _replan_user(goal, done, feedback, tools_desc, skill_hint), goal)
         return Plan(goal=goal, steps=_scrub(steps, tools_desc), version=plan.version + 1)
 
     async def _generate(self, system: str, user: str, goal: str = "") -> list[PlanStep]:
