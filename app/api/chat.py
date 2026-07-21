@@ -582,7 +582,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
     _tracer = get_tracer("app.chat")
 
     def _build_registry(user_id: str, conv_id: str, has_attachments: bool,
-                        exam_active: bool = False) -> tuple[ToolRegistry, SourceSink]:
+                        exam_active: bool = False,
+                        created_downloads: set | None = None
+                        ) -> tuple[ToolRegistry, SourceSink]:
         reg = ToolRegistry()
         sink = SourceSink()
         # 两层包装，顺序有讲究：guard 在内、记源在外。guard 命中登记时抛 ToolError，
@@ -595,7 +597,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         dstore = getattr(harness, "download_store", None)
         if dstore is not None:
             _reg(SaveDownloadTool(
-                dstore, config.download_max_mb * 1024 * 1024, user_id))
+                dstore, config.download_max_mb * 1024 * 1024, user_id,
+                created_ids=created_downloads))
         # 记忆/知识库检索：都必须按用户覆盖全局那个。assembly 里构造的是无冒号的默认
         # collection（collection_to_scope 判成 owner=_global），而真实数据写在
         # knowledge:{user_id} / memory:{user_id} —— 两个 owner 永不相交，不覆盖的话模型
@@ -673,8 +676,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 exam_session_store, wrong_store, _exam_judge,
                 user_id=user_id, conv_id=req.conversation_id,
                 message=req.message)
+        # 本轮新建的下载 id：工具往里登记，清理时据此只删本轮自己建的（内容去重会让
+        # create() 返回用户早先那条记录的 id，照删就是删掉他上周存的文件）。
+        created_downloads: set = set()
         registry, source_sink = _build_registry(user_id, req.conversation_id,
-                                                 has_attachments, exam_active)
+                                                 has_attachments, exam_active,
+                                                 created_downloads=created_downloads)
         # 交付门开启需三者皆备：装配了 verifier + 服务端总开关 + 本轮用户开关（默认开，可手动关）
         gate_on = verifier is not None and config.enable_answer_gate and req.verify
         # 喂给模型的消息：带附件时追加只含文件名的名单提示（不含内容），入库仍用原文
@@ -1028,7 +1035,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     _purger = SideEffectPurger(
                         download_store=getattr(harness, "download_store", None),
                         knowledge_service=knowledge_service,
-                        question_store=question_store)
+                        question_store=question_store,
+                        created_downloads=created_downloads)
 
                     def _purge_step_fx(fx) -> dict[str, list[str]]:
                         # 只按**实际删掉的**剥标记：删除失败是被吞掉的（清理不该中断回答），

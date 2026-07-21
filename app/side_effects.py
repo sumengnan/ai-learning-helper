@@ -80,10 +80,15 @@ class SideEffectPurger:
     """
 
     def __init__(self, *, download_store=None, knowledge_service=None,
-                 question_store=None) -> None:
+                 question_store=None, created_downloads: set | None = None) -> None:
         self._downloads = download_store
         self._knowledge = knowledge_service
         self._questions = question_store
+        # 本轮新建的下载 id（由 SaveDownloadTool 登记）。给了就只删集合内的——
+        # DownloadStore.create 按 (user, sha256) 在该用户**全部历史**里去重，命中就返回
+        # 旧记录的 id，于是"本步产出的 id"可能指向用户上周存的文件，照删即数据丢失。
+        # 不给（精简装配/直接构造）则不设限，保持旧行为。
+        self._created_downloads = created_downloads
 
     def purge(self, user_id: str, fx) -> dict[str, list[str]]:
         """删掉这批产物，返回**确实删掉的** id（按类分组）。
@@ -98,6 +103,9 @@ class SideEffectPurger:
         done = empty_fx()
         for did in fx.get("download") or ():
             if self._downloads is None:
+                continue
+            if self._created_downloads is not None and did not in self._created_downloads:
+                log.info("跳过清理：该下载并非本轮新建（内容去重命中旧记录）id=%s", did)
                 continue
             try:
                 if self._downloads.delete(user_id, did) is not False:

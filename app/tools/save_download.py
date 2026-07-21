@@ -58,10 +58,15 @@ class SaveDownloadTool(Tool):
         content: str
         encoding: str = "text"        # "text" | "base64"
 
-    def __init__(self, download_store, max_bytes: int, user_id: str | None = None) -> None:
+    def __init__(self, download_store, max_bytes: int, user_id: str | None = None,
+                 created_ids: set | None = None) -> None:
         self._store = download_store
         self._max = max_bytes
         self._uid = user_id
+        # 本轮**新建**的下载 id（每请求一份，与 SideEffectPurger 共享）。作废清理据此
+        # 只删本轮自己建的：内容去重会让 create() 返回用户早先那条记录的 id，
+        # 照删就是删掉他上周存的文件。
+        self._created_ids = created_ids
 
     async def run(self, params: "SaveDownloadTool.Params") -> "str | ToolOutput":
         if params.encoding == "base64":
@@ -84,6 +89,9 @@ class SaveDownloadTool(Tool):
             return f"保存失败：超过 {self._max // (1024 * 1024)}MB 上限。"
         content_type = mimetypes.guess_type(params.filename)[0] or "application/octet-stream"
         rec = self._store.create(self._uid, params.filename, data, content_type)
+        # 只登记**新建**的：复用旧记录时这个 id 指向用户早先的文件，作废清理绝不能删它
+        if self._created_ids is not None and not rec.get("reused"):
+            self._created_ids.add(rec["id"])
         # 末尾带机读标记〔下载ID:...〕：前端据此在该条消息下方渲染下载按钮（会剥离不展示给用户）。
         # 走 marker 而非拼进 text——它不进模型上下文，模型看不见就不会把这串 id 抄进回复正文。
         return ToolOutput(
