@@ -26,6 +26,7 @@ import { ProgressBlock } from "./ProgressBlock";
 import { SubagentProgress } from "./SubagentProgress";
 import { VerifyBadge, isGateOpen } from "./VerifyBadge";
 import { PlanBlock } from "./PlanBlock";
+import { RouteBadge, routeModeOf } from "./RouteBadge";
 import { Markdown } from "./Markdown";
 import { RollingNumber } from "./RollingNumber";
 import { AttachmentChips, type AttachmentItem } from "./Attachments";
@@ -574,6 +575,12 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                   <AttachmentChips items={m.attachments} />
                 </Box>
               )}
+              {/* 最顶：本轮走了哪条路（简单直答 / 多步规划）。放在思考块之上，
+                  因为它是「AI 打算怎么处理这句话」的前提，先于任何过程细节。 */}
+              {showTools && m.role === "assistant" && (() => {
+                const mode = routeModeOf(m.progress);
+                return mode ? <RouteBadge mode={mode} /> : null;
+              })()}
               {(() => {
                 const hasPlan = m.role === "assistant"
                   && !!m.progress?.some((p) => p.scope === "plan");

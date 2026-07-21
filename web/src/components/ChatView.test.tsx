@@ -196,6 +196,26 @@ describe("ChatView", () => {
     expect(vi.mocked(stopRun)).toHaveBeenCalledWith("R1");
   });
 
+  it("路由徽章：本轮走的是简单直答还是多步规划，用户看得见", async () => {
+    // 走编排器会出「任务步骤」块，走单循环则一个块都没有——此前只能靠「有没有块」反推，
+    // triage 误判（该拆步却判了 simple）便无从察觉。
+    vi.mocked(streamChat).mockImplementationOnce(
+      async (_c: string, _m: string, onEvent: (e: any) => void) => {
+        onEvent({ type: "Progress", data: { scope: "route", text: "简单直答",
+                                            key: "route", detail: { mode: "simple" } } });
+        onEvent({ type: "TextDelta", data: { text: "好" } });
+        onEvent({ type: "RunFinished", data: {} });
+      });
+    render(<ChatView conversationId="c1" initial={[]} />);
+    fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "你好" } });
+    fireEvent.click(screen.getByText("发送"));
+    await waitFor(() => expect(screen.getByText("简单直答")).toBeTruthy());
+
+    // 关掉「展示工具调用和 Token」→ 徽章跟着隐藏，与技能块/沙箱块同一档可见性
+    fireEvent.click(screen.getByLabelText("展示工具调用和 Token"));
+    await waitFor(() => expect(screen.queryByText("简单直答")).toBeNull());
+  });
+
   it("开关默认值：展示工具/Token 开", () => {
     render(<ChatView conversationId="c1" initial={[]} />);
     expect((screen.getByLabelText("展示工具调用和 Token") as HTMLInputElement).checked).toBe(true);
