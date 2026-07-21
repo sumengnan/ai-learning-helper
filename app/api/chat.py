@@ -62,6 +62,7 @@ from ..tools.exam_tools import (
 from ..tools.knowledge_tools import SaveToKnowledgeTool
 from ..tools.plan_tool import (
     FINALIZE_SYSTEM, finalize_user_prompt, merge_finalized, unfinished_steps)
+from ..today import today_guide
 from ..tools.validating import ValidatingTool, relevance_check
 from ..tools.save_download import SaveDownloadTool
 from ..quiz_service import _strip_fence
@@ -193,11 +194,12 @@ _CN_TZ = timezone(timedelta(hours=8))
 
 
 def _today_guide() -> str:
-    """每请求注入当前日期，避免模型沿用训练数据里的年份做时间推算（如把「未来3年」从旧年份起算）。"""
-    now = datetime.now(_CN_TZ)
-    return (f"\n\n【当前日期】今天是 {now:%Y 年 %m 月 %d 日}（北京时间）。"
-            "凡涉及「今年/去年/未来 N 年/最近/最新」等与时间相关的推算或表述，"
-            "一律以此日期为当前时间基准，不要沿用训练数据中的年份。")
+    """每请求注入当前日期，避免模型沿用训练数据里的年份做时间推算（如把「未来3年」从旧年份起算）。
+
+    实现已收敛到 app/today.py：同一个「今天」原先在这里按北京时间、在 executor 里按服务器
+    本地时区各写一遍，跨时区部署会差一天且不报错。此处保留薄封装，仅为不破坏既有调用与测试。
+    """
+    return today_guide()
 
 
 class _ChatRequest(BaseModel):
