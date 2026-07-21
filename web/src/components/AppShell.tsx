@@ -7,6 +7,7 @@ import {
   Button, Menu, MenuItem, Avatar,
 } from "@mui/material";
 import type { Theme } from "@mui/material/styles";
+import type { User } from "../types";
 import { AnimatePresence, motion } from "framer-motion";
 import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutlined";
 import SpaceDashboardIcon from "@mui/icons-material/SpaceDashboard";
@@ -32,6 +33,13 @@ const MINI = 68;
 // 菜单/历史等“外壳”统一的浅色背景，与白色内容区拉开层次
 export const chromeBg = (t: Theme) => (t.palette.mode === "light" ? "#eceef2" : "#181a1f");
 
+/** 顶栏按钮显示的名字：优先姓名，老账号 full_name 为空则回退账号。 */
+export function displayName(user: User | null): string {
+  return user?.full_name?.trim() || user?.username || "未登录";
+}
+
+export const avatarLetter = (name: string) => name.trim()[0]?.toUpperCase() || "?";
+
 const NAV: { to: string; label: string; icon: ReactNode }[] = [
   { to: "/", label: "概览", icon: <SpaceDashboardIcon /> },
   { to: "/chat", label: "AI聊天", icon: <ChatBubbleOutlineIcon /> },
@@ -50,6 +58,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
   const [navOpen, setNavOpen] = useState(true);
   const width = navOpen ? WIDTH : MINI;
+  const name = displayName(user);
 
   const isActive = (to: string) =>
     to === "/" ? location.pathname === "/" : location.pathname.startsWith(to);
@@ -181,14 +190,25 @@ export function AppShell({ children }: { children: ReactNode }) {
             </Tooltip>
             <Button color="inherit" onClick={(e) => setMenuAnchor(e.currentTarget)}
               startIcon={<Avatar sx={{ width: 24, height: 24, fontSize: 14 }}>
-                {user?.username?.[0]?.toUpperCase() || "?"}
+                {avatarLetter(name)}
               </Avatar>}>
-              {user?.username || "未登录"}
+              {name}
             </Button>
             <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)}
               onClose={() => setMenuAnchor(null)}
               anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
               transformOrigin={{ vertical: "top", horizontal: "right" }}>
+              {/* 账号只在菜单里露出：账号 + 姓名这一对正是「忘记密码」的核身凭据
+                  （UserStore.verify_name），不并排常驻在顶栏上给旁人一眼看全。 */}
+              {user && (
+                <Box sx={{ px: 2, py: 1, minWidth: 180 }}>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>{name}</Typography>
+                  <Typography variant="caption" color="text.secondary" noWrap>
+                    @{user.username}
+                  </Typography>
+                </Box>
+              )}
+              {user && <Divider />}
               <MenuItem onClick={() => { setMenuAnchor(null); openProfile(); }}>
                 <ListItemIcon><TuneIcon fontSize="small" /></ListItemIcon>
                 AI 个性化
