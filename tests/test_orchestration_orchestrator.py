@@ -1528,3 +1528,113 @@ async def test_planner_error_fallback_keeps_plan_route():
     orch = _mk(FakePlanner([_plan(_s("s1"))], raise_on_plan=True), FakeCritic(), [])
     rs = _routes(await _run(orch, "调研 AI 现状并整理成报告"))
     assert [r.detail["mode"] for r in rs] == ["plan"]
+
+
+# ---------- 单步重试时清理上一次尝试的副作用 ----------
+
+def _fx(download=(), knowledge=(), questions=()):
+    return {"download": list(download), "knowledge": list(knowledge),
+            "questions": list(questions)}
+
+
+class _RecordingPurger:
+    """冒充装配层注入的清理回调，记录每次被要求清理什么。"""
+    def __init__(self, purged=("d1",)):
+        self.calls = []
+        self._purged = list(purged)
+
+    def __call__(self, fx):
+        self.calls.append(fx)
+        return list(self._purged)
+
+
+class _FxExecutor:
+    """按次序产出带副作用清单的 StepArtifact。"""
+    def __init__(self, fxs, terminal=False):
+        self._fxs = list(fxs); self._i = 0
+
+    async def execute(self, step, deps, hint="", *, registry=None, goal=""):
+        from app.orchestration.executor import StepArtifact
+        fx, terminal = self._fxs[min(self._i, len(self._fxs) - 1)]
+        self._i += 1
+        yield Progress(f"subagent:executor:{step.id}", "开始")
+        yield StepArtifact(Artifact(summary=f"done-{step.id}"),
+                           side_effects=fx, terminal=terminal)
+
+
+class _SeqCritic:
+    """validate 按次序给结论，review 一律通过。"""
+    def __init__(self, verdicts):
+        self._v = list(verdicts); self._i = 0
+
+    async def validate(self, step, artifact):
+        ok = self._v[min(self._i, len(self._v) - 1)]; self._i += 1
+        return Verdict(ok=ok, reason="不够好")
+
+    async def review(self, goal, plan, artifacts):
+        return Review(accept=True, feedback="")
+
+
+def _fx_orch(fxs, verdicts):
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), _SeqCritic(verdicts), [])
+    orch._executor = _FxExecutor(fxs)
+    return orch
+
+
+async def test_retry_purges_previous_attempt_side_effects():
+    """单步校验不过 → 重跑前先删掉这次尝试留下的产物。
+
+    不删的话模型重跑会把 save_download 再调一遍，聊天下方挂出两个下载按钮，
+    其中一个还是被判为不合格的那一版。
+    """
+    purger = _RecordingPurger()
+    orch = _fx_orch([(_fx(download=["d1"]), False), (_fx(), False)], [False, True])
+    [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    assert purger.calls == [_fx(download=["d1"])]      # 只清失败那次的产物
+
+
+async def test_no_purge_when_step_passes_first_try():
+    purger = _RecordingPurger()
+    orch = _fx_orch([(_fx(download=["d1"]), False)], [True])
+    [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    assert purger.calls == []                          # 通过就不该动产物
+
+
+async def test_no_purge_when_attempt_produced_nothing():
+    """这次尝试没产出产物就别去调清理——省一次无谓的 store 往返。"""
+    purger = _RecordingPurger()
+    orch = _fx_orch([(_fx(), False), (_fx(), False)], [False, True])
+    [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    assert purger.calls == []
+
+
+async def test_purge_emits_progress_so_frontend_drops_buttons():
+    """删了产物必须告诉在途前端，否则已渲染的下载按钮还在，点开是已删的文件。"""
+    purger = _RecordingPurger(purged=["d1"])
+    orch = _fx_orch([(_fx(download=["d1"]), False), (_fx(), False)], [False, True])
+    evs = [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    purged = [e for e in evs if isinstance(e, Progress) and e.scope == "purged"]
+    assert purged and "d1" in purged[0].text
+
+
+async def test_retry_emits_step_reset_to_clear_tool_log():
+    """重跑前让前端抖掉这一步上次的工具调用记录，不然同一步里同一个工具显示调了两遍。"""
+    purger = _RecordingPurger()
+    orch = _fx_orch([(_fx(), False), (_fx(), False)], [False, True])
+    evs = [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    resets = [e for e in evs if isinstance(e, Progress) and e.scope == "step_reset"]
+    assert resets and resets[0].text == "s1"
+
+
+async def test_terminal_failure_still_purges():
+    """用户拒绝危险操作 → 不重试，但这一版已产出的东西同样作废，照样要清。"""
+    purger = _RecordingPurger()
+    orch = _fx_orch([(_fx(download=["d1"]), True)], [False])
+    [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    assert purger.calls == [_fx(download=["d1"])]
+
+
+async def test_runs_without_purger_injected():
+    """未注入清理回调（精简装配/测试）时照常跑完，不报错。"""
+    orch = _fx_orch([(_fx(download=["d1"]), False), (_fx(), False)], [False, True])
+    [ev async for ev in orch.run("做点事")]

@@ -32,6 +32,7 @@ from harness.types import Message, Role
 
 from app.today import with_today
 
+from ..side_effects import empty_fx, has_any
 from .critic import Critic
 from .executor import CLARIFY_GUIDE, Executor, HidingRegistry, StepArtifact
 from .planner import Planner, PlannerError, render_tool_roster
@@ -352,7 +353,7 @@ class Orchestrator:
     async def run(self, user_message: str, verify: bool = True, *,
                   context=None, registry=None, recent_dialogue: str = "",
                   force_simple: bool = False, in_stateful_exam: bool = False,
-                  run_id: str | None = None):
+                  run_id: str | None = None, purge_side_effects=None):
         """verify：对应前端结果校验开关。开 → 终局 Critic 把关 + 可重规划；关 → 跑完一轮
         直接汇总交付，不做终局 review/重规划（更快，但不把关）。
 
@@ -496,7 +497,8 @@ class Orchestrator:
             all_artifacts: dict[str, Artifact] = {}
             while True:
                 async for ev in self._schedule_rounds(plan, retry_hints, budget, exec_reg,
-                                                          goal=user_message):
+                                                          goal=user_message,
+                                                          purge_side_effects=purge_side_effects):
                     yield ev
                 for s in plan.steps:      # 收走本轮 done 产物（replan 换 plan 也不丢）
                     if s.status == "done" and s.result:
@@ -581,7 +583,7 @@ class Orchestrator:
 
     # ---- 调度：一轮轮跑就绪集，直到无 pending、预算超限或无法推进（后两者带现有成果收尾）----
     async def _schedule_rounds(self, plan: Plan, retry_hints: dict[str, str], budget=None,
-                               exec_reg=None, goal: str = ""):
+                               exec_reg=None, goal: str = "", purge_side_effects=None):
         while has_pending(plan):
             if budget:
                 try:
@@ -612,18 +614,20 @@ class Orchestrator:
                 art = None
                 err = None
                 terminal = False
+                fx = empty_fx()          # 本次尝试的产物，失败时据此清理
                 try:
                     async for ev in self._executor.execute(
                             step, deps, retry_hints.get(step.id, ""),
                             registry=exec_reg, goal=goal):
                         if isinstance(ev, StepArtifact):
                             art, err, terminal = ev.artifact, ev.error, ev.terminal
+                            fx = ev.side_effects
                         else:
                             await queue.put(("ev", ev))
                 except Exception as e:  # 单步崩溃隔离
-                    await queue.put(("done", (step, None, str(e), False)))
+                    await queue.put(("done", (step, None, str(e), False, fx)))
                     return
-                await queue.put(("done", (step, art, err, terminal)))
+                await queue.put(("done", (step, art, err, terminal, fx)))
 
             tasks = [asyncio.create_task(_worker(s)) for s in ready]
             remaining = len(tasks)
@@ -633,11 +637,13 @@ class Orchestrator:
                     if kind == "ev":
                         yield payload
                         continue
-                    step, art, err, terminal = payload
+                    step, art, err, terminal, fx = payload
                     remaining -= 1
                     if art is None or err:
                         self._on_step_fail(step, retry_hints, err or "执行未产出结果",
                                            terminal=terminal)
+                        for _ev in self._settle_failed_attempt(step, fx, purge_side_effects):
+                            yield _ev
                         continue
                     verdict = await self._critic.validate(step, art)
                     if verdict.ok:
@@ -650,6 +656,8 @@ class Orchestrator:
                         # 重跑只会把同一个弹窗再怼给用户一次，答案不会变。
                         self._on_step_fail(step, retry_hints, verdict.reason,
                                            terminal=terminal)
+                        for _ev in self._settle_failed_attempt(step, fx, purge_side_effects):
+                            yield _ev
             finally:
                 # 提前放弃迭代（客户端断连/停止 → 本生成器 aclose，GeneratorExit 抛在 yield 处）
                 # 时，同批未完成的 worker 必须取消，否则会变成继续跑 LLM 的悬挂任务。正常跑完时
@@ -665,6 +673,27 @@ class Orchestrator:
         for s in plan.steps:
             if s.status in ("pending", "running"):
                 s.status = "skipped"
+
+    @staticmethod
+    def _settle_failed_attempt(step, fx, purge_side_effects):
+        """作废一次尝试：删掉它产出的用户可见产物，并让前端抖掉这一步的旧记录。
+
+        为什么立即删而不像交付门那样延迟到交付时结算：单步重试的语义是"这次尝试整个作废"，
+        产物当场失效，没有"等新版产出了同类东西再决定"的必要。延迟反而会让用户在重跑期间
+        看到一个指向作废产物的下载按钮。
+
+        清理与前端通知都不该影响主流程：purge 内部已吞掉 store 异常，这里也不因为
+        没注入回调就中断——精简装配下本就可能没有下载/知识库能力。
+        """
+        # step_reset 先发：让前端在新一轮工具调用进来之前就把这一步的旧记录抖掉，
+        # 否则同一步里同一个工具会显示调了两遍。无论有没有产物都要发。
+        yield Progress("step_reset", step.id, status="ok")
+        if purge_side_effects is None or not has_any(fx):
+            return
+        purged = purge_side_effects(fx) or []
+        if purged:
+            # 告诉在途前端撤掉已渲染的下载按钮——产物没了，按钮点开是 404
+            yield Progress("purged", json.dumps(purged, ensure_ascii=False), status="ok")
 
     def _on_step_fail(self, step, retry_hints: dict[str, str], reason: str, *,
                       terminal: bool = False) -> None:

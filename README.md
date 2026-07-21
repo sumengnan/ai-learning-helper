@@ -1,11 +1,7 @@
 # AI 学习助手
 
-[![在线演示](https://img.shields.io/badge/%F0%9F%9A%80_在线演示-192.144.213.12-brightgreen)](http://192.144.213.12)
 [![Docker Hub](https://img.shields.io/badge/Docker%20Hub-sumengnan%2Fai--learning--helper-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/sumengnan/ai-learning-helper)
 [![Image Size](https://img.shields.io/docker/image-size/sumengnan/ai-learning-helper?sort=semver)](https://hub.docker.com/r/sumengnan/ai-learning-helper/tags)
-
-> ## 🚀 在线演示:**http://192.144.213.12**
-> 无需部署,打开即可体验 —— **可自行注册账号**登录使用。
 
 > 🐳 **Docker 镜像**:[hub.docker.com/r/sumengnan/ai-learning-helper](https://hub.docker.com/r/sumengnan/ai-learning-helper) · 拉取:`docker pull sumengnan/ai-learning-helper`
 
@@ -110,8 +106,10 @@ flowchart TD
 - **重试上限**:单步 2 次、终局重规划 2 轮、Planner 出无效 DAG 重试 2 次、每个执行子步内部
   最多 10 个 AgentLoop 步(均可配,见[环境变量](#环境变量))。用户拒绝危险操作导致的失败是
   **终态**,不重试——重跑只会把同一个弹窗再怼给用户一次。
-- **交付门**:轮次开头就下发"开门"信号,本轮生成的文件在结果校验完成前不显示;校验不过触发
-  重答时,失败那次产生的下载/入库/出题副作用会被清理,不留悬空的下载按钮。
+- **交付门**:轮次开头就下发"开门"信号,本轮生成的文件在结果校验完成前不显示。
+- **失败尝试的产物会被清理**:单步质检不过要重跑时,先把这一版已产出的下载/入库/出题副作用删掉,
+  并让前端抖掉该步上次的工具调用记录——否则模型重跑会把 `save_download` 再调一遍,
+  消息下方挂出两个下载按钮,其中一个还是判定不合格的那版。
 
 ## 技术栈
 

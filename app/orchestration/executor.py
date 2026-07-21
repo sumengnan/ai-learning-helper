@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from harness.context.manager import ContextManager
 from harness.events import (
@@ -18,6 +18,7 @@ from harness.tools.base import ToolRegistry
 from ..search_guidance import SEARCH_SYSTEM_GUIDANCE
 from app.today import today_guide
 
+from ..side_effects import empty_fx, ids_from_tool, merge_fx
 from .plan import Artifact, PlanStep
 from .usage_ctx import record_usage
 
@@ -64,10 +65,15 @@ class StepArtifact:
 
     terminal=True 表示这次失败不可通过重试挽回（当前唯一来源：用户拒绝了危险操作），
     调度器应直接判 failed，不再重跑本步。
+
+    side_effects 记本次尝试产出的用户可见产物 id（下载/知识/题目）。校验不过要重跑时，
+    调度器据此把这一版的产物删掉——不然重跑再存一遍，聊天下方会挂出两个下载按钮，
+    其中一个还是判定不合格的那版。
     """
     artifact: Artifact
     error: str | None = None
     terminal: bool = False
+    side_effects: dict = field(default_factory=empty_fx)
 
 
 # 子步默认只有裸系统提示词，缺少主聊天那套工具引导，模型会拿 http_request/浏览器乱抓网页
@@ -176,6 +182,7 @@ class Executor:
         final_text = ""
         error = None
         user_denied = False
+        side_effects = empty_fx()          # 本次尝试的产物 id，随 StepArtifact 回传供清理
         tool_names: dict[str, str] = {}
         tool_args: dict[str, object] = {}   # 暂存入参，供完成行带全（前端按 key 合并只留最后一条）
         token = set_current_agent(f"executor:{step.id}")
@@ -205,6 +212,10 @@ class Executor:
                     name = tool_names.get(r.tool_call_id, "工具")
                     if r.is_error and _USER_DENIED_MARK in (r.content or ""):
                         user_denied = True          # 本步含被用户拒绝的操作 → 不可重试
+                    # 登记产物：必须在这里而不是事后从 Progress 里扒——这里同时看得见
+                    # 工具名、结果文本与 is_error，是唯一能准确判定"真产出了东西"的位置
+                    side_effects = merge_fx(
+                        side_effects, ids_from_tool(name, r.content or "", r.is_error))
                     yield ev
                     yield Progress(scope, f"调用工具 {name}",
                                    status="error" if r.is_error else "ok", key=r.tool_call_id,
@@ -225,4 +236,4 @@ class Executor:
                 from harness.llm.openai_compat import reset_extra_body_override
                 reset_extra_body_override(think_token)
         yield StepArtifact(Artifact(summary=final_text, data={}, files=[]),
-                           error=error, terminal=user_denied)
+                           error=error, terminal=user_denied, side_effects=side_effects)

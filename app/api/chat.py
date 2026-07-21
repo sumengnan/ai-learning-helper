@@ -40,6 +40,7 @@ from ..conversation_memory import ConversationMemoryService
 from ..orchestration.orchestrator import VERIFY_TRACE_KEY
 from ..orchestration.executor import CLARIFY_GUIDE
 from ..profile import render_profile_block
+from ..side_effects import SideEffectPurger
 from ..sandbox_manager import reset_sandbox_conv, sandbox_guide, set_sandbox_conv
 from ..summaries import SummaryStore
 from ..summarizer import RollingSummarizer
@@ -1001,11 +1002,27 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     if getattr(harness, "skill_registry", None) is not None:
                         from harness.skills.context import SkillContextManager
                         _octx = SkillContextManager(_octx, harness.skill_registry)
+                    # 单步校验不过要重跑时，先把这一版已产出的下载/知识/题目删掉：
+                    # 不删则模型重跑会把 save_download 再调一遍，消息下方挂出两个下载按钮，
+                    # 其中一个还是判定不合格的那版。user_id 在这里绑定，编排器不必知道用户是谁。
+                    _purger = SideEffectPurger(
+                        download_store=getattr(harness, "download_store", None),
+                        knowledge_service=knowledge_service,
+                        question_store=question_store)
+
+                    def _purge_step_fx(fx) -> list[str]:
+                        purged = _purger.purge(user_id, fx)
+                        # 产物没了，落库 steps 里的机读标记也不能留——否则历史消息重新加载时
+                        # 前端照样渲染出下载按钮，点开是已删的文件
+                        _drop_purged_marks(steps, fx)
+                        return purged
+
                     _orch_src = SimpleNamespace(
                         run=lambda m: harness.orchestrator.run(
                             m, verify=req.verify, context=_octx, registry=registry,
                             recent_dialogue=recent_dialogue, force_simple=force_simple,
                             in_stateful_exam=in_stateful_exam,
+                            purge_side_effects=_purge_step_fx,
                             run_id=run_id_a))   # 事件归到 conversation_runs 登记的 run_id，统计才认
                     # 告诉在途客户端「本轮开了校验门」。必须赶在编排器跑之前发：执行子步的
                     # save_download 远早于编排器那条「结果校验中…」（后者要等所有步骤跑完），

@@ -97,6 +97,19 @@ function TypingDots() {
 // 耗时格式化保持从此处导出（历史引用/测试用），实现移入 duration.ts
 export { fmtDuration } from "./duration";
 
+/** 抖掉某一步的全部进度行（工具调用 + 步骤头行），供 scope=step_reset 使用。
+ *
+ * 按 scope 全等匹配而非前缀：`subagent:executor:s1` 用前缀匹配会连 `s10` 一起清掉。
+ * 头行一并清掉是对的——重跑会重新发一条。并行跑的其它步没失败，记录该留着。
+ */
+export function dropStepProgress<T extends { scope: string }>(
+  progress: T[] | undefined, stepId: string,
+): T[] {
+  if (!progress) return [];
+  if (!stepId) return progress;
+  return progress.filter((p) => p.scope !== `subagent:executor:${stepId}`);
+}
+
 export function ChatView({ conversationId, initial, autoSend, onTitled, onStart }:
   { conversationId: string; initial: ChatMessage[]; autoSend?: string | null;
     onTitled?: () => void; onStart?: () => void }) {
@@ -336,6 +349,12 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
               + "\n（该版本未通过校验，此产物已作废删除）" }
           : s;
       });
+    });
+    // 单步重跑（scope=step_reset，text 为步骤 id）：该步校验没过要重跑，把它上一次的
+    // 工具调用记录抖掉。不清的话同一步下会挂着两轮同样的调用，用户看着像 AI 干了两遍活。
+    // 特判、不入 progress 列。
+    else if (e.type === "Progress" && e.data.scope === "step_reset") upd((a) => {
+      a.progress = dropStepProgress(a.progress, e.data.text);
     });
     // 清屏（scope=reset）：交付门里上一版正文没过校验、要重答，先清空已流式显示的内容，
     // 让新版从头打字机输出。只清正文，不动 steps/progress/校验历史（那是过程轨迹，另有 purged

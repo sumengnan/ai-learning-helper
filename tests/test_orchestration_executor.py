@@ -1,6 +1,8 @@
 from harness.events import Progress
 from harness.llm.base import StreamChunk
-from harness.tools.base import ToolRegistry
+from harness.types import ToolOutput
+from pydantic import BaseModel
+from harness.tools.base import Tool, ToolRegistry
 from app.orchestration.executor import Executor, StepArtifact
 from app.orchestration.plan import Artifact, PlanStep
 
@@ -20,8 +22,9 @@ async def _collect(gen):
     async for ev in gen:
         if isinstance(ev, StepArtifact):
             artifact = ev.artifact
-            # 便于测试直接查 artifact.error，而不必额外返回整个 StepArtifact 信号
+            # 便于测试直接查 artifact.error/side_effects，而不必额外返回整个 StepArtifact 信号
             artifact.error = ev.error
+            artifact.side_effects = ev.side_effects
         else:
             events.append(ev)
     return events, artifact
@@ -334,3 +337,65 @@ def test_no_goal_keeps_prompt_unchanged():
     from app.orchestration.plan import PlanStep
     step = PlanStep(id="s1", description="搜索资料", expected="资料", depends_on=[])
     assert "用户的原始请求" not in _build_prompt(step, {}, "")
+
+
+# ---------- 副作用登记（供单步重试时清理）----------
+
+class _FakeSaveDownload(Tool):
+    """冒充 save_download：产物 id 走 marker 字段（与真实 SaveDownloadTool 一致——
+    marker 不进模型上下文，但会被 ToolExecutor 拼进 ToolResult.content）。"""
+    name = "save_download"
+    description = "保存下载"
+
+    class Params(BaseModel):
+        filename: str
+
+    def __init__(self, did="d1", fail=False):
+        self._did, self._fail = did, fail
+
+    async def run(self, params):
+        from harness.tools.base import ToolError
+        if self._fail:
+            raise ToolError(f"保存失败 〔下载ID:{self._did}〕")
+        return ToolOutput(text="已保存", marker=f"〔下载ID:{self._did}〕")
+
+
+def _reg_with_save_download(did="d1", fail=False):
+    reg = ToolRegistry(); reg.register(_FakeSaveDownload(did, fail))
+    return reg
+
+
+def _save_download_turns():
+    from harness.llm.base import ToolCallDelta
+    return [
+        [StreamChunk(type="tool_call", tool_call_delta=ToolCallDelta(
+            index=0, id="c1", name="save_download", arguments='{"filename": "a.md"}')),
+         StreamChunk(type="done")],
+        [StreamChunk(type="text", text="存好了"), StreamChunk(type="done")],
+    ]
+
+
+async def test_artifact_records_download_side_effect(make_mock):
+    """带副作用的工具调完，产物 id 要挂在 StepArtifact 上——否则重试时无从知道该删什么。"""
+    ex = Executor(client=make_mock(_save_download_turns()),
+                  registry=_reg_with_save_download(), system_prompt="s", model="m", max_steps=3)
+    _, artifact = await _collect(ex.execute(_step(), {}))
+    assert artifact.side_effects["download"] == ["d1"]
+
+
+async def test_artifact_records_nothing_when_tool_failed(make_mock):
+    """工具报错时没有真产物，报错文本里回显的标记不能当成要清理的东西。"""
+    ex = Executor(client=make_mock(_save_download_turns()),
+                  registry=_reg_with_save_download(fail=True),
+                  system_prompt="s", model="m", max_steps=3)
+    _, artifact = await _collect(ex.execute(_step(), {}))
+    assert artifact.side_effects["download"] == []
+
+
+async def test_artifact_side_effects_empty_without_side_effect_tools(make_mock):
+    from harness.tools.builtins.calculator import CalculatorTool
+    reg = ToolRegistry(); reg.register(CalculatorTool())
+    ex = Executor(client=make_mock(_tool_then_done_turns()),
+                  registry=reg, system_prompt="s", model="m", max_steps=3)
+    _, artifact = await _collect(ex.execute(_step(), {}))
+    assert not any(artifact.side_effects.values())
