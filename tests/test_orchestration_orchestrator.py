@@ -1371,3 +1371,71 @@ async def test_triage_failure_still_falls_back_to_full_orchestration():
         raise RuntimeError("端点抖动")
     o._fast_complete = _boom
     assert await o._is_simple("继续", "前文…") is False
+
+
+# ---------- 考试轮的终局校验不得把「逐题呈现」判成内容遗漏 ----------
+
+async def test_exam_review_gets_one_question_at_a_time_rule():
+    """回归：用户实际遇到的误判——
+
+    「未通过 — 目标要求抽取5道题进行考试，但当前产出仅提供了第1题，缺失了第2至第5题的
+    内容。这构成了实质性的内容遗漏」。而逐题呈现恰恰是对的：服务端托管游标，模型本轮
+    只负责讲解上一题 + 呈现当前这一道。
+
+    误判的代价不对称：它触发整轮重答，用户白等一次，重答出来的还是同一道题。
+    """
+    seen = {}
+
+    class _CapturingCritic:
+        async def review(self, goal, plan, artifacts):
+            seen["goal"] = goal
+            from app.orchestration.plan import Review
+            return Review(accept=True, feedback="")
+
+        async def validate(self, step, artifact):
+            from app.orchestration.plan import Verdict
+            return Verdict(ok=True, reason="")
+
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), _CapturingCritic(), [])
+
+    from harness.events import TextDelta
+    from harness.types import Message, Role
+
+    async def _draft(msg, budget=None, *, context=None, registry=None,
+                     prefer_main=False, skill_hint=""):
+        yield TextDelta(text="第1题：……")        # draft 从 TextDelta 累加，空产出会提前返回
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content="第1题：……"))
+    orch._simple_answer = _draft
+
+    [e async for e in orch._simple_answer_verified("从题库抽5道题考考我")]
+    g = seen["goal"]
+    assert "一次只出一道" in g, "必须告诉校验器考试的推进规则"
+    assert "不要因为" in g and "内容遗漏" in g, "要点名这个具体误判"
+    assert "从题库抽5道题考考我" in g, "用户原始请求不能被说明挤掉"
+
+
+async def test_exam_review_still_states_what_to_actually_check():
+    """别做成「考试轮一律放行」——判分说反、漏告知错题集、篡改题目仍要拦。"""
+    from app.orchestration.orchestrator import _EXAM_REVIEW_NOTE
+    assert "说反" in _EXAM_REVIEW_NOTE
+    assert "错题集" in _EXAM_REVIEW_NOTE
+    assert "篡改" in _EXAM_REVIEW_NOTE
+
+
+async def test_non_exam_round_review_has_no_exam_note():
+    """反向：多步任务的终局 review 不该被塞考试说明，否则真正的内容遗漏会被放过。"""
+    seen = {}
+
+    class _CapturingCritic:
+        async def review(self, goal, plan, artifacts):
+            seen["goal"] = goal
+            from app.orchestration.plan import Review
+            return Review(accept=True, feedback="")
+
+        async def validate(self, step, artifact):
+            from app.orchestration.plan import Verdict
+            return Verdict(ok=True, reason="")
+
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), _CapturingCritic(), [], triage_simple=False)
+    await _run(orch, "调研 AI 现状并整理成报告")
+    assert "一次只出一道" not in seen.get("goal", "")
