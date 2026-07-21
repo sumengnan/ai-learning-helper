@@ -436,6 +436,10 @@ class Orchestrator:
             if force_simple or (not skill_hint
                                 and (_obvious_simple(user_message)
                                      or await self._is_simple(user_message, recent_dialogue))):
+                # 分流结论先于执行发出：这条路不出「任务步骤」块，用户此前只能靠「没有块」
+                # 反推走了单循环，triage 误判（该拆步却判了 simple）也就无从察觉。
+                yield Progress(scope="route", text="简单直答", key="route",
+                               detail={"mode": "simple"}, status="ok")
                 # 考试轮（force_simple）且开了结果校验 → 补一道终局校验 + 就地重答。
                 # 判分/错题入库/游标推进都是服务端确定性完成的，模型只负责讲解与呈现下一题；
                 # 讲解讲错（判定说反、漏告知「已存入错题集」、篡改下一题）此前无人兜底。
@@ -458,6 +462,12 @@ class Orchestrator:
                                                         skill_hint=skill_hint):
                         yield ev
                 return
+
+            # 与简单路径成对：在规划开始前发，让徽章与「任务计划思考」同时出现，而不是
+            # 等计划出来才追认。后面规划失败降级到 _simple_answer 时不改口——那轮确实
+            # 走了编排器，只是没成功，改成「简单直答」反而掩盖了失败。
+            yield Progress(scope="route", text="多步规划", key="route",
+                           detail={"mode": "plan"}, status="ok")
 
             # 规划器必须看到执行子步真正拿得到的那份工具视图（exec_reg，非裸 registry）：
             # 否则它会凭常识编出系统做不到的步骤（如「保存到 Notion/Obsidian」），执行子步

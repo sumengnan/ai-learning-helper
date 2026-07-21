@@ -57,6 +57,11 @@ class AppConfig(HarnessConfig):
     require_captcha: bool = False
     # 应用领域各表统一存于此单一数据库文件（可用 HARNESS_APP_DB_PATH 覆盖）
     app_db_path: str = "app.db"
+    # 站点备案信息（全站页脚）。三项均默认空 = 不展示，本地开发与未备案部署不受影响；
+    # 放后端配置而非前端常量：换主体只改 .env 重启，不必重新构建前端产物。
+    site_icp: str = ""            # ICP 备案号，如「京ICP备12345678号-1」
+    site_police_icp: str = ""     # 公安备案号，如「京公网安备 11010102000001号」
+    site_copyright: str = ""      # 版权主体名称，如「某某科技有限公司」
     app_system_prompt: str = (
         "你是一个 AI 学习助手，可用工具检索知识、联网、计算来帮助用户学习。"
         "你只协助与学习相关的请求——如知识问答、资料检索与整理、出题与讲解、"

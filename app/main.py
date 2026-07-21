@@ -20,6 +20,7 @@ from .api.stats import make_stats_router
 from .api.exam_status import make_exam_router
 from .api.pending_actions import make_pending_actions_router
 from .api.models_info import make_models_router
+from .api.site_info import make_site_router
 from .api.version import make_version_router
 from .api.wrong_answers import make_wrong_answers_router
 from harness.telemetry.tracer import setup_telemetry
@@ -156,6 +157,7 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
         await run_manager.close()
 
     app.include_router(make_version_router())
+    app.include_router(make_site_router(config))
     app.include_router(make_models_router(config))
     app.include_router(make_auth_router(auth, require_captcha=config.require_captcha))
     app.include_router(make_conversations_router(store, harness, attachment_store, config))

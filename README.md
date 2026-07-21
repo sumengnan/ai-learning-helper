@@ -186,6 +186,7 @@ dict / list 值写 JSON。生产务必设置随机 `AUTH_SECRET` 与真实 `HARN
 | `HARNESS_ENABLE_STEP_CHECK` | `true` | 高风险步实时校验(检索相关性 / 代码执行) |
 | `HARNESS_ENABLE_URL_BLOCKLIST` | `true` | 抓取失败网址分级登记 |
 | `HARNESS_REQUIRE_CAPTCHA` | `false` | 登录/注册强制图形验证码 |
+| `HARNESS_SITE_ICP` / `_POLICE_ICP` / `_COPYRIGHT` | 空 | 全站页脚备案信息;全空则整块不展示 |
 | `HARNESS_LOOP_DETECT_WINDOW` | `3` | 循环检测窗口,`<2` 关闭 |
 | `HARNESS_SANDBOX_APPROVAL_TIMEOUT` | `120` | 危险命令人工确认超时(秒),超时自动拒绝 |
 | `HARNESS_ORCHESTRATOR_MAX_STEP_RETRY` | `2` | 单步反复失败上限 |

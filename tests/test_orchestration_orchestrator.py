@@ -1492,3 +1492,39 @@ async def test_greeting_still_skips_verification():
     orch._simple_answer_verified = _verified.__get__(orch, om.Orchestrator)
     await _run(orch, "你好")
     assert not seen.get("called")
+
+
+def _routes(events):
+    return [e for e in events if isinstance(e, Progress) and e.scope == "route"]
+
+
+async def test_simple_path_announces_route():
+    """简单直答不出「任务步骤」块，用户此前只能靠「没有块」反推走了哪条路。"""
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [], triage_simple=True)
+    rs = _routes(await _run(orch, "你好"))
+    assert len(rs) == 1
+    assert rs[0].detail == {"mode": "simple"}
+    assert rs[0].text == "简单直答"
+
+
+async def test_planning_path_announces_route_before_planning():
+    """徽章须先于规划发出：等计划出来才追认，用户在最慢的那条路上先看到的是空白。"""
+    order = []
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), order)
+    events = await _run(orch, "调研 AI 现状并整理成报告")
+    rs = _routes(events)
+    assert len(rs) == 1
+    assert rs[0].detail == {"mode": "plan"}
+    plans = [i for i, e in enumerate(events)
+             if isinstance(e, Progress) and e.scope in ("plan", "plan_reasoning")]
+    assert plans and events.index(rs[0]) < plans[0], "路由徽章必须早于任何规划事件"
+
+
+async def test_planner_error_fallback_keeps_plan_route():
+    """规划失败降级到单循环，仍报「多步规划」——那轮确实走了编排器，只是没成功。
+
+    改口成「简单直答」会把一次失败伪装成一次正常的快速路由，恰好掩盖了要排查的东西。
+    """
+    orch = _mk(FakePlanner([_plan(_s("s1"))], raise_on_plan=True), FakeCritic(), [])
+    rs = _routes(await _run(orch, "调研 AI 现状并整理成报告"))
+    assert [r.detail["mode"] for r in rs] == ["plan"]
