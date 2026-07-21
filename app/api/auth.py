@@ -47,6 +47,24 @@ class _ResetPassword(BaseModel):
         return v
 
 
+class _UpdateProfile(BaseModel):
+    """登录后自助改姓名。"""
+    full_name: str
+
+
+class _ChangePassword(BaseModel):
+    """登录后自助改密码：必须带当前密码，token 本身不足以授权改密。"""
+    current_password: str
+    new_password: str
+
+    @field_validator("current_password", "new_password")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("不能为空")
+        return v
+
+
 class ResetThrottle:
     """按账号计的重置失败节流。
 
@@ -155,5 +173,39 @@ def make_auth_router(auth: AuthService, *, require_captcha: bool = False,
         if user is None:
             raise HTTPException(status_code=401, detail="用户不存在")
         return user
+
+    @router.patch("/api/auth/profile")
+    async def update_profile(body: _UpdateProfile, user_id: str = Depends(current_user)):
+        # 姓名同时是「忘记密码」的核身凭据，不能改成空——那等于自断自助重置的后路。
+        # 老账号（full_name 为 NULL）也正是靠这个接口补填后才用得上重置。
+        name = body.full_name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="请填写姓名")
+        if len(name) > _MAX_NAME_LEN:
+            raise HTTPException(status_code=422, detail=f"姓名不超过 {_MAX_NAME_LEN} 字")
+        if not auth.users.set_full_name(user_id, name):
+            raise HTTPException(status_code=401, detail="用户不存在")
+        log.info("姓名已更新 user_id=%s", user_id)
+        return auth.users.get(user_id)
+
+    @router.post("/api/auth/change-password")
+    async def change_password(body: _ChangePassword, user_id: str = Depends(current_user)):
+        """登录态下改密码。**必须核对当前密码**：持有 token 只说明这个会话曾经登录过，
+        而会话可能是别人借来的（共用电脑没登出、token 被顺走）。改密码是能把账号彻底
+        锁给自己的动作，门槛得比「持有会话」更高一档。
+
+        与「忘记密码」一致，改完不签发新 token——那会把一次改密静默延长成一次续期。
+        """
+        user = auth.users.get(user_id)
+        if user is None:
+            raise HTTPException(status_code=401, detail="用户不存在")
+        if len(body.new_password) < _MIN_PASSWORD:
+            raise HTTPException(status_code=422, detail=f"密码至少 {_MIN_PASSWORD} 位")
+        if auth.users.verify(user["username"], body.current_password) is None:
+            log.info("改密码核对当前密码失败 user_id=%s", user_id)
+            raise HTTPException(status_code=400, detail="当前密码不正确")
+        auth.users.set_password(user_id, body.new_password)
+        log.info("密码已修改 user_id=%s", user_id)
+        return {"ok": True}
 
     return router

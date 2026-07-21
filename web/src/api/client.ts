@@ -123,6 +123,25 @@ export const auth = {
     if (!r.ok) throw new Error(await detail(r, "登录失败"));
     return r.json();
   },
+  // 登录后自助改姓名，返回更新后的 user（调用方据此刷新顶栏显示）
+  updateName: async (fullName: string): Promise<User> => {
+    const r = await authFetch("/api/auth/profile", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ full_name: fullName }),
+    });
+    if (!r.ok) throw new Error(await detail(r, "修改姓名失败"));
+    return r.json();
+  },
+  // 登录后自助改密码。后端要核对当前密码，且不返回新 token
+  changePassword: async (currentPassword: string, newPassword: string): Promise<void> => {
+    const r = await authFetch("/api/auth/change-password", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        current_password: currentPassword, new_password: newPassword,
+      }),
+    });
+    if (!r.ok) throw new Error(await detail(r, "修改密码失败"));
+  },
 };
 
 export function drainSSE(buffer: string): { events: AgentEvent[]; rest: string } {

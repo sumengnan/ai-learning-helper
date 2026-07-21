@@ -336,3 +336,100 @@ def test_reset_requires_captcha_when_enabled():
     token, code = _solve_captcha(client)
     assert _reset(client, "amy", "艾米",
                   captcha_token=token, captcha_text=code).status_code == 200
+
+
+# ---- 登录后自助修改：姓名 / 密码 ----
+
+def _auth(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _new_user(client, username="amy", password="old1234", name="艾米"):
+    r = client.post("/api/auth/register",
+                    json={"username": username, "full_name": name, "password": password})
+    assert r.status_code == 200, r.text
+    return r.json()["token"]
+
+
+def test_change_name_updates_profile():
+    client = _client()
+    token = _new_user(client)
+    r = client.patch("/api/auth/profile", json={"full_name": "艾米丽"}, headers=_auth(token))
+    assert r.status_code == 200
+    assert r.json()["full_name"] == "艾米丽"
+    assert client.get("/api/auth/me", headers=_auth(token)).json()["full_name"] == "艾米丽"
+
+
+def test_change_name_requires_auth():
+    client = _client()
+    _new_user(client)
+    assert client.patch("/api/auth/profile", json={"full_name": "谁"}).status_code == 401
+
+
+def test_change_name_rejects_blank():
+    # 姓名是找回密码的凭据，允许改成空等于把自助重置的路堵死
+    client = _client()
+    token = _new_user(client)
+    r = client.patch("/api/auth/profile", json={"full_name": "   "}, headers=_auth(token))
+    assert r.status_code == 422
+    assert client.get("/api/auth/me", headers=_auth(token)).json()["full_name"] == "艾米"
+
+
+def test_change_name_enforces_max_len():
+    client = _client()
+    token = _new_user(client)
+    r = client.patch("/api/auth/profile", json={"full_name": "长" * 65}, headers=_auth(token))
+    assert r.status_code == 422
+
+
+def test_change_password_with_correct_current():
+    client = _client()
+    token = _new_user(client)
+    r = client.post("/api/auth/change-password",
+                    json={"current_password": "old1234", "new_password": "new5678"},
+                    headers=_auth(token))
+    assert r.status_code == 200
+    # 新密码可登录、旧密码不再可用
+    assert client.post("/api/auth/login",
+                       json={"username": "amy", "password": "new5678"}).status_code == 200
+    assert client.post("/api/auth/login",
+                       json={"username": "amy", "password": "old1234"}).status_code == 401
+
+
+def test_change_password_rejects_wrong_current():
+    # 光有 token 不够：会话被借用（他人电脑未登出）时不该能悄悄改掉密码
+    client = _client()
+    token = _new_user(client)
+    r = client.post("/api/auth/change-password",
+                    json={"current_password": "猜的", "new_password": "new5678"},
+                    headers=_auth(token))
+    assert r.status_code == 400
+    assert client.post("/api/auth/login",
+                       json={"username": "amy", "password": "old1234"}).status_code == 200
+
+
+def test_change_password_requires_auth():
+    client = _client()
+    _new_user(client)
+    assert client.post("/api/auth/change-password",
+                       json={"current_password": "old1234",
+                             "new_password": "new5678"}).status_code == 401
+
+
+def test_change_password_enforces_min_length():
+    client = _client()
+    token = _new_user(client)
+    r = client.post("/api/auth/change-password",
+                    json={"current_password": "old1234", "new_password": "abc"},
+                    headers=_auth(token))
+    assert r.status_code == 422
+
+
+def test_change_password_does_not_return_token():
+    # 与「忘记密码」一致：改完不顺手续签，避免把改密码悄悄变成延长会话
+    client = _client()
+    token = _new_user(client)
+    r = client.post("/api/auth/change-password",
+                    json={"current_password": "old1234", "new_password": "new5678"},
+                    headers=_auth(token))
+    assert "token" not in r.json()

@@ -19,6 +19,8 @@ import Brightness4Icon from "@mui/icons-material/Brightness4";
 import Brightness7Icon from "@mui/icons-material/Brightness7";
 import LogoutIcon from "@mui/icons-material/Logout";
 import TuneIcon from "@mui/icons-material/Tune";
+import BadgeIcon from "@mui/icons-material/BadgeOutlined";
+import LockResetIcon from "@mui/icons-material/LockReset";
 import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import FaceRetouchingNaturalIcon from "@mui/icons-material/FaceRetouchingNatural";
 import { useColorMode } from "../ThemeModeProvider";
@@ -26,6 +28,7 @@ import { useAuth } from "../auth/AuthProvider";
 import { useProfileDrawer } from "../pages/ProfileDrawer";
 import { VersionBadge } from "./VersionBadge";
 import { BeianFooter } from "./BeianFooter";
+import { ChangeNameDialog, ChangePasswordDialog } from "./AccountDialogs";
 
 const WIDTH = 220;
 const MINI = 68;
@@ -59,6 +62,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [navOpen, setNavOpen] = useState(true);
   const width = navOpen ? WIDTH : MINI;
   const name = displayName(user);
+  const [dialog, setDialog] = useState<null | "name" | "password">(null);
 
   const isActive = (to: string) =>
     to === "/" ? location.pathname === "/" : location.pathname.startsWith(to);
@@ -209,6 +213,14 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </Box>
               )}
               {user && <Divider />}
+              <MenuItem onClick={() => { setMenuAnchor(null); setDialog("name"); }}>
+                <ListItemIcon><BadgeIcon fontSize="small" /></ListItemIcon>
+                修改姓名
+              </MenuItem>
+              <MenuItem onClick={() => { setMenuAnchor(null); setDialog("password"); }}>
+                <ListItemIcon><LockResetIcon fontSize="small" /></ListItemIcon>
+                修改密码
+              </MenuItem>
               <MenuItem onClick={() => { setMenuAnchor(null); openProfile(); }}>
                 <ListItemIcon><TuneIcon fontSize="small" /></ListItemIcon>
                 AI 个性化
@@ -227,6 +239,12 @@ export function AppShell({ children }: { children: ReactNode }) {
         {/* 备案信息挂在外壳而非各页面：一处渲染即覆盖全部路由，且切页不重新拉取 */}
         <BeianFooter divider />
       </Box>
+
+      {/* key 让对话框每次打开都是全新状态：否则上次填了一半的密码会留在表单里 */}
+      <ChangeNameDialog key={`name-${dialog}`}
+        open={dialog === "name"} onClose={() => setDialog(null)} />
+      <ChangePasswordDialog key={`pwd-${dialog}`}
+        open={dialog === "password"} onClose={() => setDialog(null)} />
     </Box>
   );
 }
