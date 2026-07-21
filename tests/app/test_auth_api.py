@@ -38,7 +38,7 @@ def _client(require_captcha=False):
 
 
 def _register(client, username, password="pw1234"):
-    r = client.post("/api/auth/register", json={"username": username, "password": password})
+    r = client.post("/api/auth/register", json={"username": username, "full_name": "测试用户", "password": password})
     assert r.status_code == 200, r.text
     return r.json()["token"]
 
@@ -49,7 +49,7 @@ def _hdr(token):
 
 def test_register_returns_token_and_user():
     client = _client()
-    r = client.post("/api/auth/register", json={"username": "alice", "password": "pw1234"})
+    r = client.post("/api/auth/register", json={"username": "alice", "full_name": "测试用户", "password": "pw1234"})
     assert r.status_code == 200
     body = r.json()
     assert body["token"] and body["user"]["username"] == "alice"
@@ -58,19 +58,19 @@ def test_register_returns_token_and_user():
 def test_register_duplicate_400():
     client = _client()
     _register(client, "bob")
-    r = client.post("/api/auth/register", json={"username": "bob", "password": "pw1234"})
+    r = client.post("/api/auth/register", json={"username": "bob", "full_name": "测试用户", "password": "pw1234"})
     assert r.status_code == 400
 
 
 def test_register_short_password_422():
     client = _client()
-    r = client.post("/api/auth/register", json={"username": "x", "password": "123"})
+    r = client.post("/api/auth/register", json={"username": "x", "full_name": "测试用户", "password": "123"})
     assert r.status_code == 422
 
 
 def test_register_blank_username_422():
     client = _client()
-    r = client.post("/api/auth/register", json={"username": "  ", "password": "pw1234"})
+    r = client.post("/api/auth/register", json={"username": "  ", "full_name": "测试用户", "password": "pw1234"})
     assert r.status_code == 422
 
 
@@ -148,18 +148,18 @@ def test_captcha_endpoint_returns_token_and_image():
 def test_register_requires_valid_captcha_when_enabled():
     client = _client(require_captcha=True)
     # 缺验证码 → 400
-    r = client.post("/api/auth/register", json={"username": "cap1", "password": "pw1234"})
+    r = client.post("/api/auth/register", json={"username": "cap1", "full_name": "测试用户", "password": "pw1234"})
     assert r.status_code == 400
     # 错验证码 → 400
     token, _code = _solve_captcha(client)
     r = client.post("/api/auth/register", json={
-        "username": "cap1", "password": "pw1234",
+        "username": "cap1", "full_name": "测试用户", "password": "pw1234",
         "captcha_token": token, "captcha_text": "zzzz"})
     assert r.status_code == 400
     # 正确验证码 → 200
     token, code = _solve_captcha(client)
     r = client.post("/api/auth/register", json={
-        "username": "cap1", "password": "pw1234",
+        "username": "cap1", "full_name": "测试用户", "password": "pw1234",
         "captcha_token": token, "captcha_text": code})
     assert r.status_code == 200, r.text
     assert r.json()["user"]["username"] == "cap1"
@@ -169,7 +169,7 @@ def test_login_requires_valid_captcha_when_enabled():
     client = _client(require_captcha=True)
     token, code = _solve_captcha(client)
     client.post("/api/auth/register", json={
-        "username": "cap2", "password": "pw1234",
+        "username": "cap2", "full_name": "测试用户", "password": "pw1234",
         "captcha_token": token, "captcha_text": code})
     # 密码对但验证码缺失 → 400（验证码先于凭据校验）
     r = client.post("/api/auth/login", json={"username": "cap2", "password": "pw1234"})
@@ -186,7 +186,7 @@ def test_captcha_ignored_when_disabled():
     # 默认关：不带验证码也能注册/登录（保持既有行为）
     client = _client()
     assert client.post("/api/auth/register",
-                       json={"username": "nocap", "password": "pw1234"}).status_code == 200
+                       json={"username": "nocap", "full_name": "测试用户", "password": "pw1234"}).status_code == 200
 
 
 def test_refresh_header_on_near_expiry(monkeypatch):
@@ -203,3 +203,136 @@ def test_refresh_header_on_near_expiry(monkeypatch):
     r = client.get("/api/auth/me", headers=_hdr(short_tok))
     assert r.status_code == 200
     assert "X-Refresh-Token" in r.headers
+
+
+# ---- 姓名字段与忘记密码 ----
+
+def _reset(client, username, full_name, new_password="new1234", **kw):
+    return client.post("/api/auth/reset-password", json={
+        "username": username, "full_name": full_name,
+        "new_password": new_password, **kw})
+
+
+def test_register_requires_full_name():
+    """姓名是找回密码的唯一凭据，留空的账号日后无从自助重置，故注册时必填。"""
+    client = _client()
+    r = client.post("/api/auth/register",
+                    json={"username": "noname", "password": "pw1234"})
+    assert r.status_code == 422
+    assert "姓名" in r.json()["detail"]
+    # 只有空白也不算填
+    assert client.post("/api/auth/register", json={
+        "username": "noname", "full_name": "   ", "password": "pw1234"}).status_code == 422
+
+
+def test_reset_password_with_matching_name():
+    client = _client()
+    client.post("/api/auth/register",
+                json={"username": "amy", "full_name": "艾米", "password": "old1234"})
+    assert _reset(client, "amy", "艾米").status_code == 200
+    # 新密码可登录，旧密码失效
+    assert client.post("/api/auth/login",
+                       json={"username": "amy", "password": "new1234"}).status_code == 200
+    assert client.post("/api/auth/login",
+                       json={"username": "amy", "password": "old1234"}).status_code == 401
+
+
+def test_reset_does_not_log_user_in():
+    """重置成功刻意不签发 token：猜对姓名不该直接变成一次静默的账号接管。"""
+    client = _client()
+    client.post("/api/auth/register",
+                json={"username": "amy", "full_name": "艾米", "password": "old1234"})
+    assert "token" not in _reset(client, "amy", "艾米").json()
+
+
+def test_reset_name_match_ignores_case_and_spacing():
+    """「Li Ming」和「li  ming 」是同一个人；这种差异判失败只会把用户挡在自己账号外。"""
+    client = _client()
+    client.post("/api/auth/register",
+                json={"username": "lm", "full_name": "Li Ming", "password": "old1234"})
+    assert _reset(client, "lm", "  li   MING ").status_code == 200
+
+
+def test_reset_wrong_name_rejected_and_password_unchanged():
+    client = _client()
+    client.post("/api/auth/register",
+                json={"username": "amy", "full_name": "艾米", "password": "old1234"})
+    assert _reset(client, "amy", "张三").status_code == 400
+    # 密码没被改动
+    assert client.post("/api/auth/login",
+                       json={"username": "amy", "password": "old1234"}).status_code == 200
+
+
+def test_reset_does_not_leak_account_existence():
+    """账号不存在与姓名不对必须同一句话——分开说等于白送一个账号枚举接口。"""
+    client = _client()
+    client.post("/api/auth/register",
+                json={"username": "amy", "full_name": "艾米", "password": "old1234"})
+    missing = _reset(client, "nobody", "艾米")
+    wrong = _reset(client, "amy", "张三")
+    assert missing.status_code == wrong.status_code == 400
+    assert missing.json()["detail"] == wrong.json()["detail"]
+
+
+def test_reset_rejects_legacy_account_without_name():
+    """老账号 full_name 为 NULL：不能让空输入配上空姓名，须失败关闭。"""
+    client = _client()
+    app = client.app
+    app.state.auth.users.create("legacy", "old1234")     # 不带姓名，模拟老库
+    assert _reset(client, "legacy", "").status_code == 422       # 前置校验先拦
+    assert _reset(client, "legacy", "随便写").status_code == 400
+
+
+def test_reset_enforces_min_password():
+    client = _client()
+    client.post("/api/auth/register",
+                json={"username": "amy", "full_name": "艾米", "password": "old1234"})
+    assert _reset(client, "amy", "艾米", new_password="123").status_code == 422
+
+
+def test_reset_throttled_after_repeated_failures():
+    """姓名是弱凭据，验证码挡不住有人对着一个已知账号慢慢试——失败到上限即冷却。"""
+    client = _client()
+    client.post("/api/auth/register",
+                json={"username": "amy", "full_name": "艾米", "password": "old1234"})
+    for _ in range(5):
+        assert _reset(client, "amy", "猜错的名字").status_code == 400
+    r = _reset(client, "amy", "猜错的名字")
+    assert r.status_code == 429
+    # 锁定期内，即便姓名猜对了也不放行
+    assert _reset(client, "amy", "艾米").status_code == 429
+
+
+def test_throttle_is_per_account():
+    """按账号计：不该因为别人被锁而连累本账号。"""
+    client = _client()
+    for name in ("amy", "bob"):
+        client.post("/api/auth/register",
+                    json={"username": name, "full_name": "艾米", "password": "old1234"})
+    for _ in range(6):
+        _reset(client, "amy", "猜错的名字")
+    assert _reset(client, "bob", "艾米").status_code == 200
+
+
+def test_throttle_cleared_after_success():
+    client = _client()
+    client.post("/api/auth/register",
+                json={"username": "amy", "full_name": "艾米", "password": "old1234"})
+    for _ in range(4):
+        _reset(client, "amy", "猜错的名字")
+    assert _reset(client, "amy", "艾米").status_code == 200
+    # 成功即清零：不该只剩 1 次机会
+    for _ in range(4):
+        assert _reset(client, "amy", "又猜错了").status_code == 400
+
+
+def test_reset_requires_captcha_when_enabled():
+    client = _client(require_captcha=True)
+    token, code = _solve_captcha(client)
+    client.post("/api/auth/register", json={
+        "username": "amy", "full_name": "艾米", "password": "old1234",
+        "captcha_token": token, "captcha_text": code})
+    assert _reset(client, "amy", "艾米").status_code == 400          # 缺验证码
+    token, code = _solve_captcha(client)
+    assert _reset(client, "amy", "艾米",
+                  captcha_token=token, captcha_text=code).status_code == 200

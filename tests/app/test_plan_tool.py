@@ -114,7 +114,7 @@ def test_chat_emits_and_persists_plan(make_mock, tool_turn, text_turn):
     args = '{"steps":[{"title":"查资料","status":"running"},{"title":"汇总","status":"pending"}]}'
     client = _plan_client(make_mock, [tool_turn("update_plan", args, call_id="p1"),
                                       text_turn("完成")])
-    r = client.post("/api/auth/register", json={"username": "u", "password": "pw1234"})
+    r = client.post("/api/auth/register", json={"username": "u", "full_name": "测试用户", "password": "pw1234"})
     h = {"Authorization": f"Bearer {r.json()['token']}"}
     cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
 
@@ -238,7 +238,7 @@ def test_chat_persists_step_elapsed_for_refresh(make_mock, tool_turn, text_turn)
     client = _plan_client(make_mock, [tool_turn("update_plan", a1, call_id="p1"),
                                       tool_turn("update_plan", a2, call_id="p2"),
                                       text_turn("完成")])
-    r = client.post("/api/auth/register", json={"username": "u", "password": "pw1234"})
+    r = client.post("/api/auth/register", json={"username": "u", "full_name": "测试用户", "password": "pw1234"})
     h = {"Authorization": f"Bearer {r.json()['token']}"}
     cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
     with client.stream("POST", "/api/chat",
@@ -288,7 +288,7 @@ def test_chat_persists_running_step_start_for_refresh(make_mock, tool_turn, text
     a1 = '{"steps":[{"title":"查资料","status":"running"},{"title":"汇总","status":"pending"}]}'
     client = _plan_client(make_mock, [tool_turn("update_plan", a1, call_id="p1"),
                                       text_turn("完成")])
-    r = client.post("/api/auth/register", json={"username": "u", "password": "pw1234"})
+    r = client.post("/api/auth/register", json={"username": "u", "full_name": "测试用户", "password": "pw1234"})
     h = {"Authorization": f"Bearer {r.json()['token']}"}
     cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
     with client.stream("POST", "/api/chat",

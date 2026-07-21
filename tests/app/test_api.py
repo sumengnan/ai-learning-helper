@@ -48,7 +48,7 @@ def _cfg():
 
 
 def _auth_headers(client, username="u"):
-    r = client.post("/api/auth/register", json={"username": username, "password": "pw1234"})
+    r = client.post("/api/auth/register", json={"username": username, "full_name": "测试用户", "password": "pw1234"})
     return {"Authorization": f"Bearer {r.json()['token']}"}
 
 
@@ -350,7 +350,7 @@ def test_delete_question_cascades_related_wrong_answers(make_mock):
                      store=ConversationStore(":memory:"), doc_store=DocumentStore(":memory:"),
                      question_store=qs, wrong_store=ws)
     client = TestClient(app)
-    r = client.post("/api/auth/register", json={"username": "u", "password": "pw1234"})
+    r = client.post("/api/auth/register", json={"username": "u", "full_name": "测试用户", "password": "pw1234"})
     uid = r.json()["user"]["id"]
     h = {"Authorization": f"Bearer {r.json()['token']}"}
 
@@ -382,7 +382,7 @@ def test_delete_question_without_related_deletes_directly(make_mock):
                      store=ConversationStore(":memory:"), doc_store=DocumentStore(":memory:"),
                      question_store=qs, wrong_store=ws)
     client = TestClient(app)
-    r = client.post("/api/auth/register", json={"username": "u", "password": "pw1234"})
+    r = client.post("/api/auth/register", json={"username": "u", "full_name": "测试用户", "password": "pw1234"})
     uid = r.json()["user"]["id"]
     h = {"Authorization": f"Bearer {r.json()['token']}"}
     qid = qs.create(uid, {"type": "short", "stem": "无错题的题", "options": None,

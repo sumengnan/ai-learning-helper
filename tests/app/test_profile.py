@@ -79,7 +79,7 @@ def test_render_full_joins_prefs():
 # ---------- API ----------
 
 def _auth(client, username="u"):
-    r = client.post("/api/auth/register", json={"username": username, "password": "pw1234"})
+    r = client.post("/api/auth/register", json={"username": username, "full_name": "测试用户", "password": "pw1234"})
     token = r.json()["token"]
     return {"Authorization": f"Bearer {token}"}
 

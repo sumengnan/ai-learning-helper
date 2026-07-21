@@ -72,6 +72,7 @@ export function LoginPage() {
           </Button>
           <Typography variant="body2" color="text.secondary">
             还没有账号？<Link component={RouterLink} to="/register">去注册</Link>
+            {" · "}<Link component={RouterLink} to="/forgot">忘记密码</Link>
           </Typography>
         </Stack>
       </form>

@@ -5,9 +5,12 @@ import sqlite3
 
 # 应用领域所有表的建表 DDL 集中于此；新增表/字段只改这个模块。
 _SCHEMA = (
+    # full_name：注册时填的姓名，忘记密码时作为身份凭据核对（见 UserStore.verify_name）。
+    # 老库补列后为 NULL——那些账号没有可核对的姓名，重置须失败关闭，不能当作「空姓名匹配空输入」放行。
     """CREATE TABLE IF NOT EXISTS users(
          id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL,
-         password_hash TEXT NOT NULL, salt TEXT NOT NULL, created_at TEXT NOT NULL)""",
+         password_hash TEXT NOT NULL, salt TEXT NOT NULL, created_at TEXT NOT NULL,
+         full_name TEXT)""",
     """CREATE TABLE IF NOT EXISTS conversations(
          id TEXT PRIMARY KEY, user_id TEXT, title TEXT, created_at TEXT)""",
     # verify：交付门结构化判定轨迹（JSON）。progress 列存的是渲染用中文文案，
@@ -79,6 +82,8 @@ _SCHEMA = (
 
 # 历史库若建于某列引入之前，需在此补齐（CREATE TABLE IF NOT EXISTS 不改既有表结构）
 _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
+    # 旧库的账号没有姓名（NULL）：它们无法走「忘记密码」，须到个人资料里补填后才行。
+    "users": {"full_name": "TEXT"},
     "conversations": {"user_id": "TEXT"},
     "conversation_messages": {"steps": "TEXT", "progress": "TEXT", "attachments": "TEXT",
                               "run_id": "TEXT", "status": "TEXT", "sources": "TEXT",
