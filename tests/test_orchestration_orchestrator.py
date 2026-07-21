@@ -1450,3 +1450,45 @@ async def test_triage_prompt_treats_pasted_material_as_simple():
     from app.orchestration.orchestrator import TRIAGE_SYSTEM
     assert "贴在消息里" in TRIAGE_SYSTEM
     assert "长度不是复杂度" in TRIAGE_SYSTEM
+
+
+async def test_simple_path_verifies_when_switch_on():
+    """回归：开了结果校验，简单直答却完全不校验。
+
+    此前只有考试轮走 _simple_answer_verified，理由是「校验寒暄没意义」。但简单路径如今
+    也承接实质任务（翻译/总结这一段），那些是真交付物，开关在这条路上等于形同虚设。
+    """
+    import app.orchestration.orchestrator as om
+    seen = {}
+
+    async def _verified(self, message, budget=None, *, context=None, registry=None,
+                        skill_hint="", in_exam=True):
+        seen["called"] = True
+        seen["in_exam"] = in_exam
+        from harness.events import RunFinished
+        from harness.types import Message, Role
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content="答"))
+
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [], triage_simple=True)
+    orch._simple_answer_verified = _verified.__get__(orch, om.Orchestrator)
+    await _run(orch, "翻译这段：Node 20 is being deprecated")
+    assert seen.get("called"), "开了结果校验的实质任务必须走带校验的直答"
+    assert seen["in_exam"] is False, "非考试轮不该套用考试审查说明"
+
+
+async def test_greeting_still_skips_verification():
+    """反向：纯寒暄仍不校验——校验「你好」纯属白烧一次往返。"""
+    import app.orchestration.orchestrator as om
+    seen = {}
+
+    async def _verified(self, message, budget=None, *, context=None, registry=None,
+                        skill_hint="", in_exam=True):
+        seen["called"] = True
+        from harness.events import RunFinished
+        from harness.types import Message, Role
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content="答"))
+
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [], triage_simple=True)
+    orch._simple_answer_verified = _verified.__get__(orch, om.Orchestrator)
+    await _run(orch, "你好")
+    assert not seen.get("called")
