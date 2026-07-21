@@ -322,8 +322,15 @@ def _split_stale_fx(stale: dict[str, list[str]], cur: dict[str, list[str]]
 
     后者是 _redo_fx_note 的确定性兜底：那条纠正指令只是「告诉」模型重做，管不住它照不照
     做；真没照做时，宁可留下上一版的产物（并在步骤里标明出处），也不能让用户什么都拿不到。
+
+    铁律：**交付版正在用的 id 一个都不能删**。产物按内容判重（见 DownloadStore.create），
+    重答时若文件内容与上一版逐字节相同，重存拿回的就是同一条记录——此时 stale 与 cur 里是
+    同一个 id，照「cur 非空就把 stale 全删」的老写法会把交付版自己的文件删掉：校验通过了、
+    答案交付了，用户却既没有下载按钮，点在途界面的旧按钮还是 404。而「校验挂在正文措辞、
+    文件内容原样重生成」正是最常见的重答形态，故这不是边角情况。
     """
-    purge = {k: (v if cur.get(k) else []) for k, v in stale.items()}
+    purge = {k: ([i for i in v if i not in set(cur.get(k) or ())] if cur.get(k) else [])
+             for k, v in stale.items()}
     keep = {k: ([] if cur.get(k) else v) for k, v in stale.items()}
     return purge, keep
 
@@ -1030,7 +1037,10 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         # 产物没了，落库 steps 里的机读标记也不能留——否则历史消息重新加载时
                         # 前端照样渲染出下载按钮，点开是已删的文件
                         _drop_purged_marks(steps, done)
-                        return done["download"]
+                        # 回传**按类分组的 dict** 而非仅下载 id 列表：编排器要据此把对应
+                        # 工具名从该步的 done_effects 里摘掉，让模型重做。只回列表的话
+                        # 它认不出删的是哪一类，接缝静默失效——文件删了却没人重存。
+                        return done
 
                     _orch_src = SimpleNamespace(
                         run=lambda m: harness.orchestrator.run(

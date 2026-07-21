@@ -32,11 +32,12 @@ from harness.types import Message, Role
 
 from app.today import with_today
 
-from ..side_effects import empty_fx, has_any
+from ..side_effects import empty_fx, has_any, tools_to_redo
 from .critic import Critic
 from .executor import CLARIFY_GUIDE, Executor, HidingRegistry, StepArtifact
 from .planner import Planner, PlannerError, render_tool_roster
-from .plan import _KB_REQUESTED_RE, Artifact, Plan, PlanStep, has_pending, ready_steps
+from .plan import (_KB_REQUESTED_RE, Artifact, Plan, PlanStep, file_saving_step_ids,
+                   has_pending, ready_steps)
 from .usage_ctx import (
     UsageAcc, record_usage, reset_acc, reset_reason_sink, set_acc, set_reason_sink,
 )
@@ -584,6 +585,22 @@ class Orchestrator:
     # ---- 调度：一轮轮跑就绪集，直到无 pending、预算超限或无法推进（后两者带现有成果收尾）----
     async def _schedule_rounds(self, plan: Plan, retry_hints: dict[str, str], budget=None,
                                exec_reg=None, goal: str = "", purge_side_effects=None):
+        # 产出文件的步骤才拿得到 save_download。计划常拆成「1.生成内容 → 2.存成文件」，
+        # 而工具表原先是按轮算的，两步都看得见它：第 1 步校验没过、被要求重试时就会抓它用上，
+        # 第 2 步再存一次，下载区两份重复文件（实测症状）。此处按步收紧到该给的那步。
+        # savers 为 None（没有一步像是要产文件）时不限制，退回原行为——正则漏判把该存的那步
+        # 也堵死，比重复保存严重得多。
+        savers = file_saving_step_ids(plan)
+        # 每步「已经留下持久产物的工具」，跨重试累积。与 retry_hints 同生命周期：
+        # 重试的 prompt 里此前只有质检意见，没有「上次已经做过什么」，于是带副作用的工具
+        # 被原样重来——同一份笔记存两次即由此而来。
+        step_effects: dict[str, list[str]] = {}
+
+        def _reg_for(step: PlanStep):
+            if exec_reg is None or savers is None or step.id in savers:
+                return exec_reg
+            return HidingRegistry(exec_reg, {"save_download"})
+
         while has_pending(plan):
             if budget:
                 try:
@@ -614,23 +631,31 @@ class Orchestrator:
                 art = None
                 err = None
                 terminal = False
-                # 传给 executor 就地填：本步的异常若逃出 AgentLoop 的兜底（下面 except 分支），
-                # StepArtifact 根本 yield 不出来，而那时文件可能已经落了盘——清单只搭在返回值上就丢了
+                # 两份记录一起带：effects（工具名，告诉重跑的模型别重做）跨重试累积，
+                # fx（产物 id，供作废时删除）每次尝试新起一份。
+                # fx 传进去就地填：本步的异常若逃出 AgentLoop 的兜底（下面 except 分支），
+                # StepArtifact 根本 yield 不出来，而那时文件可能已经落了盘——只搭在返回值上就丢了。
+                effects = list(step_effects.get(step.id, ()))
                 fx = empty_fx()
                 try:
                     async for ev in self._executor.execute(
                             step, deps, retry_hints.get(step.id, ""),
-                            registry=exec_reg, goal=goal, fx_sink=fx):
+                            registry=_reg_for(step), goal=goal,
+                            done_effects=effects, fx_sink=fx):
                         if isinstance(ev, StepArtifact):
                             art, err, terminal = ev.artifact, ev.error, ev.terminal
+                            effects = list(ev.effects)
                             # 真实 executor 里这与 fx_sink 是同一个对象；显式取一次，
                             # 让"只填了返回值"的实现（测试替身、将来的别种 executor）同样成立
                             fx = ev.side_effects or fx
                         else:
                             await queue.put(("ev", ev))
                 except Exception as e:  # 单步崩溃隔离
+                    # 崩在工具调用之后也要记账：产物已经落库了，重试时照样不能重做
+                    step_effects[step.id] = effects
                     await queue.put(("done", (step, None, str(e), False, fx)))
                     return
+                step_effects[step.id] = effects
                 await queue.put(("done", (step, art, err, terminal, fx)))
 
             tasks = [asyncio.create_task(_worker(s)) for s in ready]
@@ -646,7 +671,8 @@ class Orchestrator:
                     if art is None or err:
                         self._on_step_fail(step, retry_hints, err or "执行未产出结果",
                                            terminal=terminal)
-                        for _ev in self._settle_failed_attempt(step, fx, purge_side_effects):
+                        for _ev in self._settle_failed_attempt(
+                                step, fx, purge_side_effects, step_effects):
                             yield _ev
                         continue
                     verdict = await self._critic.validate(step, art)
@@ -660,7 +686,8 @@ class Orchestrator:
                         # 重跑只会把同一个弹窗再怼给用户一次，答案不会变。
                         self._on_step_fail(step, retry_hints, verdict.reason,
                                            terminal=terminal)
-                        for _ev in self._settle_failed_attempt(step, fx, purge_side_effects):
+                        for _ev in self._settle_failed_attempt(
+                                step, fx, purge_side_effects, step_effects):
                             yield _ev
             finally:
                 # 提前放弃迭代（客户端断连/停止 → 本生成器 aclose，GeneratorExit 抛在 yield 处）
@@ -679,7 +706,7 @@ class Orchestrator:
                 s.status = "skipped"
 
     @staticmethod
-    def _settle_failed_attempt(step, fx, purge_side_effects):
+    def _settle_failed_attempt(step, fx, purge_side_effects, step_effects=None):
         """作废一次尝试：删掉它产出的用户可见产物，并让前端抖掉这一步的旧记录。
 
         为什么立即删而不像交付门那样延迟到交付时结算：单步重试的语义是"这次尝试整个作废"，
@@ -702,6 +729,15 @@ class Orchestrator:
         # 按钮永远撤不掉且不报错。回调既可能返回 id 列表，也可能是 purge() 那种按类分组的
         # dict（两者名字相近，接错很自然），这里都收下。
         if isinstance(purged, dict):
+            # 删掉的产物要让模型重做：把对应工具名从该步的 done_effects 里摘掉。
+            # 不摘的话重跑时模型仍被告知「你已经做过了」，于是不再保存——旧的删了、
+            # 新的没生成，用户手里一个文件都不剩。这是两套机制的接缝，只有分组 dict
+            # 才知道删的是哪一类，故只在这一支处理。
+            if step_effects is not None:
+                redo = tools_to_redo(purged)
+                if redo:
+                    step_effects[step.id] = [t for t in step_effects.get(step.id, ())
+                                             if t not in redo]
             purged = list(purged.get("download") or ())
         if purged:
             # 告诉在途前端撤掉已渲染的下载按钮——产物没了，按钮点开是 404

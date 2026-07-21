@@ -130,3 +130,22 @@ def test_purge_missing_stores_report_nothing_deleted():
     p = SideEffectPurger()
     got = p.purge("u1", {"download": ["d1"], "knowledge": ["k1"], "questions": ["q1"]})
     assert got == empty_fx()
+
+
+# ---------- 删了就让模型重做 ----------
+
+def test_tools_to_redo_maps_kinds_back_to_tools():
+    from app.side_effects import tools_to_redo
+    assert tools_to_redo({"download": ["d1"], "knowledge": [], "questions": []}) == {"save_download"}
+    # 出题有两个入口，删了题目意味着这两个都可能要重做
+    assert tools_to_redo({"download": [], "knowledge": [], "questions": ["q1"]}) == {
+        "add_questions", "generate_questions"}
+
+
+def test_tools_to_redo_ignores_kinds_that_were_not_deleted():
+    """删除失败的类别不能算进去：产物还在，再让模型存一遍就真成两份了。"""
+    from app.side_effects import tools_to_redo
+    assert tools_to_redo({"download": [], "knowledge": ["k1"], "questions": []}) == {
+        "save_to_knowledge"}
+    assert tools_to_redo(empty_fx()) == set()
+    assert tools_to_redo(None) == set()

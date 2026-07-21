@@ -66,13 +66,22 @@ class StepArtifact:
     terminal=True 表示这次失败不可通过重试挽回（当前唯一来源：用户拒绝了危险操作），
     调度器应直接判 failed，不再重跑本步。
 
-    side_effects 记本次尝试产出的用户可见产物 id（下载/知识/题目）。校验不过要重跑时，
-    调度器据此把这一版的产物删掉——不然重跑再存一遍，聊天下方会挂出两个下载按钮，
-    其中一个还是判定不合格的那版。
+    两份产物记录，服务于两件不同的事，缺一不可：
+
+    - effects：本次尝试里**已经留下持久产物**的工具名（去重、保序）。重试时要告诉模型
+      「这些你上次已经做过了」，否则它会把带副作用的工具原样再调一遍——实测就是同一份
+      笔记被存两次。判据见 execute() 里对 marker 的说明。
+    - side_effects：同一批产物的 **id**（下载/知识/题目）。校验不过要重跑时，调度器据此
+      把这一版的产物删掉。
+
+    两者协作而非重复：删掉某类产物后，调度器会同步把对应的工具名从 effects 里摘掉，
+    模型于是不会被告知「已做过」、会重新保存。只留 effects 则用户拿到的是不合格那版的
+    文件；只留 side_effects 则删了却没人重做，用户手里一个文件都没有。
     """
     artifact: Artifact
     error: str | None = None
     terminal: bool = False
+    effects: list[str] = field(default_factory=list)
     side_effects: dict = field(default_factory=empty_fx)
 
 
@@ -115,8 +124,26 @@ def _system_with_guide(base: str, sandbox_guide_text: str = "") -> str:
 _GOAL_MAX = 6000
 
 
+# 重试时的既成事实告知。
+#
+# 措辞按「内容有没有变」分情况，不能一刀切说「不要再调用」：本步若**本职就是产出文件**
+# （按步下发后，save_download 只会出现在这种步骤的 effects 里），质检不通过说的往往正是
+# 产物内容不行；改好了却不许再存，下载区就永久留着被否的那一版，而 Critic 只看 summary
+# 会判它通过——等于把一个 bug 换成另一个更隐蔽的。
+#
+# 内容确有改动时再存一次是**正确**的；内容没变时再存也无害（产物按内容判重，是空操作）。
+# 真正要拦的是「为了保险起见把同一份东西换个名字再存一遍」——那正是重复文件的来源。
+def _done_effects_note(effects: list[str]) -> str:
+    return ("\n【上次尝试已经做过的事】本步上次运行时已经成功调用过："
+            + "、".join(effects)
+            + "。它们产生的产物**还在，没有丢失**。\n"
+              "因此：产物内容若与上次一致，就**不要再调用一次**——那只会凭空多出一份重复的"
+              "文件/记录；只有当你这次真的改动了产物内容时，才照常再调一次把新版本存进去。"
+              "不要为了「保险起见」重复保存同一份东西。")
+
+
 def _build_prompt(step: PlanStep, deps: dict[str, Artifact], hint: str = "",
-                  goal: str = "") -> str:
+                  goal: str = "", effects: list[str] | None = None) -> str:
     lines = []
     if goal:
         # 子步的上下文是全新的 ContextManager（只有系统提示词，无对话历史），execute() 此前
@@ -142,6 +169,8 @@ def _build_prompt(step: PlanStep, deps: dict[str, Artifact], hint: str = "",
                      "只有当它们明显不足以完成本步时，才另行补充检索。")
     if hint:
         lines.append(f"\n上次尝试未通过质检，请改进：{hint}")
+    if effects:
+        lines.append(_done_effects_note(effects))
     # 节流引导：减少每步的联网/工具往返（延迟主要来自这些串行调用）
     lines.append("\n要高效：检索类工具最多调用 2-3 次，信息够了就直接作答，不必反复搜。")
     lines.append("完成后直接给出该子任务的结果。")
@@ -167,16 +196,19 @@ class Executor:
 
     async def execute(self, step: PlanStep, deps: dict[str, Artifact], hint: str = "",
                       *, registry: ToolRegistry | None = None, goal: str = "",
+                      done_effects: list[str] | None = None,
                       fx_sink: dict | None = None):
         """执行一步。yield Progress 事件，最后 yield 一个 StepArtifact。
 
         registry：本轮每请求工具表（含用户级 save_download/知识库/考试/附件工具）。编排器传入
         （已隐藏 update_plan）；缺省回退装配期 registry（主要供测试）。
 
-        fx_sink：调用方给的产物清单收集器，边跑边就地更新。StepArtifact 也会带同样的内容，
+        done_effects：上次尝试里已经留下产物的工具名，拼进 prompt 告诉模型别重做。
+
+        fx_sink：调用方给的产物 id 收集器，边跑边就地更新。StepArtifact 也会带同样的内容，
         但本步中途崩溃时它根本 yield 不出来——而那时文件可能已经落了盘，清单一丢就再没人
         去删它。故清单必须写进调用方持有的对象，而不是只搭在返回值上。"""
-        prompt = _build_prompt(step, deps, hint, goal)
+        prompt = _build_prompt(step, deps, hint, goal, done_effects)
         loop = AgentLoop(
             client=self._client, registry=registry if registry is not None else self._registry,
             context=ContextManager(
@@ -192,6 +224,11 @@ class Executor:
         side_effects.update(empty_fx())
         tool_names: dict[str, str] = {}
         tool_args: dict[str, object] = {}   # 暂存入参，供完成行带全（前端按 key 合并只留最后一条）
+        # 就是调用方传进来的那个 list（没传才新建）：executor 边跑边就地追加，于是子步中途
+        # 崩溃时调用方手里也已经有账——产物那时已经落库了，重试仍不能当它没发生。
+        # 只靠最后一个 StepArtifact 交账做不到这点：崩溃根本走不到那句 yield。
+        # prompt 已在上面用这个 list 的初值拼好，后续追加不会回头影响它。
+        effects: list[str] = done_effects if done_effects is not None else []
         token = set_current_agent(f"executor:{step.id}")
         think_token = None
         if self._disable_thinking:  # 本步强制关思考：叠加在外层 override 之上，finally 还原
@@ -219,12 +256,22 @@ class Executor:
                     name = tool_names.get(r.tool_call_id, "工具")
                     if r.is_error and _USER_DENIED_MARK in (r.content or ""):
                         user_denied = True          # 本步含被用户拒绝的操作 → 不可重试
-                    # 登记产物：必须在这里而不是事后从 Progress 里扒——这里同时看得见
-                    # 工具名、结果文本与 is_error，是唯一能准确判定"真产出了东西"的位置
+                    # 登记产物 id：必须在这里而不是事后从 Progress 里扒——这里同时看得见
+                    # 工具名、结果文本与 is_error，是唯一能准确判定"真产出了东西"的位置。
                     # 就地更新（不重新绑定）：调用方持有同一个 dict，崩溃时仍看得到已产出的东西
                     _new = ids_from_tool(name, r.content or "", r.is_error)
                     for _k, _v in _new.items():
                         side_effects[_k] += _v
+                    # 「这次调用留下了持久产物」的判据：结果带了 marker（model_content 非空
+                    # 即表示 content 里有只给机器看的尾巴，如〔下载ID:x〕〔知识ID:x〕）。
+                    # 用 marker 而非硬编码工具名单：名单会漂，而 marker 是既有约定——
+                    # 任何新工具只要按约定给产物发 id，就自动被这里覆盖，不用记得回来改。
+                    # 失败的调用没有 marker：ToolExecutor 只在成功分支设 model_content，
+                    # 故 is_error 那半边判断当前是冗余的（去掉行为不变，试过）。留着是因为
+                    # 「失败的保存不该算数」是这里的实质要求，而它现在只由另一处实现保证——
+                    # 那处一改，这里就是最后一道闸。
+                    if not r.is_error and r.model_content is not None and name not in effects:
+                        effects.append(name)
                     yield ev
                     yield Progress(scope, f"调用工具 {name}",
                                    status="error" if r.is_error else "ok", key=r.tool_call_id,
@@ -244,5 +291,8 @@ class Executor:
             if think_token is not None:
                 from harness.llm.openai_compat import reset_extra_body_override
                 reset_extra_body_override(think_token)
+        # 拷一份出去：effects 可能就是调用方的 list，直接交出去会让两边共享可变状态。
+        # 累进语义已由「就地追加到传入的 list」保证——本次没再调也不会丢掉上次的账。
         yield StepArtifact(Artifact(summary=final_text, data={}, files=[]),
-                           error=error, terminal=user_denied, side_effects=side_effects)
+                           error=error, terminal=user_denied, effects=list(effects),
+                           side_effects=side_effects)

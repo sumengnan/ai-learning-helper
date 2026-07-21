@@ -112,3 +112,23 @@ class SideEffectPurger:
             except Exception:
                 log.warning("清理题目失败 user=%s n=%d", user_id, len(qids), exc_info=True)
         return done
+
+
+# 产物类别 → 产出它的工具名。用于「删了就让模型重做」：某类产物被清理后，
+# 要把这些工具名从该步的 done_effects 里摘掉，否则重跑时模型仍被告知
+# 「你已经做过了」，于是不再保存——旧的删了、新的没生成，用户手里一个都不剩。
+TOOLS_BY_KIND = {
+    "download": ("save_download",),
+    "knowledge": ("save_to_knowledge",),
+    "questions": ("add_questions", "generate_questions"),
+}
+
+
+def tools_to_redo(purged) -> set[str]:
+    """按实际清理掉的产物，算出「该让模型重做」的工具名集合。
+
+    入参是**实际删掉的**清单而非「想删的」：删除失败时产物还在，
+    再让模型存一遍就真的成了两份。
+    """
+    return {t for kind, ids in (purged or {}).items() if ids
+            for t in TOOLS_BY_KIND.get(kind, ())}

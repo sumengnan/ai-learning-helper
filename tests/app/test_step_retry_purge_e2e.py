@@ -70,3 +70,19 @@ def test_harness_exposes_download_store_under_expected_name():
     from app.assembly import Harness
     assert "download_store" in Harness.__dataclass_fields__ or hasattr(
         Harness, "download_store"), "属性名变了，chat.py 的 getattr 会静默拿到 None"
+
+
+def test_chat_purge_callback_returns_grouped_dict_not_just_ids():
+    """chat 注入编排器的清理回调必须回传**按类分组的 dict**。
+
+    编排器要据此把对应工具名从该步 done_effects 里摘掉、让模型重做。只回下载 id 列表
+    的话它认不出删的是哪一类，接缝静默失效：文件删了、模型仍被告知"已存过"、不再保存，
+    用户手里一个文件都没有。而两层各自的测试都会绿——故在这里钉住形状。
+    """
+    import inspect
+
+    from app.api import chat as chat_mod
+    src = inspect.getsource(chat_mod.make_chat_router)
+    assert "return done" in src, "回调应回传 purge() 的完整结果"
+    assert 'return done["download"]' not in src, (
+        "回传仅下载 id 会让「删了就让模型重做」的接缝静默失效")

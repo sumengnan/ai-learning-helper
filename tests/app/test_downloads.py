@@ -79,11 +79,20 @@ def test_changed_content_is_a_new_file(tmp_path):
     assert a["id"] != b["id"] and len(s.list("u1")) == 2
 
 
-def test_same_content_different_name_kept_apart(tmp_path):
+def test_same_content_different_name_deduped(tmp_path):
+    """同内容不同名也算重复——判重键刻意不含文件名。
+
+    文件名由模型自拟，两次拟得一字不差才算重复的话这道去重形同虚设；而工具描述恰恰要求
+    文件名「写清主题、别用泛称」，等于在鼓励它每次换个说法。实测症状就是「生成内容」步和
+    「保存文件」步各存一份同样的内容、名字略有出入，下载区并排两个按钮。
+    内容才是文件的身份。先存的那个名字保留。
+    """
     s = DownloadStore(str(tmp_path), ":memory:")
     a = s.create("u1", "甲.md", b"same", "text/markdown")
     b = s.create("u1", "乙.md", b"same", "text/markdown")
-    assert a["id"] != b["id"]
+    assert a["id"] == b["id"]
+    assert b["filename"] == "甲.md"          # 保留先存的名字，不被后来者改写
+    assert len(s.list("u1")) == 1
 
 
 def test_dedup_is_per_user(tmp_path):

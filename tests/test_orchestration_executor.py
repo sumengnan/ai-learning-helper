@@ -1,9 +1,9 @@
 import pytest
 from harness.events import Progress
 from harness.llm.base import StreamChunk
-from harness.types import ToolOutput
 from pydantic import BaseModel
-from harness.tools.base import Tool, ToolRegistry
+from harness.tools.base import Tool, ToolError, ToolRegistry
+from harness.types import ToolOutput
 from app.orchestration.executor import Executor, StepArtifact
 from app.orchestration.plan import Artifact, PlanStep
 
@@ -439,3 +439,114 @@ async def test_fx_sink_filled_on_normal_path_too(make_mock):
                   registry=_reg_with_save_download(), system_prompt="s", model="m", max_steps=3)
     _, artifact = await _collect(ex.execute(_step(), {}, fx_sink=fx_sink))
     assert fx_sink["download"] == ["d1"] == artifact.side_effects["download"]
+# ---- effects：本次留下持久产物的工具，供重试时告知模型别重做 ----
+
+async def _effects_of(make_mock, tool, tool_name):
+    """跑一步「调一次该工具→出正文」，返回 StepArtifact.effects。"""
+    from harness.llm.base import ToolCallDelta
+    reg = ToolRegistry(); reg.register(tool)
+    client = make_mock([
+        [StreamChunk(type="tool_call", tool_call_delta=ToolCallDelta(
+            index=0, id="c1", name=tool_name, arguments="{}")),
+         StreamChunk(type="done")],
+        [StreamChunk(type="text", text="做完了"), StreamChunk(type="done")],
+    ])
+    ex = Executor(client=client, registry=reg, system_prompt="sp", model="m", max_steps=3)
+    out = None
+    async for ev in ex.execute(_step(), {}):
+        if isinstance(ev, StepArtifact):
+            out = ev
+    return out.effects
+
+
+class _NoParams(BaseModel):
+    pass
+
+
+class _MarkerTool(Tool):
+    """按既有约定给产物发 id 的工具（如 save_download 的〔下载ID:x〕）。"""
+    name = "saver"
+    description = "存点东西"
+    Params = _NoParams
+
+    async def run(self, params):
+        return ToolOutput(text="已保存", marker="〔下载ID:abc〕")
+
+
+class _CrashSaver(Tool):
+    """崩溃记账用：与 _MarkerTool 同形，单独一个类避免与别的用例共享状态。"""
+    name = "saver"
+    description = "存点东西"
+    Params = _NoParams
+
+    async def run(self, params):
+        return ToolOutput(text="已保存", marker="〔下载ID:x〕")
+
+
+class _PlainTool(Tool):
+    name = "reader"
+    description = "读点东西"
+    Params = _NoParams
+
+    async def run(self, params):
+        return "读到了一些内容"
+
+
+class _FailingMarkerTool(Tool):
+    name = "saver"
+    description = "存点东西"
+    Params = _NoParams
+
+    async def run(self, params):
+        raise ToolError("保存失败：磁盘满")
+
+
+async def test_effects_records_tool_that_left_a_product(make_mock):
+    """判据是「结果带了 marker」——marker 是既有约定（〔下载ID〕〔知识ID〕），
+    用它而非硬编码工具名单：名单会漂，marker 让新工具自动被覆盖。"""
+    assert await _effects_of(make_mock, _MarkerTool(), "saver") == ["saver"]
+
+
+async def test_effects_ignores_tools_without_a_product(make_mock):
+    """检索类工具重跑无害，还进 effects 会让模型在「内容不足」的重试里不敢再搜。"""
+    assert await _effects_of(make_mock, _PlainTool(), "reader") == []
+
+
+async def test_effects_ignores_failed_calls(make_mock):
+    """保存失败就没有产物，重试时当然该再存一次——报进去会让文件永远存不下来。"""
+    assert await _effects_of(make_mock, _FailingMarkerTool(), "saver") == []
+
+
+async def test_effects_accumulate_from_done_effects(make_mock):
+    """本次没再调，不代表上次的产物消失了；下次重试仍须被告知。"""
+    from harness.llm.base import ToolCallDelta   # noqa: F401  （本用例不调工具）
+    reg = ToolRegistry()
+    client = make_mock(_text_only_turns("这次只改文案，没调工具"))
+    ex = Executor(client=client, registry=reg, system_prompt="sp", model="m", max_steps=3)
+    out = None
+    async for ev in ex.execute(_step(), {}, done_effects=["save_download"]):
+        if isinstance(ev, StepArtifact):
+            out = ev
+    assert out.effects == ["save_download"]
+
+
+async def test_crash_after_tool_still_accounts(make_mock):
+    """子步崩在工具调用之后：产物已落库，调用方手里必须已经有账。"""
+    from harness.llm.base import ToolCallDelta
+    reg = ToolRegistry(); reg.register(_CrashSaver())
+    client = make_mock([
+        [StreamChunk(type="tool_call", tool_call_delta=ToolCallDelta(
+            index=0, id="c1", name="saver", arguments="{}")),
+         StreamChunk(type="done")],
+        [StreamChunk(type="text", text="继续"), StreamChunk(type="done")],
+    ])
+    ex = Executor(client=client, registry=reg, system_prompt="sp", model="m", max_steps=3)
+    ledger = []
+    gen = ex.execute(PlanStep(id="s1", description="d", expected="e"), {}, done_effects=ledger)
+    # 模拟中途崩溃/中断：拿到工具完成事件后就不再迭代
+    from harness.events import ToolFinished
+    async for ev in gen:
+        if isinstance(ev, ToolFinished):
+            break
+    await gen.aclose()
+    assert ledger == ["saver"], f"崩溃路径没记账：{ledger}"
