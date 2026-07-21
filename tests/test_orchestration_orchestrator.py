@@ -1760,3 +1760,27 @@ def test_effects_note_allows_resaving_when_content_actually_changed():
     assert "还在，没有丢失" in got                      # 既成事实要说清
     assert "不要再调用一次" in got                      # 内容没变时仍须拦住重复保存
     assert "真的改动了产物内容时，才照常再调一次" in got  # 内容变了则本该再存
+
+
+def test_non_terminal_step_never_saves_even_when_its_expected_mentions_files():
+    """回归（用户实测「生成一首诗，保存到下载」仍重复保存）：
+
+    planner 写 expected 时会前瞻性交代下游用途——「一首完整的诗，供后续保存为文件」——
+    于是「创作」这一步照样命中正则、拿到 save_download，和后面真正的保存步各存一份。
+    措辞判断在这里必然漏，因为交叉引用是 planner 的正常写法。改用结构判据：
+    被其他步骤依赖的步，产出的是下游的输入，不是给用户的交付物。
+    """
+    from app.orchestration.plan import file_saving_step_ids
+    for expected in ("一首完整的诗，供后续保存为文件", "诗歌正文，用于生成可下载文件"):
+        plan = _p(("s1", "创作一首诗", expected, ()),
+                  ("s2", "将创作的诗保存为可下载的文件", "可下载的文件", ("s1",)))
+        assert file_saving_step_ids(plan) == {"s2"}, f"expected={expected!r} 时 s1 漏了"
+
+
+def test_middle_step_still_allowed_when_no_terminal_step_claims_delivery():
+    """反向：没有任何终端步像是要存文件时，命中的中间步仍须放行——
+    此时多半是识别错了或交付确实发生在中间步，堵死谁都可能让用户拿不到文件。"""
+    from app.orchestration.plan import file_saving_step_ids
+    plan = _p(("s1", "讲解如何生成配置文件", "讲解文本", ()),
+              ("s2", "把讲解整理后交给用户", "最终答复", ("s1",)))
+    assert file_saving_step_ids(plan) == {"s1", "s2"}
