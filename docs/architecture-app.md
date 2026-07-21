@@ -67,7 +67,7 @@ flowchart TD
 ```
 Orchestrator(
   planner  = Planner(主模型)          # 规划质量要求高
-  critic   = Critic(主模型, validate_complete=快速档)   # 终局 review 用主模型，单步 validate 用快速档
+  critic   = Critic(judge 档, validate_complete=快速档) # 终局 review 用裁判档，单步 validate 用快速档
   executor = Executor(快速档 client/model)               # 执行子步占往返大头，走快速档提速
   fast_complete / fast_client = 快速档                    # triage 与简单直答
   budget_factory = lambda: BudgetTracker(...)             # 每次 run 新建，单例并发安全
@@ -163,7 +163,7 @@ flowchart TD
 某步崩溃被单独隔离，客户端断连时 `finally` 里统一 cancel，不留悬挂任务。
 
 **反思分两层。** 单步层是 `Critic.validate()`（快速档，宽松务实）；整体层是
-`Critic.review()`（主模型，可触发 `Planner.replan`，上限 `orchestrator_max_replan`）。
+`Critic.review()`（judge 档，可触发 `Planner.replan`，上限 `orchestrator_max_replan`）。
 两者调用失败一律 **fail-open 放行**——判官抖动绝不该拦下一份好答案。
 
 **残缺胜过空手。** 预算超限（`BudgetExceeded`）、无就绪步（依赖链断了）、零产物，

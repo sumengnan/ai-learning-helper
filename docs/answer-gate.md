@@ -54,7 +54,8 @@ flowchart TD
 ### `Critic.review` —— 终局把关
 
 所有步骤跑完，把「用户目标 + 各步产出」整体过一遍：够不够格作为对用户的答复。
-走主模型（判断质量要求高）。不通过时会带 `feedback` 说明缺口，编排器据此**重新规划**，
+走 judge 档（`HARNESS_JUDGE_MODEL`，未配则回退主模型；用独立/更强模型当裁判可降低自评偏差）。
+不通过时会带 `feedback` 说明缺口，编排器据此**重新规划**，
 最多 `orchestrator_max_replan` 轮（默认 2）。已完成步骤的产物跨轮累积保留，不会因重规划丢掉。
 
 对应前端聊天页的**「结果校验」开关**（默认开）：关掉则跑完一轮直接汇总交付，不做终局 review、
@@ -195,7 +196,7 @@ grounding 只核查**关于主题的客观事实**：问候语、建议、对资
 | `HARNESS_GATE_CHECK_FACTS` | `false` | 分项：引用链接可达性 |
 | `HARNESS_ENABLE_TRAJECTORY_JUDGE` | `false` | 轨迹质量分（编排器路径也用，仅展示不驱动重答） |
 | `HARNESS_TRAJECTORY_PASS_SCORE` | `60` | 质量分最终层阈值（低于则徽章标红） |
-| `HARNESS_JUDGE_MODEL` / `_BASE_URL` / `_API_KEY` | 空 | 独立 judge 模型（降低自评打高分偏差）；空则回退主模型 |
+| `HARNESS_JUDGE_MODEL` / `_BASE_URL` / `_API_KEY` | 空 | 独立 judge 模型（交付门打分 + 编排器终局 review；降低自评打高分偏差）；空则回退主模型 |
 
 ## 代码位置
 
