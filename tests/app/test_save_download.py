@@ -149,3 +149,19 @@ async def test_does_not_corrupt_code_indexing(tmp_path):
     assert "arr[0], arr[1]" in text        # 围栏代码块原样保留
     assert "`nums[2]`" in text             # 行内代码原样保留
     assert "讲解见下。" in text             # 正文里的角标仍被剥掉
+
+
+def test_description_guides_filename_naming(tmp_path):
+    """文件名全由模型自定，服务端不改写——那唯一能约束它的就是这段描述。
+
+    此前描述里一个字没提命名，于是下载区里一堆「笔记.md」「总结.md」；同名不同内容
+    还会各存一条（DownloadStore.create 按 user+filename+hash 判重），列表里并排两个
+    一模一样的名字，只能靠大小和时间猜哪个是哪个。
+    """
+    tool, _ = _tool(tmp_path)
+    d = tool.description
+    assert "独立辨认" in d, "须要求文件名脱离当前对话也认得出"
+    assert "泛称" in d, "须点名「笔记/总结」这类泛称不能当全名"
+    # 反例照抄进描述才有约束力：只说「要具体」模型并不知道界限在哪
+    assert "学习笔记.md" in d
+    assert "不要在文件名里写日期" in d, "系统已记录保存时间，模型写的日期只会对不上"
