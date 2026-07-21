@@ -24,6 +24,7 @@ import { useColorMode } from "../ThemeModeProvider";
 import { useAuth } from "../auth/AuthProvider";
 import { useProfileDrawer } from "../pages/ProfileDrawer";
 import { VersionBadge } from "./VersionBadge";
+import { BeianFooter } from "./BeianFooter";
 
 const WIDTH = 220;
 const MINI = 68;
@@ -203,6 +204,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         <Box component="main" sx={{ flex: 1, minWidth: 0, overflow: "auto" }}>
           {children}
         </Box>
+        {/* 备案信息挂在外壳而非各页面：一处渲染即覆盖全部路由，且切页不重新拉取 */}
+        <BeianFooter divider />
       </Box>
     </Box>
   );

@@ -119,7 +119,7 @@ export function AuthLayout({ title, subtitle, children }:
           </Box>
         </Box>
       </MotionPaper>
-      <BeianFooter />
+      <Box sx={{ mt: 1 }}><BeianFooter /></Box>
     </Box>
   );
 }

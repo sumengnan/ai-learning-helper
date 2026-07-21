@@ -1,13 +1,17 @@
 // web/src/components/BeianFooter.tsx
 import { useEffect, useState } from "react";
-import { Box, Link, Stack, Typography } from "@mui/material";
+import { Box, Divider, Link, Stack, Typography } from "@mui/material";
 import { fetchSiteInfo, type SiteInfo } from "../api/client";
 
 // 公安备案查询页要的是备案号里那串数字（「京公网安备 11010102000001号」→ 11010102000001）
 const policeCode = (s: string) => s.match(/\d{6,}/)?.[0] ?? "";
 
-/** 登录/注册页页脚的备案信息。三项均未配置（或接口取不到）时整块不渲染。 */
-export function BeianFooter() {
+/** 页脚备案信息，登录/注册页与主外壳共用。三项均未配置（或接口取不到）时整块不渲染。
+ *
+ * `divider`：在上方画一条分隔线，供主外壳把它与内容区隔开。分隔线画在组件内部而非交给
+ * 调用方包一层，正是因为"未配置就整块不渲染"——外层包的边框会在没有备案信息时空留一条横线。
+ */
+export function BeianFooter({ divider = false }: { divider?: boolean }) {
   const [info, setInfo] = useState<SiteInfo | null>(null);
 
   useEffect(() => {
@@ -26,10 +30,11 @@ export function BeianFooter() {
   const code = policeCode(police);
 
   return (
-    <Box component="footer" sx={{ mt: 2, textAlign: "center" }}>
+    <Box component="footer" sx={{ textAlign: "center", flexShrink: 0 }}>
+      {divider ? <Divider /> : null}
       <Stack
         direction="row" spacing={1.5} useFlexGap
-        sx={{ flexWrap: "wrap", justifyContent: "center", alignItems: "center" }}
+        sx={{ flexWrap: "wrap", justifyContent: "center", alignItems: "center", px: 2, py: 1 }}
       >
         {copyright && (
           <Typography variant="caption" color="text.secondary">

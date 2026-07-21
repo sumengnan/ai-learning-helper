@@ -52,6 +52,14 @@ describe("BeianFooter", () => {
     expect(screen.queryByText(/公网安备/)).toBeNull();
   });
 
+  it("divider 变体在未配置时也不留下空的分隔线", async () => {
+    // 分隔线画在组件内部而非外层包裹：否则未配置时会在内容区下方留一条无来由的横线
+    mockSite({ icp: "", police_icp: "", copyright: "" });
+    const { container } = render(<BeianFooter divider />);
+    await waitFor(() => expect(container.textContent).toBe(""));
+    expect(container.querySelector("hr")).toBeNull();
+  });
+
   it("接口挂了也只是不展示，不把错误抛到登录页", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("boom")));
     const { container } = render(<BeianFooter />);
