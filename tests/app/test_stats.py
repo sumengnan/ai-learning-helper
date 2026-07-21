@@ -745,3 +745,44 @@ def test_duplicate_active_models_listed_once():
     """未配 fast/judge 时回退主模型，五档里会出现重名，不能在表里重复成多行。"""
     rows = _by_model_rows({"m": _m(9, 2)}, ["m", "m", "m"])
     assert [r["model"] for r in rows] == ["m"]
+
+
+def test_totals_and_by_model_use_the_same_active_scope():
+    """总计与分模型必须同口径：只过滤展示行会让各行之和小于总计，看着像统计出了错。
+
+    停用模型的用量在聚合入口就整条跳过，tokens / 成本 / 调用次数一并收口。
+    """
+    tc = _traj_conn()
+    _ev(tc, "r1", 0, "RunStarted", {})
+    _ev(tc, "r1", 1, "ModelUsage",
+        {"usage": {"prompt": 100, "completion": 20, "total": 120},
+         "cost_usd": 0.5, "attempts": 1, "latency_ms": 100.0, "model": "new-main"})
+    _ev(tc, "r1", 2, "ModelUsage",   # 已停用，不该进任何统计
+        {"usage": {"prompt": 9000, "completion": 900, "total": 9900},
+         "cost_usd": 9.0, "attempts": 1, "latency_ms": 200.0, "model": "old-retired"})
+    _ev(tc, "r1", 3, "RunFinished", {})
+    svc = StatsService(trajectory_conn=tc, app_conn=_app_conn(), memory_conn=None,
+                       active_models=["new-main", "unused-judge"], now=lambda: FIXED_NOW)
+    ops = svc.overview("u")["ops"]
+
+    rows = {r["model"]: r for r in ops["by_model"]}
+    assert set(rows) == {"new-main", "unused-judge"}, "停用模型不入表，零用量的在用模型要列出"
+    assert ops["totals"]["model_calls"] == 1, "调用次数同样收口"
+    assert ops["totals"]["total_tokens"] == 120, "总 token 不能再含停用模型"
+    assert sum(r["total_tokens"] for r in ops["by_model"]) == ops["totals"]["total_tokens"], \
+        "分模型各行之和必须等于总计"
+
+
+def test_no_active_models_counts_everything():
+    """未传 active_models 时不过滤——装配漏接一处不该把统计清空。"""
+    tc = _traj_conn()
+    _ev(tc, "r1", 0, "RunStarted", {})
+    _ev(tc, "r1", 1, "ModelUsage",
+        {"usage": {"prompt": 10, "completion": 1, "total": 11}, "model": "a"})
+    _ev(tc, "r1", 2, "ModelUsage",
+        {"usage": {"prompt": 20, "completion": 2, "total": 22}, "model": "b"})
+    _ev(tc, "r1", 3, "RunFinished", {})
+    svc = StatsService(trajectory_conn=tc, app_conn=_app_conn(), memory_conn=None,
+                       now=lambda: FIXED_NOW)
+    ops = svc.overview("u")["ops"]
+    assert ops["totals"]["total_tokens"] == 33 and ops["totals"]["model_calls"] == 2

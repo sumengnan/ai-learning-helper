@@ -104,11 +104,12 @@ def _iso_delta_ms(start: str, end: str) -> float | None:
 def _by_model_rows(by_model: dict, active: list | None = None) -> list[dict]:
     """把 {model: {...}} 转成按 total token 降序的列表，供前端分模型表格。
 
-    active 非空时只保留在用模型，并把没跑过的在用模型补成 0 行：
-    - 过滤停用的：轨迹事件永久保留，换过模型后旧模型的用量会一直挂着，且往往体量最大，
-      看着像它还在跑。
-    - 补 0 行：配了却没用量本身就是信息——可能是这一档压根没被走到（如 judge 没接上、
-      rerank 没开），零行看得见，缺行只会让人以为「统计漏了」。
+    active 非空时把没跑过的在用模型补成 0 行：配了却没用量本身就是信息——可能是这一档
+    压根没被走到（如 judge 没接上、rerank 没开），零行看得见，缺行只会让人以为「统计漏了」。
+
+    停用模型的剔除**不在这里**，在聚合入口就整条跳过（见 _aggregate 的 ModelUsage 分支），
+    这样 tokens/成本/延迟等总计与本表同口径。此处仍做一次防御性过滤：调用方可能传入
+    未经聚合过滤的 by_model（测试即如此），两处口径必须一致。
     """
     if active:
         allow = set(active)
@@ -208,6 +209,7 @@ class StatsService:
         # qwen-turbo 占 119 万 token，稳居第一行，把在用模型全压下去，看着像它还在跑。
         # 为空时不过滤（保持旧行为），避免装配没传就把整张表清空。
         self._active_models = [m for m in dict.fromkeys(active_models or []) if m]
+        self._active_set = set(self._active_models)   # 逐事件过滤，用集合避免线性查找
         self._now = now or (lambda: datetime.now(timezone.utc))
 
     def _model_cost(self, prompt: int, completion: int, model: str) -> float | None:
@@ -411,6 +413,12 @@ class StatsService:
             elif typ == "StepStarted":
                 steps_per_run[run_id] += 1
             elif typ == "ModelUsage":
+                # 停用模型整条跳过：轨迹事件永久保留，换过模型后旧模型的用量会一直计进来。
+                # 在这里拦而不是只过滤展示行，是为了让 tokens / 成本 / 调用次数 / 延迟 / 重试
+                # 与「分模型用量」同口径——否则各行之和对不上总计，看着像统计出了错。
+                # active 为空时不过滤（装配没传就退回旧行为，不至于把统计清空）。
+                if self._active_models and (d.get("model") or "(未知)") not in self._active_set:
+                    continue
                 model_calls += 1
                 u = d.get("usage", {}) or {}
                 total_prompt += u.get("prompt", 0) or 0
