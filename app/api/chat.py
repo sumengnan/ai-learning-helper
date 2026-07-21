@@ -40,6 +40,7 @@ from ..conversation_memory import ConversationMemoryService
 from ..orchestration.orchestrator import VERIFY_TRACE_KEY
 from ..orchestration.executor import CLARIFY_GUIDE
 from ..profile import render_profile_block
+from ..side_effects import SideEffectPurger
 from ..sandbox_manager import reset_sandbox_conv, sandbox_guide, set_sandbox_conv
 from ..summaries import SummaryStore
 from ..summarizer import RollingSummarizer
@@ -581,7 +582,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
     _tracer = get_tracer("app.chat")
 
     def _build_registry(user_id: str, conv_id: str, has_attachments: bool,
-                        exam_active: bool = False) -> tuple[ToolRegistry, SourceSink]:
+                        exam_active: bool = False,
+                        created_downloads: set | None = None
+                        ) -> tuple[ToolRegistry, SourceSink]:
         reg = ToolRegistry()
         sink = SourceSink()
         # 两层包装，顺序有讲究：guard 在内、记源在外。guard 命中登记时抛 ToolError，
@@ -594,7 +597,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         dstore = getattr(harness, "download_store", None)
         if dstore is not None:
             _reg(SaveDownloadTool(
-                dstore, config.download_max_mb * 1024 * 1024, user_id))
+                dstore, config.download_max_mb * 1024 * 1024, user_id,
+                created_ids=created_downloads))
         # 记忆/知识库检索：都必须按用户覆盖全局那个。assembly 里构造的是无冒号的默认
         # collection（collection_to_scope 判成 owner=_global），而真实数据写在
         # knowledge:{user_id} / memory:{user_id} —— 两个 owner 永不相交，不覆盖的话模型
@@ -672,8 +676,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 exam_session_store, wrong_store, _exam_judge,
                 user_id=user_id, conv_id=req.conversation_id,
                 message=req.message)
+        # 本轮新建的下载 id：工具往里登记，清理时据此只删本轮自己建的（内容去重会让
+        # create() 返回用户早先那条记录的 id，照删就是删掉他上周存的文件）。
+        created_downloads: set = set()
         registry, source_sink = _build_registry(user_id, req.conversation_id,
-                                                 has_attachments, exam_active)
+                                                 has_attachments, exam_active,
+                                                 created_downloads=created_downloads)
         # 交付门开启需三者皆备：装配了 verifier + 服务端总开关 + 本轮用户开关（默认开，可手动关）
         gate_on = verifier is not None and config.enable_answer_gate and req.verify
         # 喂给模型的消息：带附件时追加只含文件名的名单提示（不含内容），入库仍用原文
@@ -893,6 +901,19 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         e["cost"] += ev.cost_usd or 0.0
                         collect["usage"] = {"tokens": sum(x["tokens"] for x in ubm.values()),
                                             "cost": sum(x["cost"] for x in ubm.values())}
+                    elif isinstance(ev, Progress) and ev.scope in ("step_reset", "purged"):
+                        # 控制事件：照常下发给在途前端（撤按钮/抖记录靠它们），但不入 progress 列
+                        # ——它们不是给用户看的过程记录，留着纯属脏数据。
+                        # step_reset 还要顺手把该步上一次的行从**落库副本**里抖掉：前端的实时
+                        # 处理器只管内存态，progress 列是这里另攒的——只清实时不清落库，刷新
+                        # 后 ChatView 从 progress 列重新取，重复的工具调用又冒出来。
+                        # 必须切片就地改：落库读的是外层那个 progress 变量（见 gen() 末尾），
+                        # 重新绑定 collect["progress"] 只换了 dict 里的引用，落库的那份纹丝不动。
+                        if ev.scope == "step_reset":
+                            _sid = ev.text or ""
+                            collect["progress"][:] = [
+                                p for p in collect["progress"]
+                                if p.get("scope") != f"subagent:executor:{_sid}"]
                     elif isinstance(ev, Progress):
                         collect["progress"].append({"scope": ev.scope, "text": ev.text,
                                                     "status": ev.status, "key": ev.key,
@@ -1008,11 +1029,33 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     if getattr(harness, "skill_registry", None) is not None:
                         from harness.skills.context import SkillContextManager
                         _octx = SkillContextManager(_octx, harness.skill_registry)
+                    # 单步校验不过要重跑时，先把这一版已产出的下载/知识/题目删掉：
+                    # 不删则模型重跑会把 save_download 再调一遍，消息下方挂出两个下载按钮，
+                    # 其中一个还是判定不合格的那版。user_id 在这里绑定，编排器不必知道用户是谁。
+                    _purger = SideEffectPurger(
+                        download_store=getattr(harness, "download_store", None),
+                        knowledge_service=knowledge_service,
+                        question_store=question_store,
+                        created_downloads=created_downloads)
+
+                    def _purge_step_fx(fx) -> dict[str, list[str]]:
+                        # 只按**实际删掉的**剥标记：删除失败是被吞掉的（清理不该中断回答），
+                        # 若按"想删的"剥，磁盘上文件还在而用户的下载入口没了——静默的数据不一致。
+                        done = _purger.purge(user_id, fx)
+                        # 产物没了，落库 steps 里的机读标记也不能留——否则历史消息重新加载时
+                        # 前端照样渲染出下载按钮，点开是已删的文件
+                        _drop_purged_marks(steps, done)
+                        # 回传**按类分组的 dict** 而非仅下载 id 列表：编排器要据此把对应
+                        # 工具名从该步的 done_effects 里摘掉，让模型重做。只回列表的话
+                        # 它认不出删的是哪一类，接缝静默失效——文件删了却没人重存。
+                        return done
+
                     _orch_src = SimpleNamespace(
                         run=lambda m: harness.orchestrator.run(
                             m, verify=req.verify, context=_octx, registry=registry,
                             recent_dialogue=recent_dialogue, force_simple=force_simple,
                             in_stateful_exam=in_stateful_exam,
+                            purge_side_effects=_purge_step_fx,
                             run_id=run_id_a))   # 事件归到 conversation_runs 登记的 run_id，统计才认
                     # 告诉在途客户端「本轮开了校验门」。必须赶在编排器跑之前发：执行子步的
                     # save_download 远早于编排器那条「结果校验中…」（后者要等所有步骤跑完），

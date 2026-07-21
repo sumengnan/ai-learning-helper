@@ -1,3 +1,4 @@
+import json
 from harness.events import Progress, RunError, RunFinished, RunStarted, TextDelta
 from harness.tools.base import ToolRegistry
 from app.orchestration.orchestrator import Orchestrator
@@ -33,11 +34,16 @@ class FakeCritic:
         return Review(accept=r, feedback="补一下X")
 
 
+# 编排器测试里的 Executor 替身一律以 **_kw 收尾：它们只是站位，真实签名由
+# tests/test_orchestration_executor.py 钉着。两条并行的工作线都在给 execute() 加参数
+# （done_effects / fx_sink），若每个替身都写死全部参数，每次加参数就要改十几处、
+# 且合并时必冲突。替身该关心哪个参数就显式接哪个，其余交给 **_kw。
 class FakeExecutor:
     """每步产出 summary=step.id 的 Artifact；记录执行顺序供并行断言。"""
     def __init__(self, order):
         self._order = order
-    async def execute(self, step, deps, hint="", *, registry=None, goal="", done_effects=None):
+    async def execute(self, step, deps, hint="", *, registry=None, goal="",
+                      done_effects=None, fx_sink=None, **_kw):
         from app.orchestration.executor import StepArtifact
         self._order.append(step.id)
         yield Progress(f"subagent:executor:{step.id}", "开始")
@@ -244,7 +250,8 @@ async def test_run_aggregates_all_usage_incl_planner_critic():
     from app.orchestration.plan import Artifact
 
     class UExec:
-        async def execute(self, step, deps, hint="", *, registry=None, goal="", done_effects=None):
+        async def execute(self, step, deps, hint="", *, registry=None, goal="",
+                          done_effects=None, fx_sink=None, **_kw):
             record_usage(Usage(0, 0, 100), 0.01)
             yield StepArtifact(Artifact(summary=f"done-{step.id}"))
 
@@ -473,7 +480,8 @@ async def test_parallel_steps_actually_concurrent():
     class ProbeExecutor:
         def __init__(self):
             self.now = 0; self.peak = 0
-        async def execute(self, step, deps, hint="", *, registry=None, goal="", done_effects=None):
+        async def execute(self, step, deps, hint="", *, registry=None, goal="",
+                          done_effects=None, fx_sink=None, **_kw):
             self.now += 1; self.peak = max(self.peak, self.now)
             await asyncio.sleep(0)
             self.now -= 1
@@ -495,7 +503,8 @@ async def test_early_abort_cancels_pending_workers():
 
     class MixedExecutor:
         """s_fast 立刻产出一个事件；s_slow 阻塞，被取消时记录自己。"""
-        async def execute(self, step, deps, hint="", *, registry=None, goal="", done_effects=None):
+        async def execute(self, step, deps, hint="", *, registry=None, goal="",
+                          done_effects=None, fx_sink=None, **_kw):
             if step.id == "s_slow":
                 try:
                     await asyncio.sleep(100)
@@ -541,7 +550,8 @@ async def test_run_wraps_registry_as_hiding_view_for_executor():
     from app.orchestration.executor import HidingRegistry
     seen = {}
     class CapExec:
-        async def execute(self, step, deps, hint="", *, registry=None, goal="", done_effects=None):
+        async def execute(self, step, deps, hint="", *, registry=None, goal="",
+                          done_effects=None, fx_sink=None, **_kw):
             from app.orchestration.executor import StepArtifact
             seen["reg"] = registry
             yield StepArtifact(Artifact(summary="x"))
@@ -724,7 +734,8 @@ async def test_run_emits_per_model_usage():
     from app.orchestration.plan import Artifact
 
     class MExec:
-        async def execute(self, step, deps, hint="", *, registry=None, goal="", done_effects=None):
+        async def execute(self, step, deps, hint="", *, registry=None, goal="",
+                          done_effects=None, fx_sink=None, **_kw):
             record_usage(Usage(0, 0, 100), 0.01, "fast-model")
             yield StepArtifact(Artifact(summary=f"done-{step.id}"))
 
@@ -846,7 +857,8 @@ class _DenyingExecutor:
     def __init__(self, order):
         self._order = order
 
-    async def execute(self, step, deps, hint="", *, registry=None, goal="", done_effects=None):
+    async def execute(self, step, deps, hint="", *, registry=None, goal="",
+                      done_effects=None, fx_sink=None, **_kw):
         from app.orchestration.executor import StepArtifact
         self._order.append(step.id)
         yield Progress(f"subagent:executor:{step.id}", "开始")
@@ -900,7 +912,8 @@ class _CapturingExecutor:
     def __init__(self):
         self.seen = []
 
-    async def execute(self, step, deps, hint="", *, registry=None, goal="", done_effects=None):
+    async def execute(self, step, deps, hint="", *, registry=None, goal="",
+                      done_effects=None, fx_sink=None, **_kw):
         from app.orchestration.executor import StepArtifact
         self.seen.append({t.name for t in registry.tools()} if registry else set())
         yield StepArtifact(Artifact(summary="done"))
@@ -1530,6 +1543,189 @@ async def test_planner_error_fallback_keeps_plan_route():
     assert [r.detail["mode"] for r in rs] == ["plan"]
 
 
+# ---------- 单步重试时清理上一次尝试的副作用 ----------
+
+def _fx(download=(), knowledge=(), questions=()):
+    return {"download": list(download), "knowledge": list(knowledge),
+            "questions": list(questions)}
+
+
+class _RecordingPurger:
+    """冒充装配层注入的清理回调，记录每次被要求清理什么。"""
+    def __init__(self, purged=("d1",)):
+        self.calls = []
+        self._purged = list(purged)
+
+    def __call__(self, fx):
+        self.calls.append(fx)
+        return list(self._purged)
+
+
+class _FxExecutor:
+    """按次序产出带副作用清单的 StepArtifact。"""
+    def __init__(self, fxs, terminal=False):
+        self._fxs = list(fxs); self._i = 0
+
+    async def execute(self, step, deps, hint="", *, registry=None, goal="", fx_sink=None, **_kw):
+        from app.orchestration.executor import StepArtifact
+        fx, terminal = self._fxs[min(self._i, len(self._fxs) - 1)]
+        self._i += 1
+        yield Progress(f"subagent:executor:{step.id}", "开始")
+        yield StepArtifact(Artifact(summary=f"done-{step.id}"),
+                           side_effects=fx, terminal=terminal)
+
+
+class _SeqCritic:
+    """validate 按次序给结论，review 一律通过。"""
+    def __init__(self, verdicts):
+        self._v = list(verdicts); self._i = 0
+
+    async def validate(self, step, artifact):
+        ok = self._v[min(self._i, len(self._v) - 1)]; self._i += 1
+        return Verdict(ok=ok, reason="不够好")
+
+    async def review(self, goal, plan, artifacts):
+        return Review(accept=True, feedback="")
+
+
+def _fx_orch(fxs, verdicts):
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), _SeqCritic(verdicts), [])
+    orch._executor = _FxExecutor(fxs)
+    return orch
+
+
+async def test_retry_purges_previous_attempt_side_effects():
+    """单步校验不过 → 重跑前先删掉这次尝试留下的产物。
+
+    不删的话模型重跑会把 save_download 再调一遍，聊天下方挂出两个下载按钮，
+    其中一个还是被判为不合格的那一版。
+    """
+    purger = _RecordingPurger()
+    orch = _fx_orch([(_fx(download=["d1"]), False), (_fx(), False)], [False, True])
+    [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    assert purger.calls == [_fx(download=["d1"])]      # 只清失败那次的产物
+
+
+async def test_no_purge_when_step_passes_first_try():
+    purger = _RecordingPurger()
+    orch = _fx_orch([(_fx(download=["d1"]), False)], [True])
+    [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    assert purger.calls == []                          # 通过就不该动产物
+
+
+async def test_no_purge_when_attempt_produced_nothing():
+    """这次尝试没产出产物就别去调清理——省一次无谓的 store 往返。"""
+    purger = _RecordingPurger()
+    orch = _fx_orch([(_fx(), False), (_fx(), False)], [False, True])
+    [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    assert purger.calls == []
+
+
+async def test_purge_emits_progress_so_frontend_drops_buttons():
+    """删了产物必须告诉在途前端，否则已渲染的下载按钮还在，点开是已删的文件。"""
+    purger = _RecordingPurger(purged=["d1"])
+    orch = _fx_orch([(_fx(download=["d1"]), False), (_fx(), False)], [False, True])
+    evs = [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    purged = [e for e in evs if isinstance(e, Progress) and e.scope == "purged"]
+    assert purged and "d1" in purged[0].text
+
+
+async def test_retry_emits_step_reset_to_clear_tool_log():
+    """重跑前让前端抖掉这一步上次的工具调用记录，不然同一步里同一个工具显示调了两遍。"""
+    purger = _RecordingPurger()
+    orch = _fx_orch([(_fx(), False), (_fx(), False)], [False, True])
+    evs = [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    resets = [e for e in evs if isinstance(e, Progress) and e.scope == "step_reset"]
+    assert resets and resets[0].text == "s1"
+
+
+async def test_terminal_failure_still_purges():
+    """用户拒绝危险操作 → 不重试，但这一版已产出的东西同样作废，照样要清。"""
+    purger = _RecordingPurger()
+    orch = _fx_orch([(_fx(download=["d1"]), True)], [False])
+    [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    assert purger.calls == [_fx(download=["d1"])]
+
+
+async def test_runs_without_purger_injected():
+    """未注入清理回调（精简装配/测试）时照常跑完，不报错。"""
+    orch = _fx_orch([(_fx(download=["d1"]), False), (_fx(), False)], [False, True])
+    [ev async for ev in orch.run("做点事")]
+
+
+async def test_no_step_reset_when_step_wont_rerun():
+    """终态失败/重试耗尽 → 该步不会重跑，就不能抖掉它的工具记录。
+
+    抖掉等于把失败现场一并抹了：这一步到底调了什么、错在哪，用户再也看不到。
+    step_reset 的语义是「旧记录马上会被新一轮取代」，不重跑就不成立。
+    产物照样要清——它已经作废了，与重不重跑无关。
+    """
+    purger = _RecordingPurger()
+    orch = _fx_orch([(_fx(download=["d1"]), True)], [False])   # terminal=True → 判 failed
+    evs = [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    assert purger.calls == [_fx(download=["d1"])]              # 产物仍清
+    resets = [e for e in evs if isinstance(e, Progress) and e.scope == "step_reset"]
+    assert resets == [], "不重跑的步不该抖掉工具记录"
+
+
+async def test_no_step_reset_after_retries_exhausted():
+    """重试次数用尽（max_step_retry=2）判 failed 的那次，同样不发 step_reset。"""
+    purger = _RecordingPurger()
+    orch = _fx_orch([(_fx(), False)], [False, False])          # 两次都不过 → 第二次判 failed
+    evs = [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    resets = [e for e in evs if isinstance(e, Progress) and e.scope == "step_reset"]
+    assert len(resets) == 1, "只有第一次（会重跑）该发，最后一次判 failed 不该发"
+
+
+async def test_purges_even_when_step_crashes_after_producing():
+    """本步异常逃出 AgentLoop 兜底时，已落盘的产物照样要清。
+
+    这条路上 StepArtifact 根本 yield 不出来，产物清单只能靠传给 executor 的 sink 拿到。
+    """
+    class _CrashAfterSave:
+        async def execute(self, step, deps, hint="", *, registry=None, goal="", fx_sink=None, **_kw):
+            if fx_sink is not None:
+                fx_sink.update({"download": ["d1"], "knowledge": [], "questions": []})
+            yield Progress(f"subagent:executor:{step.id}", "调用工具 save_download", status="ok")
+            raise RuntimeError("连接断了")
+
+    purger = _RecordingPurger()
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), _SeqCritic([True]), [])
+    orch._executor = _CrashAfterSave()
+    [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    # 崩了会重试，重试又崩 —— 两次尝试各自的产物都要清，故调用 2 次
+    assert purger.calls == [{"download": ["d1"], "knowledge": [], "questions": []}] * 2
+
+
+async def test_purged_payload_is_a_flat_id_array():
+    """purged 的载荷必须是**扁平 id 数组**，前端 Array.isArray 不过就静默丢弃。
+
+    这条容易踩：SideEffectPurger.purge 返回的是按类分组的 dict，而本回调约定返回 list。
+    两者名字相近、都叫"清理结果"，直接把 purger 接上来就会发出 {"download": [...]}，
+    前端 JSON.parse 得到对象 → Array.isArray 为假 → 直接 return，按钮永远撤不掉，
+    且不报任何错。只断言"文本里含 d1"是抓不住的——dict 的 JSON 里同样含 d1。
+    """
+    orch = _fx_orch([(_fx(download=["d1"]), False), (_fx(), False)], [False, True])
+    evs = [ev async for ev in orch.run(
+        "做点事", purge_side_effects=lambda fx: ["d1", "d2"])]
+    payload = [e for e in evs if isinstance(e, Progress) and e.scope == "purged"][0].text
+    assert json.loads(payload) == ["d1", "d2"]
+
+
+async def test_purged_payload_normalized_when_callback_returns_grouped_dict():
+    """回调若返回 purge() 那种分组 dict，也要归一成下载 id 数组再发，不能原样丢给前端。"""
+    orch = _fx_orch([(_fx(download=["d1"]), False), (_fx(), False)], [False, True])
+    evs = [ev async for ev in orch.run("做点事", purge_side_effects=lambda fx: {
+        "download": ["d1"], "knowledge": ["k1"], "questions": []})]
+    payload = [e for e in evs if isinstance(e, Progress) and e.scope == "purged"][0].text
+    assert json.loads(payload) == ["d1"]
+
+
+async def test_no_purged_event_when_nothing_actually_deleted():
+    """删除全失败时不发 purged：前端据它标注"已作废删除"，而文件其实还在。"""
+    orch = _fx_orch([(_fx(download=["d1"]), False), (_fx(), False)], [False, True])
+    evs = [ev async for ev in orch.run("做点事", purge_side_effects=lambda fx: [])]
+    assert [e for e in evs if isinstance(e, Progress) and e.scope == "purged"] == []
 # ---- save_download 按步下发（防「生成内容」步顺手存一份，与「保存文件」步各存一份）----
 
 def _fake_tool(name):
@@ -1561,7 +1757,7 @@ async def _run_capturing_regs(plan, goal="把内容整理好并存成可下载�
     order = []
 
     class RecordingExecutor(FakeExecutor):
-        async def execute(self, step, deps, hint="", *, registry=None, goal="", done_effects=None):
+        async def execute(self, step, deps, hint="", *, registry=None, goal="", done_effects=None, **_kw):
             seen[step.id] = _names(registry)
             async for ev in super().execute(step, deps, hint, registry=registry, goal=goal,
                                             done_effects=done_effects):
@@ -1621,7 +1817,7 @@ async def test_retry_prompt_carries_previous_side_effects():
             self._n = 0
 
         async def execute(self, step, deps, hint="", *, registry=None, goal="",
-                          done_effects=None):
+                          done_effects=None, **_kw):
             from app.orchestration.executor import StepArtifact, _build_prompt
             prompts.append(_build_prompt(step, deps, hint, goal, done_effects))
             self._n += 1
@@ -1653,7 +1849,7 @@ async def test_side_effects_survive_a_retry_that_calls_nothing():
             self._n = 0
 
         async def execute(self, step, deps, hint="", *, registry=None, goal="",
-                          done_effects=None):
+                          done_effects=None, **_kw):
             from app.orchestration.executor import StepArtifact, _build_prompt
             prompts.append(_build_prompt(step, deps, hint, goal, done_effects))
             self._n += 1
@@ -1784,3 +1980,148 @@ def test_middle_step_still_allowed_when_no_terminal_step_claims_delivery():
     plan = _p(("s1", "讲解如何生成配置文件", "讲解文本", ()),
               ("s2", "把讲解整理后交给用户", "最终答复", ("s1",)))
     assert file_saving_step_ids(plan) == {"s1", "s2"}
+
+# ---------- 两套机制的接缝：删了就得让模型重做 ----------
+
+class _RecordingExecutor:
+    """记录每次收到的 done_effects，并按剧本产出产物。"""
+    def __init__(self, fxs):
+        self._fxs = list(fxs); self._i = 0
+        self.seen_done_effects = []
+        self.seed_effect = "save_download"   # 本替身"上次调过"的那个工具
+
+    async def execute(self, step, deps, hint="", *, registry=None, goal="",
+                      done_effects=None, fx_sink=None, **_kw):
+        from app.orchestration.executor import StepArtifact
+        self.seen_done_effects.append(list(done_effects or []))
+        fx = self._fxs[min(self._i, len(self._fxs) - 1)]; self._i += 1
+        if fx_sink is not None:
+            fx_sink.update(fx)
+        yield Progress(f"subagent:executor:{step.id}", "调用工具 save_download", status="ok")
+        # effects 累积：模型这次调了 save_download 且留下了产物
+        eff = list(done_effects or [])
+        if any(fx.values()) and self.seed_effect not in eff:
+            eff.append(self.seed_effect)
+        yield StepArtifact(Artifact(summary=f"done-{step.id}"), effects=eff, side_effects=fx)
+
+
+async def test_purged_artifact_is_removed_from_done_effects_so_model_redoes_it():
+    """删了产物就必须让模型重做——这是两套机制的接缝，双方各自的测试都盖不到。
+
+    「按步下发 + 告知已做过」防的是重复保存；「重跑前清理」防的是留下不合格那版的文件。
+    两者单独都对，合在一起若不协作就会：文件被删 → 模型被告知"你已经存过了" → 不再保存
+    → **用户手里一个文件都没有**。故清掉某类产物后，要把对应工具名从 done_effects 摘掉。
+    """
+    ex = _RecordingExecutor([
+        {"download": ["d1"], "knowledge": [], "questions": []},   # 首次：存了文件
+        {"download": ["d2"], "knowledge": [], "questions": []},   # 重跑：重新存了
+    ])
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), _SeqCritic([False, True]), [])
+    orch._executor = ex
+    # 回调按 SideEffectPurger.purge 的真实形状返回分组 dict
+    [ev async for ev in orch.run("做点事", purge_side_effects=lambda fx: dict(fx))]
+
+    assert len(ex.seen_done_effects) == 2, "应跑了两次（首次 + 重跑）"
+    assert ex.seen_done_effects[0] == []
+    assert "save_download" not in ex.seen_done_effects[1], (
+        "首次存的文件已被删，重跑时不能再告诉模型「你已经存过了」，否则它不会重存")
+
+
+async def test_done_effects_kept_when_nothing_was_actually_purged():
+    """删除失败（产物还在）时不能摘——再让模型存一遍就真成两份了。"""
+    ex = _RecordingExecutor([
+        {"download": ["d1"], "knowledge": [], "questions": []},
+        {"download": [], "knowledge": [], "questions": []},
+    ])
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), _SeqCritic([False, True]), [])
+    orch._executor = ex
+    # 清理全失败：回传各类均为空
+    [ev async for ev in orch.run("做点事", purge_side_effects=lambda fx: empty_fx_for_test())]
+    assert "save_download" in ex.seen_done_effects[1], "没删成就仍要告知模型别重做"
+
+
+def empty_fx_for_test():
+    return {"download": [], "knowledge": [], "questions": []}
+
+
+async def test_sink_content_survives_an_artifact_that_forgot_side_effects():
+    """只填了 sink、忘了设 StepArtifact.side_effects 的实现，产物清单不能被抹掉。
+
+    `fx = ev.side_effects or fx` 看着像在做这个兼容，其实相反：empty_fx() 是含三个键的
+    dict、恒为真，于是返回值无条件压过 sink——这种实现的产物会被默认空值整个抹掉，
+    既不清理也不摘工具名。
+    """
+    class _SinkOnly:
+        async def execute(self, step, deps, hint="", *, fx_sink=None, **_kw):
+            from app.orchestration.executor import StepArtifact
+            if fx_sink is not None:
+                fx_sink.update({"download": ["d1"], "knowledge": [], "questions": []})
+            yield Progress(f"subagent:executor:{step.id}", "存了文件", status="ok")
+            yield StepArtifact(Artifact(summary="稿子"))      # 忘了带 side_effects
+
+    purger = _RecordingPurger()
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), _SeqCritic([False, True]), [])
+    orch._executor = _SinkOnly()
+    [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    assert purger.calls and purger.calls[0]["download"] == ["d1"]
+
+
+async def test_no_double_counting_when_sink_and_artifact_are_the_same_object():
+    """真实 executor 里 sink 与 artifact.side_effects 是同一个 dict——合并时不能把 id 记两遍。"""
+    class _Both:
+        async def execute(self, step, deps, hint="", *, fx_sink=None, **_kw):
+            from app.orchestration.executor import StepArtifact
+            fx = fx_sink if fx_sink is not None else {}
+            fx.update({"download": ["d1"], "knowledge": [], "questions": []})
+            yield Progress(f"subagent:executor:{step.id}", "存了文件", status="ok")
+            yield StepArtifact(Artifact(summary="稿子"), side_effects=fx)   # 同一对象
+
+    purger = _RecordingPurger()
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), _SeqCritic([False, True]), [])
+    orch._executor = _Both()
+    [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    assert purger.calls[0]["download"] == ["d1"], "同一对象不该被记两遍"
+
+
+async def test_seam_also_covers_knowledge_kind():
+    """接缝此前只测过 download 一类；知识条目走同一条路，也得摘对应工具名。"""
+    ex = _RecordingExecutor([
+        {"download": [], "knowledge": ["k1"], "questions": []},
+        {"download": [], "knowledge": ["k2"], "questions": []},
+    ])
+    # _RecordingExecutor 只在有 download 时补 save_download，这里手工种一个知识类的账
+    ex.seed_effect = "save_to_knowledge"
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), _SeqCritic([False, True]), [])
+    orch._executor = ex
+    [ev async for ev in orch.run("做点事", purge_side_effects=lambda fx: dict(fx))]
+    assert "save_to_knowledge" not in ex.seen_done_effects[1], (
+        "知识条目被删了，重跑时不能再告诉模型「你已经存过了」")
+
+
+async def test_parallel_failing_steps_prune_their_own_effects_only():
+    """同一轮两个步都失败、各自带产物时，摘工具名不能串台。"""
+    class _PerStep:
+        def __init__(self): self.seen = {}
+        async def execute(self, step, deps, hint="", *, done_effects=None, fx_sink=None, **_kw):
+            from app.orchestration.executor import StepArtifact
+            self.seen.setdefault(step.id, []).append(list(done_effects or []))
+            # s1 存文件、s2 存知识，各自独立
+            fx = ({"download": ["d1"], "knowledge": [], "questions": []} if step.id == "s1"
+                  else {"download": [], "knowledge": ["k1"], "questions": []})
+            if fx_sink is not None:
+                fx_sink.update(fx)
+            eff = list(done_effects or [])
+            tool = "save_download" if step.id == "s1" else "save_to_knowledge"
+            if tool not in eff:
+                eff.append(tool)
+            yield Progress(f"subagent:executor:{step.id}", "干活", status="ok")
+            yield StepArtifact(Artifact(summary=step.id), effects=eff, side_effects=fx)
+
+    ex = _PerStep()
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2"))]), _SeqCritic([False, False, True, True]), [])
+    orch._executor = ex
+    [ev async for ev in orch.run("做点事", purge_side_effects=lambda fx: dict(fx))]
+    # 各自第二次尝试读到的都该是"自己那件事被撤销了"，且不含对方的工具名
+    assert "save_download" not in ex.seen["s1"][1]
+    assert "save_to_knowledge" not in ex.seen["s2"][1]
+    assert "save_to_knowledge" not in ex.seen["s1"][1], "不该串到别的步"

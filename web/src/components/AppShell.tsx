@@ -7,6 +7,7 @@ import {
   Button, Menu, MenuItem, Avatar,
 } from "@mui/material";
 import type { Theme } from "@mui/material/styles";
+import { scalePx } from "../theme";
 import type { User } from "../types";
 import { AnimatePresence, motion } from "framer-motion";
 import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutlined";
@@ -30,8 +31,9 @@ import { VersionBadge } from "./VersionBadge";
 import { BeianFooter } from "./BeianFooter";
 import { ChangeNameDialog, ChangePasswordDialog } from "./AccountDialogs";
 
-const WIDTH = 220;
-const MINI = 68;
+// 布局尺寸写死在 px，不经 theme.spacing，故手动跟上整体缩放
+const WIDTH = scalePx(220);
+const MINI = scalePx(68);
 
 // 菜单/历史等“外壳”统一的浅色背景，与白色内容区拉开层次
 export const chromeBg = (t: Theme) => (t.palette.mode === "light" ? "#eceef2" : "#181a1f");

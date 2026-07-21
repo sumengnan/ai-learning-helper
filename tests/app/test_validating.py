@@ -189,15 +189,21 @@ def test_web_check_ignores_non_page_results():
     assert web_content_check("HTTP 200\n[]").ok is True
 
 
-def test_app_ships_a_measured_relevance_floor():
+def test_app_ships_a_measured_relevance_floor(monkeypatch):
     """应用层默认必须开着相关性下限。
 
     内核默认 0（模型无关，不替精排模型断言量纲），但应用层推荐了具体精排模型，
     实测值就该落在这层。若默认改回 0，「查厨具也能从 AI 知识库返回满满一屏」这个
     bug 会原样复活，且没有任何测试会红——故在此钉死。
     换精排模型时请重新实测再改这个数，同时更新 .env.example 里的标定说明。
+
+    必须与本机配置隔离（_env_file=None + 清掉环境变量）：这里断言的是**代码里的
+    默认值**，而开发者在自己 .env 里配一个 HARNESS_RERANK_MIN_SCORE 是完全正常的事。
+    不隔离的话本机一配就红，且红的原因与它要守护的不变式毫无关系——一条常年飘红、
+    每次都要解释"这个不用管"的测试，等于没有这条测试。
     """
     from app.config import AppConfig
     from harness.config import HarnessConfig
-    assert HarnessConfig().rerank_min_score == 0.0, "内核保持模型无关"
-    assert AppConfig(api_key="k").rerank_min_score > 0, "应用层必须带实测下限"
+    monkeypatch.delenv("HARNESS_RERANK_MIN_SCORE", raising=False)
+    assert HarnessConfig(_env_file=None).rerank_min_score == 0.0, "内核保持模型无关"
+    assert AppConfig(api_key="k", _env_file=None).rerank_min_score > 0, "应用层必须带实测下限"

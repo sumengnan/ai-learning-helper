@@ -18,6 +18,7 @@ from harness.tools.base import ToolRegistry
 from ..search_guidance import SEARCH_SYSTEM_GUIDANCE
 from app.today import today_guide
 
+from ..side_effects import empty_fx, ids_from_tool
 from .plan import Artifact, PlanStep
 from .usage_ctx import record_usage
 
@@ -65,14 +66,23 @@ class StepArtifact:
     terminal=True 表示这次失败不可通过重试挽回（当前唯一来源：用户拒绝了危险操作），
     调度器应直接判 failed，不再重跑本步。
 
-    effects：本次尝试里**已经留下持久产物**的工具名（去重、保序）。重试时要告诉模型
-    「这些你上次已经做过了」，否则它会把带副作用的工具原样再调一遍——实测就是同一份笔记
-    被存两次。判据见 execute() 里对 marker 的说明。
+    两份产物记录，服务于两件不同的事，缺一不可：
+
+    - effects：本次尝试里**已经留下持久产物**的工具名（去重、保序）。重试时要告诉模型
+      「这些你上次已经做过了」，否则它会把带副作用的工具原样再调一遍——实测就是同一份
+      笔记被存两次。判据见 execute() 里对 marker 的说明。
+    - side_effects：同一批产物的 **id**（下载/知识/题目）。校验不过要重跑时，调度器据此
+      把这一版的产物删掉。
+
+    两者协作而非重复：删掉某类产物后，调度器会同步把对应的工具名从 effects 里摘掉，
+    模型于是不会被告知「已做过」、会重新保存。只留 effects 则用户拿到的是不合格那版的
+    文件；只留 side_effects 则删了却没人重做，用户手里一个文件都没有。
     """
     artifact: Artifact
     error: str | None = None
     terminal: bool = False
     effects: list[str] = field(default_factory=list)
+    side_effects: dict = field(default_factory=empty_fx)
 
 
 # 子步默认只有裸系统提示词，缺少主聊天那套工具引导，模型会拿 http_request/浏览器乱抓网页
@@ -186,11 +196,18 @@ class Executor:
 
     async def execute(self, step: PlanStep, deps: dict[str, Artifact], hint: str = "",
                       *, registry: ToolRegistry | None = None, goal: str = "",
-                      done_effects: list[str] | None = None):
+                      done_effects: list[str] | None = None,
+                      fx_sink: dict | None = None):
         """执行一步。yield Progress 事件，最后 yield 一个 StepArtifact。
 
         registry：本轮每请求工具表（含用户级 save_download/知识库/考试/附件工具）。编排器传入
-        （已隐藏 update_plan）；缺省回退装配期 registry（主要供测试）。"""
+        （已隐藏 update_plan）；缺省回退装配期 registry（主要供测试）。
+
+        done_effects：上次尝试里已经留下产物的工具名，拼进 prompt 告诉模型别重做。
+
+        fx_sink：调用方给的产物 id 收集器，边跑边就地更新。StepArtifact 也会带同样的内容，
+        但本步中途崩溃时它根本 yield 不出来——而那时文件可能已经落了盘，清单一丢就再没人
+        去删它。故清单必须写进调用方持有的对象，而不是只搭在返回值上。"""
         prompt = _build_prompt(step, deps, hint, goal, done_effects)
         loop = AgentLoop(
             client=self._client, registry=registry if registry is not None else self._registry,
@@ -202,6 +219,9 @@ class Executor:
         final_text = ""
         error = None
         user_denied = False
+        # 本次尝试的产物 id：既写进调用方的 sink（崩溃也不丢），也随 StepArtifact 回传
+        side_effects = fx_sink if fx_sink is not None else {}
+        side_effects.update(empty_fx())
         tool_names: dict[str, str] = {}
         tool_args: dict[str, object] = {}   # 暂存入参，供完成行带全（前端按 key 合并只留最后一条）
         # 就是调用方传进来的那个 list（没传才新建）：executor 边跑边就地追加，于是子步中途
@@ -236,6 +256,12 @@ class Executor:
                     name = tool_names.get(r.tool_call_id, "工具")
                     if r.is_error and _USER_DENIED_MARK in (r.content or ""):
                         user_denied = True          # 本步含被用户拒绝的操作 → 不可重试
+                    # 登记产物 id：必须在这里而不是事后从 Progress 里扒——这里同时看得见
+                    # 工具名、结果文本与 is_error，是唯一能准确判定"真产出了东西"的位置。
+                    # 就地更新（不重新绑定）：调用方持有同一个 dict，崩溃时仍看得到已产出的东西
+                    _new = ids_from_tool(name, r.content or "", r.is_error)
+                    for _k, _v in _new.items():
+                        side_effects[_k] += _v
                     # 「这次调用留下了持久产物」的判据：结果带了 marker（model_content 非空
                     # 即表示 content 里有只给机器看的尾巴，如〔下载ID:x〕〔知识ID:x〕）。
                     # 用 marker 而非硬编码工具名单：名单会漂，而 marker 是既有约定——
@@ -268,4 +294,5 @@ class Executor:
         # 拷一份出去：effects 可能就是调用方的 list，直接交出去会让两边共享可变状态。
         # 累进语义已由「就地追加到传入的 list」保证——本次没再调也不会丢掉上次的账。
         yield StepArtifact(Artifact(summary=final_text, data={}, files=[]),
-                           error=error, terminal=user_denied, effects=list(effects))
+                           error=error, terminal=user_denied, effects=list(effects),
+                           side_effects=side_effects)
