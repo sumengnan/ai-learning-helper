@@ -35,7 +35,8 @@ from app.today import with_today
 from .critic import Critic
 from .executor import CLARIFY_GUIDE, Executor, HidingRegistry, StepArtifact
 from .planner import Planner, PlannerError, render_tool_roster
-from .plan import _KB_REQUESTED_RE, Artifact, Plan, PlanStep, has_pending, ready_steps
+from .plan import (_KB_REQUESTED_RE, Artifact, Plan, PlanStep, file_saving_step_ids,
+                   has_pending, ready_steps)
 from .usage_ctx import (
     UsageAcc, record_usage, reset_acc, reset_reason_sink, set_acc, set_reason_sink,
 )
@@ -582,6 +583,18 @@ class Orchestrator:
     # ---- 调度：一轮轮跑就绪集，直到无 pending、预算超限或无法推进（后两者带现有成果收尾）----
     async def _schedule_rounds(self, plan: Plan, retry_hints: dict[str, str], budget=None,
                                exec_reg=None, goal: str = ""):
+        # 产出文件的步骤才拿得到 save_download。计划常拆成「1.生成内容 → 2.存成文件」，
+        # 而工具表原先是按轮算的，两步都看得见它：第 1 步校验没过、被要求重试时就会抓它用上，
+        # 第 2 步再存一次，下载区两份重复文件（实测症状）。此处按步收紧到该给的那步。
+        # savers 为 None（没有一步像是要产文件）时不限制，退回原行为——正则漏判把该存的那步
+        # 也堵死，比重复保存严重得多。
+        savers = file_saving_step_ids(plan)
+
+        def _reg_for(step: PlanStep):
+            if exec_reg is None or savers is None or step.id in savers:
+                return exec_reg
+            return HidingRegistry(exec_reg, {"save_download"})
+
         while has_pending(plan):
             if budget:
                 try:
@@ -615,7 +628,7 @@ class Orchestrator:
                 try:
                     async for ev in self._executor.execute(
                             step, deps, retry_hints.get(step.id, ""),
-                            registry=exec_reg, goal=goal):
+                            registry=_reg_for(step), goal=goal):
                         if isinstance(ev, StepArtifact):
                             art, err, terminal = ev.artifact, ev.error, ev.terminal
                         else:

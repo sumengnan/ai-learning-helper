@@ -1528,3 +1528,81 @@ async def test_planner_error_fallback_keeps_plan_route():
     orch = _mk(FakePlanner([_plan(_s("s1"))], raise_on_plan=True), FakeCritic(), [])
     rs = _routes(await _run(orch, "调研 AI 现状并整理成报告"))
     assert [r.detail["mode"] for r in rs] == ["plan"]
+
+
+# ---- save_download 按步下发（防「生成内容」步顺手存一份，与「保存文件」步各存一份）----
+
+def _fake_tool(name):
+    class T:
+        pass
+    t = T(); t.name = name
+    return t
+
+
+class _Reg:
+    """最小 ToolRegistry 替身：只需支撑 HidingRegistry 的 get/tools。"""
+    def __init__(self, names):
+        self._t = [_fake_tool(n) for n in names]
+
+    def get(self, name):
+        return next((t for t in self._t if t.name == name), None)
+
+    def tools(self):
+        return list(self._t)
+
+
+def _names(reg):
+    return {t.name for t in reg.tools()} if reg is not None else set()
+
+
+async def _run_capturing_regs(plan, goal="把内容整理好并存成可下载文件"):
+    """跑一轮，记下每个步骤实际拿到的工具表。"""
+    seen: dict[str, set] = {}
+    order = []
+
+    class RecordingExecutor(FakeExecutor):
+        async def execute(self, step, deps, hint="", *, registry=None, goal=""):
+            seen[step.id] = _names(registry)
+            async for ev in super().execute(step, deps, hint, registry=registry, goal=goal):
+                yield ev
+
+    orch = _mk(FakePlanner([plan]), FakeCritic(), order)
+    orch._executor = RecordingExecutor(order)
+    base = _Reg(["save_download", "web_search", "calculator"])
+    async for _ in orch._schedule_rounds(plan, {}, None, base, goal=goal):
+        pass
+    return seen
+
+
+async def test_save_download_only_reaches_the_file_producing_step():
+    """「生成内容」步不该拿到 save_download——它校验没过被要求重试时就会抓这个工具用上，
+    后面真正的保存步再存一次，下载区两份重复文件（实测症状）。"""
+    plan = _plan(
+        PlanStep(id="s1", description="撰写一份关于AI的学习笔记内容", expected="完整的笔记正文"),
+        PlanStep(id="s2", description="将笔记保存为可下载的文件", expected="可下载的 .md 文件",
+                 depends_on=["s1"]))
+    seen = await _run_capturing_regs(plan)
+    assert "save_download" not in seen["s1"], "生成内容的步骤不该看得见存文件的工具"
+    assert "save_download" in seen["s2"], "真正要产出文件的那步必须拿得到"
+    # 其余工具一个都不能少：这里只收 save_download，不是给子步换一份阉割工具表
+    assert {"web_search", "calculator"} <= seen["s1"]
+
+
+async def test_all_steps_keep_save_download_when_no_step_looks_like_saving():
+    """一步都不像要产文件时不收紧——正则漏判把该存的那步也堵死，比重复保存严重得多
+    （用户什么都拿不到）。宁可退回原行为。"""
+    plan = _plan(PlanStep(id="s1", description="调研AI现状", expected="调研结论"),
+                 PlanStep(id="s2", description="归纳要点", expected="要点清单", depends_on=["s1"]))
+    seen = await _run_capturing_regs(plan)
+    assert all("save_download" in v for v in seen.values())
+
+
+async def test_multiple_file_steps_all_get_the_tool():
+    """用户要两份不同文件时，两步都得拿得到——收紧的是「非产出文件的步」，不是「只留一步」。"""
+    plan = _plan(
+        PlanStep(id="s1", description="生成大纲并导出为文件", expected="大纲文件"),
+        PlanStep(id="s2", description="生成正文并存成可下载文件", expected="正文文件"),
+        PlanStep(id="s3", description="总结要点", expected="要点"))
+    seen = await _run_capturing_regs(plan)
+    assert "save_download" in seen["s1"] and "save_download" in seen["s2"]
+    assert "save_download" not in seen["s3"]

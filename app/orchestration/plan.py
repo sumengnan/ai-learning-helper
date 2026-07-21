@@ -76,6 +76,29 @@ _SAVE_KB_RE = re.compile(
     r"|知识库[^，。；]{0,6}(?:保存|存档|入库|收藏)"
     r"|save_to_knowledge")
 
+# 「这一步的产出是文件」的识别，用于把 save_download 只发给该步（见 file_saving_step_ids）。
+# 计划常拆成「1.生成内容 → 2.存成文件」，而工具表此前是按轮算的，两步都看得见 save_download。
+# 于是第 1 步在校验没过、被要求重试时，会抓这个看起来能「把事做成」的工具用上，
+# 第 2 步再存一次——下载区两份重复文件。光靠工具描述劝不住：重试语境下模型压力更大。
+_SAVE_FILE_RE = re.compile(
+    r"save_download"
+    r"|(?:存|保存|写|生成|导出|输出|落|产出)(?:成|为|出|到)?[^，。；]{0,6}"
+    r"(?:可下载|下载|文件|附件|成品)"
+    r"|(?:可下载|下载)[^，。；]{0,4}(?:文件|成品|产物)"
+    r"|\.(?:md|txt|html|csv|json)\b")
+
+
+def file_saving_step_ids(plan) -> set[str] | None:
+    """哪些步骤该拿到 save_download；返回 None 表示不限制（维持全员可见）。
+
+    单调设计：只有当计划里**确实存在**至少一步看着像「产出文件」时才收紧，一步都没命中
+    就退回现状。否则正则漏判会把该存的那步也堵死——那比重复保存严重得多（用户什么都拿不到）。
+    """
+    hits = {s.id for s in plan.steps
+            if _SAVE_FILE_RE.search(f"{s.description} {s.expected}")}
+    return hits or None
+
+
 # 用户目标里出现这些词才算「要求过」，此时上面的步骤是正当的
 _KB_REQUESTED_RE = re.compile(r"知识库|收藏|存起来|入库|存档|保存下来")
 
