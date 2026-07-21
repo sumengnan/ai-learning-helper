@@ -86,3 +86,35 @@ def test_chat_purge_callback_returns_grouped_dict_not_just_ids():
     assert "return done" in src, "回调应回传 purge() 的完整结果"
     assert 'return done["download"]' not in src, (
         "回传仅下载 id 会让「删了就让模型重做」的接缝静默失效")
+
+
+def test_end_state_is_exactly_one_file_after_a_failed_attempt(tmp_path):
+    """两套机制协作的终局：重跑后用户手里**恰好一份**文件——不是零份也不是两份。
+
+    零份 = 清理了但模型被告知"已存过"、不再保存（合并时的必然 bug，接缝正是为它而加）。
+    两份 = 模型重存了但旧的没清掉（本特性要解决的原始问题）。
+    这条直接盯终局状态，不关心中间用了哪套机制，故任何一侧退化它都会红。
+    """
+    from app.side_effects import SideEffectPurger, ids_from_tool, tools_to_redo
+
+    store = _store(tmp_path)
+    done_effects: list[str] = []          # 模拟编排器的 step_effects[step.id]
+
+    # —— 第一次尝试：模型存了文件 ——
+    rec1 = store.create("u1", "报告.md", "初稿".encode("utf-8"), "text/markdown")
+    done_effects.append("save_download")
+    fx = ids_from_tool("save_download", f"已保存〔下载ID:{rec1['id']}〕", is_error=False)
+
+    # —— 校验不过：清理产物，并按实际删掉的摘掉工具名 ——
+    purged = SideEffectPurger(download_store=store).purge("u1", fx)
+    done_effects = [t for t in done_effects if t not in tools_to_redo(purged)]
+
+    assert not os.path.exists(store.path(rec1["id"])), "作废那版的文件应已删除"
+    assert "save_download" not in done_effects, "删了就得让模型重做，否则用户一份都拿不到"
+
+    # —— 重跑：模型据此重新保存 ——
+    rec2 = store.create("u1", "报告.md", "改进稿".encode("utf-8"), "text/markdown")
+
+    remaining = [r for r in store.list("u1")]
+    assert len(remaining) == 1, f"应恰好剩一份，实际 {len(remaining)} 份"
+    assert remaining[0]["id"] == rec2["id"], "留下的应是重跑后的新版"
