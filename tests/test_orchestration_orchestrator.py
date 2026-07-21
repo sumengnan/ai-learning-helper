@@ -1722,3 +1722,41 @@ def test_reported_bug_still_fixed_with_the_new_guards():
               ("s2", "将笔记保存为可下载的文件", "可下载的文件", ("s1",)))
     savers = file_saving_step_ids(plan)
     assert savers == {"s2"}
+
+
+def test_save_file_regex_covers_common_phrasings_without_false_positives():
+    """正则的正反例都钉住：假阳性会反向放大（见 file_saving_step_ids），
+    假阴性会让该拿工具的步拿不到。两边都得管。"""
+    from app.orchestration.plan import _SAVE_FILE_RE as R
+    hit = ["将内容保存为可下载的文件", "把整理好的笔记存成 .md 文件", "调用 save_download 保存",
+           "输出可下载成品", "导出为文件供用户下载",
+           # 以下曾漏判
+           "把结果落盘", "整理成讲义并提供给用户下载", "供用户下载的成品",
+           # 工具描述里专门交代了「用户即使说导出 PDF 也要存成 .md」，说明这是预期会出现的说法
+           "导出为 PDF", "生成 Excel 表格交付"]
+    miss = ["调研AI现状", "撰写关于AI的总结", "总结要点", "生成图表数据",
+            # 以下曾误判：只是提到文件，并不产出文件
+            "解析上传的 .csv 数据并提取关键指标", "检查 config.json 的格式是否正确",
+            "阅读 README.md 了解项目结构"]
+    assert [t for t in hit if not R.search(t)] == []
+    assert [t for t in miss if R.search(t)] == []
+
+
+def test_description_and_expected_matched_separately_not_concatenated():
+    """两字段分别匹配：拼成一串时间隔类会吃掉空格，于是「描述末尾 + 预期开头」跨界命中，
+    而两边各自都无害——「整理要点并输出」+「文件名清单」被判成产文件步，触发反向放大。"""
+    from app.orchestration.plan import file_saving_step_ids
+    plan = _p(("s1", "整理要点并输出", "文件名清单", ()),
+              ("s2", "列出需要生成的内容", "文件格式说明", ("s1",)))
+    assert file_saving_step_ids(plan) is None
+
+
+def test_effects_note_allows_resaving_when_content_actually_changed():
+    """告诫语不能一刀切说「不要再调用」：本步若本职就是产出文件，质检不通过说的往往正是
+    产物内容不行；改好了却不许再存，下载区就永久留着被否的那一版，而 Critic 只看 summary
+    会判它通过——一个 bug 换成另一个更隐蔽的。"""
+    from app.orchestration.executor import _build_prompt
+    got = _build_prompt(_s("s1"), {}, "第二章太浅，请补充", "g", ["save_download"])
+    assert "还在，没有丢失" in got                      # 既成事实要说清
+    assert "不要再调用一次" in got                      # 内容没变时仍须拦住重复保存
+    assert "真的改动了产物内容时，才照常再调一次" in got  # 内容变了则本该再存

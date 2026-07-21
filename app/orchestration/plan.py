@@ -87,7 +87,14 @@ _SAVE_FILE_RE = re.compile(
     r"save_download"
     r"|(?:存|保存|写|生成|导出|输出|落|产出)(?:成|为|出|到)?[^，。；]{0,6}"
     r"(?:可下载|下载|文件|附件|成品)"
-    r"|(?:可下载|下载)[^，。；]{0,4}(?:文件|成品|产物)")
+    r"|(?:可下载|下载)[^，。；]{0,4}(?:文件|成品|产物)"
+    # 「供用户下载」「提供下载」——中文更自然的收尾语序是「下载」在后，上面那条要求它在前
+    r"|(?:供|提供|给)[^，。；]{0,6}下载"
+    r"|落盘"
+    # 「导出为 PDF」：工具描述里专门交代了「用户即使说导出 PDF 也要存成 .md」，说明这是
+    # 被预期会出现的说法；这些格式名不在可写扩展名里，但它们出现即意味着用户要的是文件。
+    r"|(?:导出|输出|生成|存)(?:成|为)?\s*(?:PDF|WORD|EXCEL|PPT|DOCX?|XLSX?|PPTX?)\b",
+    re.I)
 
 
 def _terminal_step_ids(plan) -> set[str]:
@@ -116,8 +123,11 @@ def file_saving_step_ids(plan) -> set[str] | None:
     终端步、已认领交付，故不触发第 2 条，s1 照样拿不到。计划没声明依赖时也一样——
     那时 s1、s2 都是终端步，但 s2 已命中，仍只放行 s2。
     """
+    # 两字段分别 search，不拼成一串：间隔类会吃掉空格，于是「输出 文件名清单」这种
+    # 「描述末尾 + 预期开头」的组合会跨界命中，而两边各自都无害。
     hits = {s.id for s in plan.steps
-            if _SAVE_FILE_RE.search(f"{s.description} {s.expected}")}
+            if _SAVE_FILE_RE.search(s.description or "")
+            or _SAVE_FILE_RE.search(s.expected or "")}
     if not hits:
         return None
     terminals = _terminal_step_ids(plan)

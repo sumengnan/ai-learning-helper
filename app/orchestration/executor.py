@@ -114,13 +114,22 @@ def _system_with_guide(base: str, sandbox_guide_text: str = "") -> str:
 _GOAL_MAX = 6000
 
 
-# 重试时的既成事实告知。语气必须是「已经做完了，别再做一遍」而非「你上次做过」——
-# 后者模型会读成一句中性陈述，照样再调一次（实测：同一份笔记被存两次）。
+# 重试时的既成事实告知。
+#
+# 措辞按「内容有没有变」分情况，不能一刀切说「不要再调用」：本步若**本职就是产出文件**
+# （按步下发后，save_download 只会出现在这种步骤的 effects 里），质检不通过说的往往正是
+# 产物内容不行；改好了却不许再存，下载区就永久留着被否的那一版，而 Critic 只看 summary
+# 会判它通过——等于把一个 bug 换成另一个更隐蔽的。
+#
+# 内容确有改动时再存一次是**正确**的；内容没变时再存也无害（产物按内容判重，是空操作）。
+# 真正要拦的是「为了保险起见把同一份东西换个名字再存一遍」——那正是重复文件的来源。
 def _done_effects_note(effects: list[str]) -> str:
-    return ("\n【上次尝试已经做完的事，不要重复做】本步上次运行时已经成功调用过："
+    return ("\n【上次尝试已经做过的事】本步上次运行时已经成功调用过："
             + "、".join(effects)
-            + "。它们产生的东西**已经存在并保留着**，本次重试是为了改进产出内容，"
-              "不是重做这些动作。**不要再调用一次**，否则会产生重复的文件/记录。")
+            + "。它们产生的产物**还在，没有丢失**。\n"
+              "因此：产物内容若与上次一致，就**不要再调用一次**——那只会凭空多出一份重复的"
+              "文件/记录；只有当你这次真的改动了产物内容时，才照常再调一次把新版本存进去。"
+              "不要为了「保险起见」重复保存同一份东西。")
 
 
 def _build_prompt(step: PlanStep, deps: dict[str, Artifact], hint: str = "",
@@ -195,7 +204,11 @@ class Executor:
         user_denied = False
         tool_names: dict[str, str] = {}
         tool_args: dict[str, object] = {}   # 暂存入参，供完成行带全（前端按 key 合并只留最后一条）
-        effects: list[str] = []             # 本次已留下持久产物的工具（供重试时告知模型）
+        # 就是调用方传进来的那个 list（没传才新建）：executor 边跑边就地追加，于是子步中途
+        # 崩溃时调用方手里也已经有账——产物那时已经落库了，重试仍不能当它没发生。
+        # 只靠最后一个 StepArtifact 交账做不到这点：崩溃根本走不到那句 yield。
+        # prompt 已在上面用这个 list 的初值拼好，后续追加不会回头影响它。
+        effects: list[str] = done_effects if done_effects is not None else []
         token = set_current_agent(f"executor:{step.id}")
         think_token = None
         if self._disable_thinking:  # 本步强制关思考：叠加在外层 override 之上，finally 还原
@@ -252,8 +265,7 @@ class Executor:
             if think_token is not None:
                 from harness.llm.openai_compat import reset_extra_body_override
                 reset_extra_body_override(think_token)
-        # 累进而非覆盖：本次没再调不代表上次的产物消失了，下次重试仍须被告知。
-        merged = list(done_effects or [])
-        merged += [e for e in effects if e not in merged]
+        # 拷一份出去：effects 可能就是调用方的 list，直接交出去会让两边共享可变状态。
+        # 累进语义已由「就地追加到传入的 list」保证——本次没再调也不会丢掉上次的账。
         yield StepArtifact(Artifact(summary=final_text, data={}, files=[]),
-                           error=error, terminal=user_denied, effects=merged)
+                           error=error, terminal=user_denied, effects=list(effects))
