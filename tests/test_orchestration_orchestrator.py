@@ -2125,3 +2125,36 @@ async def test_parallel_failing_steps_prune_their_own_effects_only():
     assert "save_download" not in ex.seen["s1"][1]
     assert "save_to_knowledge" not in ex.seen["s2"][1]
     assert "save_to_knowledge" not in ex.seen["s1"][1], "不该串到别的步"
+
+
+async def test_non_saver_step_keeps_working_file_tools():
+    """只摘 save_download，不是给子步换一份阉割工具表。
+
+    「创作一首诗」这类中间步**可以**把内容写进沙箱工作文件（后续步骤再读出来交付），
+    只是不能自己塞进用户的下载区。沙箱指引里也是这么说的：「只有当后续步骤还要在沙箱里
+    读取/处理该文件时，才先 write_file」——工具视图必须和那句话对得上。
+    """
+    plan = _plan(
+        PlanStep(id="s1", description="创作一首诗", expected="一首完整的诗，供后续保存为文件"),
+        PlanStep(id="s2", description="将创作的诗保存为可下载的文件", expected="可下载的文件",
+                 depends_on=["s1"]))
+    seen = {}
+    order = []
+
+    class RecordingExec(FakeExecutor):
+        async def execute(self, step, deps, hint="", *, registry=None, goal="",
+                          done_effects=None, **kw):
+            seen[step.id] = {t.name for t in registry.tools()} if registry else set()
+            async for ev in super().execute(step, deps, hint, registry=registry, goal=goal,
+                                            done_effects=done_effects, **kw):
+                yield ev
+
+    orch = _mk(FakePlanner([plan]), FakeCritic(), order)
+    orch._executor = RecordingExec(order)
+    base = _Reg(["save_download", "write_file", "read_file", "run_shell", "web_search"])
+    async for _ in orch._schedule_rounds(plan, {}, None, base, goal="生成一首诗，保存到下载"):
+        pass
+    assert "save_download" not in seen["s1"], "创作步不该能直接塞进下载区"
+    assert {"write_file", "read_file", "run_shell", "web_search"} <= seen["s1"], \
+        "创作步仍须能写工作文件、跑沙箱、检索——被摘的只有 save_download 这一个"
+    assert "save_download" in seen["s2"]
