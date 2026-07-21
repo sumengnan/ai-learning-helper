@@ -77,6 +77,19 @@ def _obvious_simple(message: str) -> bool:
     return bool(m) and len(m) <= 20 and _GREETING_RE.match(m) is not None
 
 
+# 考试轮交给校验器的前置说明。_simple_answer_verified 只服务于考试轮
+# （force_simple = bool(exam_guide)，见 chat.py），故可无条件附加。
+_EXAM_REVIEW_NOTE = (
+    "【本轮是考试进行中的一轮，请按考试规则审查】"
+    "考试由服务端托管：题目一次只出一道，判分与游标推进都由服务端完成，"
+    "模型本轮只负责「讲解上一题的对错 + 呈现当前这一道题」。\n"
+    "因此**只出现一道题是正确的**，不要因为「用户说要考 5 道题、这里只有第 1 题」"
+    "就判成内容遗漏——其余题目会在后续轮次逐一出现，不该也不能在本轮一次性给出。\n"
+    "本轮该看的是：判分讲解有没有说反、该告知的「已存入错题集」有没有漏、"
+    "呈现的题目是否与服务端给定的一致（不得篡改题干或选项）。\n"
+    "用户本轮的原始请求如下：\n")
+
+
 def _one_step_plan(goal: str, answer: str) -> tuple[Plan, dict]:
     """把简单直答的一问一答包成单步计划 + 产出，好喂给按多步设计的 Critic.review。
 
@@ -280,7 +293,10 @@ class Orchestrator:
 
         yield Progress(scope="verify", text="结果校验中…", status="running")
         plan, arts = _one_step_plan(message, draft)
-        review = await self._critic.review(message, plan, arts)
+        # 校验器只看到「目标：抽取 5 道题考试」和「产出：第 1 题」，于是判「缺失第 2~5 题、
+        # 实质性内容遗漏」——而逐题呈现恰恰是对的。误判的代价不对称：它会触发整轮重答，
+        # 用户白等一次，重答出来的还是同一道题。故把考试的推进规则明确告诉校验器。
+        review = await self._critic.review(_EXAM_REVIEW_NOTE + message, plan, arts)
         if review.accept:
             yield Progress(scope="verify", text="结果校验通过", status="ok")
             if finished_ev is not None:
