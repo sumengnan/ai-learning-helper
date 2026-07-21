@@ -245,6 +245,7 @@ docs/                架构与专题文档、部署说明、截图
   一次聊天请求的全链路、数据存储。
 - [`app/README.md`](app/README.md) —— 应用层按功能域的实操说明:各域怎么跑、怎么验收、已知限制。
 - [`docs/data-model.md`](docs/data-model.md) —— 数据表一览:三个库各管什么、每张表的职责、贯穿的设计约束。
+- [`docs/data-model-fields.md`](docs/data-model-fields.md) —— 数据表字段明细:逐表逐字段说明。
 
 **专题**
 - [`docs/context-management.md`](docs/context-management.md) —— 上下文管理:三档策略、L1/L2/L3 分层、token 预算。
