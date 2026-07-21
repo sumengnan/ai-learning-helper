@@ -36,6 +36,14 @@ def empty_fx() -> dict[str, list[str]]:
 def ids_from_tool(tool: str, result: str, is_error: bool) -> dict[str, list[str]]:
     """从单次工具调用的结果里提取产物 id。非副作用工具、报错的调用一律返回空。
 
+    **与 executor 里 effects 的判定口径不同，两者会漂**：effects 用「结果带 marker」
+    （model_content 非空）通用判定，本函数用硬编码工具名单 + 正则。当前两边覆盖的集合
+    并不完全重合——出题工具把〔题目ID:x〕拼在正文里而非 marker 字段（见 exam_tools.py），
+    故只被本函数记到、不被 effects 记到。今天这个差异恰好落在安全的一侧（删了题目、
+    模型也没被告知"已做过"，于是会重出），但反过来就不安全：新增一个走 marker 却不在
+    下面名单里的工具，effects 会告诉模型"别重做"，而本函数扒不到 id、产物删不掉——
+    用户拿到的是被判不合格那版的产物。加新的副作用工具时，这两处要一起改。
+
     报错必须排除：工具失败时没有真产物，而报错文本里可能回显了标记，
     照扒会去删一个不存在（或属于别人）的 id。
     """
