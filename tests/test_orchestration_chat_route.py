@@ -392,3 +392,78 @@ def test_no_verify_trace_when_verify_off(make_mock, monkeypatch):
     # 回归藏了整整一次合并。
     assert row and row[0] == "答", "这轮没正常跑完，下面的断言不成立"
     assert not row[1]
+
+
+# ---------- 关掉结果校验开关就不该出现「结果校验通过」 ----------
+
+class _QualityOrchestrator:
+    """多步产出（工具步 > 1），满足轨迹 judge 的触发条件。"""
+    async def run(self, message, verify=True, *, context=None, registry=None,
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False,
+                  run_id=None):
+        from harness.events import RunStarted, RunFinished, ToolStarted, ToolFinished
+        from harness.types import Message, Role, ToolCall, ToolResult
+        yield RunStarted(run_id=run_id or "r1")
+        for i in (1, 2):
+            yield ToolStarted(tool_call=ToolCall(id=f"t{i}", name="search_knowledge",
+                                                 arguments={"query": "x"}))
+            yield ToolFinished(result=ToolResult(tool_call_id=f"t{i}", content=f"结果{i}",
+                                                 is_error=False))
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content="答"))
+
+
+def _quality_client(make_mock, monkeypatch, scored: list):
+    class _Judge:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def score(self, *a, **kw):
+            scored.append(1)
+            return {"final": 8, "breakdown": {}}
+
+    import app.verify as v
+    monkeypatch.setattr(v, "TrajectoryJudge", _Judge)
+    traj = TrajectoryStore(":memory:")
+    harness = Harness(client=make_mock([]), registry=ToolRegistry(),
+                      checkpoint_store=CheckpointStore(":memory:"),
+                      trajectory_store=traj, sink=TrajectorySink(traj),
+                      system_prompt="你是助手", orchestrator=_QualityOrchestrator())
+    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,
+                    enable_answer_gate=False, enable_trajectory_judge=True,
+                    sandbox_approval_timeout=0.3)
+    store = ConversationStore(":memory:")
+    app = create_app(config=cfg, harness=harness, store=store,
+                     doc_store=DocumentStore(":memory:"))
+    return TestClient(app), store
+
+
+def _run_turn(c, verify: bool) -> str:
+    h = _auth(c)
+    cid = c.post("/api/conversations", json={}, headers=h).json()["id"]
+    with c.stream("POST", "/api/chat",
+                  json={"conversation_id": cid, "message": "做点复杂的事", "verify": verify},
+                  headers=h) as r:
+        return "\n".join(r.iter_lines())
+
+
+async def test_quality_score_not_emitted_when_verify_off(make_mock, monkeypatch):
+    """回归：用户关掉「结果校验」开关，界面仍显示「结果校验通过」。
+
+    后端确实没做终局 review、一条 scope=verify 都没发；但轨迹质量分只看服务端开关、
+    不看本轮开关，照发 quality。而前端 VerifyBadge 的判据是「有 verify 事件 **或** 有
+    quality」，被 quality 命中，主行就写成了「结果校验通过」——用户关掉了校验，却被
+    告知结果校验通过了。质量分只是打分、不驱动重答，冒充不了「把过关」。
+    """
+    scored: list = []
+    c, _ = _quality_client(make_mock, monkeypatch, scored)
+    body = _run_turn(c, verify=False)
+    assert scored == [], "关了结果校验就不该再跑轨迹 judge"
+    assert "quality" not in body
+
+
+async def test_quality_score_still_emitted_when_verify_on(make_mock, monkeypatch):
+    """反向：开着开关时质量分照常产出，别把这条修成「永远不打分」。"""
+    scored: list = []
+    c, _ = _quality_client(make_mock, monkeypatch, scored)
+    _run_turn(c, verify=True)
+    assert scored, "开着结果校验时轨迹 judge 应照常打分"

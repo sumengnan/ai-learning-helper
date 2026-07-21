@@ -1029,7 +1029,13 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     # 分层质量分，落 progress 列供「AI 运行统计 · 回答质量」展示，不据此驱动重答。
                     # 仅多步任务（工具步 > 1）才评：单步/无工具无「拆分/多步」可评，跳过省 token
                     # （与旧交付门口径一致）。轨迹 judge 默认关闭，需 enable_trajectory_judge 才生效。
-                    if (not errored and trajectory_judge is not None
+                    #
+                    # 必须同时看 req.verify（本轮的结果校验开关）。此前只看服务端开关，于是用户
+                    # 关掉开关后：后端确实不做终局 review、一条 scope=verify 都不发，但质量分照
+                    # 发——前端 VerifyBadge 的 kind 判据是「有 verify 事件 **或** 有 quality」，
+                    # 被 quality 命中，主行照样显示「结果校验通过」。用户关掉了校验，却被告知
+                    # 结果校验通过了。质量分只是打分、不驱动重答，冒充不了「把过关」。
+                    if (not errored and req.verify and trajectory_judge is not None
                             and config.enable_trajectory_judge and delivered
                             and len(collect["steps"]) > 1):
                         try:
