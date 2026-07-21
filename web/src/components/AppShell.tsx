@@ -200,8 +200,10 @@ export function AppShell({ children }: { children: ReactNode }) {
             </Button>
             <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)}
               onClose={() => setMenuAnchor(null)}
-              anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-              transformOrigin={{ vertical: "top", horizontal: "right" }}>
+              // 两端都用 center，菜单落在按钮正下方。别用 right/right：那是「菜单右边缘
+              // 对齐按钮右边缘」，菜单一宽就整个往左挂，看着不在按钮下面。
+              anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+              transformOrigin={{ vertical: "top", horizontal: "center" }}>
               {/* 账号只在菜单里露出：账号 + 姓名这一对正是「忘记密码」的核身凭据
                   （UserStore.verify_name），不并排常驻在顶栏上给旁人一眼看全。 */}
               {user && (
