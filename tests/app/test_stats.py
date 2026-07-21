@@ -700,3 +700,89 @@ def test_ops_by_model_breakdown_and_per_model_pricing():
     # 汇总 = 各模型之和
     assert ops["totals"]["total_tokens"] == 500
     assert abs(ops["totals"]["cost_usd"] - round(by["main-m"]["cost_usd"] + by["fast-m"]["cost_usd"], 4)) < 1e-9
+
+
+# ---------- 分模型用量只统计在用的模型 ----------
+
+from app.stats import _by_model_rows   # noqa: E402
+
+
+def _m(total=0, calls=0):
+    return {"prompt": total, "completion": 0, "total": total,
+            "calls": calls, "cost": 0.0, "has_cost": False}
+
+
+def test_retired_model_usage_is_dropped():
+    """回归：轨迹事件永久保留，换过模型后旧模型的用量一直挂在表里。
+
+    实测某库里已停用的 qwen-turbo 占 119 万 token，稳居第一行，把在用模型全压下去，
+    看着像它还在跑。
+    """
+    rows = _by_model_rows(
+        {"qwen-turbo": _m(1188203, 225), "deepseek-v4-pro": _m(30089, 10)},
+        ["deepseek-v4-pro"])
+    assert [r["model"] for r in rows] == ["deepseek-v4-pro"]
+    assert rows[0]["total_tokens"] == 30089
+
+
+def test_active_model_with_zero_usage_still_listed():
+    """配了却没用量本身就是信息（如 judge 没接上、rerank 没开）。
+    零行看得见，缺行只会让人以为「统计漏了」。"""
+    rows = _by_model_rows({"main-m": _m(100, 1)}, ["main-m", "judge-m"])
+    names = [r["model"] for r in rows]
+    assert names == ["main-m", "judge-m"], "零用量的在用模型要补在末尾"
+    z = rows[1]
+    assert z["total_tokens"] == 0 and z["calls"] == 0 and z["cost_usd"] is None
+
+
+def test_no_active_list_keeps_old_behaviour():
+    """装配没传 active_models 时不过滤——避免漏接一处就把整张表清空。"""
+    rows = _by_model_rows({"a": _m(5, 1), "b": _m(3, 1)}, None)
+    assert {r["model"] for r in rows} == {"a", "b"}
+
+
+def test_duplicate_active_models_listed_once():
+    """未配 fast/judge 时回退主模型，五档里会出现重名，不能在表里重复成多行。"""
+    rows = _by_model_rows({"m": _m(9, 2)}, ["m", "m", "m"])
+    assert [r["model"] for r in rows] == ["m"]
+
+
+def test_totals_and_by_model_use_the_same_active_scope():
+    """总计与分模型必须同口径：只过滤展示行会让各行之和小于总计，看着像统计出了错。
+
+    停用模型的用量在聚合入口就整条跳过，tokens / 成本 / 调用次数一并收口。
+    """
+    tc = _traj_conn()
+    _ev(tc, "r1", 0, "RunStarted", {})
+    _ev(tc, "r1", 1, "ModelUsage",
+        {"usage": {"prompt": 100, "completion": 20, "total": 120},
+         "cost_usd": 0.5, "attempts": 1, "latency_ms": 100.0, "model": "new-main"})
+    _ev(tc, "r1", 2, "ModelUsage",   # 已停用，不该进任何统计
+        {"usage": {"prompt": 9000, "completion": 900, "total": 9900},
+         "cost_usd": 9.0, "attempts": 1, "latency_ms": 200.0, "model": "old-retired"})
+    _ev(tc, "r1", 3, "RunFinished", {})
+    svc = StatsService(trajectory_conn=tc, app_conn=_app_conn(), memory_conn=None,
+                       active_models=["new-main", "unused-judge"], now=lambda: FIXED_NOW)
+    ops = svc.overview("u")["ops"]
+
+    rows = {r["model"]: r for r in ops["by_model"]}
+    assert set(rows) == {"new-main", "unused-judge"}, "停用模型不入表，零用量的在用模型要列出"
+    assert ops["totals"]["model_calls"] == 1, "调用次数同样收口"
+    assert ops["totals"]["total_tokens"] == 120, "总 token 不能再含停用模型"
+    assert sum(r["total_tokens"] for r in ops["by_model"]) == ops["totals"]["total_tokens"], \
+        "分模型各行之和必须等于总计"
+
+
+def test_no_active_models_counts_everything():
+    """未传 active_models 时不过滤——装配漏接一处不该把统计清空。"""
+    tc = _traj_conn()
+    _ev(tc, "r1", 0, "RunStarted", {})
+    _ev(tc, "r1", 1, "ModelUsage",
+        {"usage": {"prompt": 10, "completion": 1, "total": 11}, "model": "a"})
+    _ev(tc, "r1", 2, "ModelUsage",
+        {"usage": {"prompt": 20, "completion": 2, "total": 22}, "model": "b"})
+    _ev(tc, "r1", 3, "RunFinished", {})
+    svc = StatsService(trajectory_conn=tc, app_conn=_app_conn(), memory_conn=None,
+                       now=lambda: FIXED_NOW)
+    ops = svc.overview("u")["ops"]
+    assert ops["totals"]["total_tokens"] == 33 and ops["totals"]["model_calls"] == 2

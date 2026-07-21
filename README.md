@@ -99,8 +99,11 @@ flowchart TD
 
 - **triage**:纯寒暄/致谢由正则零成本短路,其余交快速档模型判 `simple` / `complex`;判不出就
   按复杂走(宁可多做)。简单直答承载绝大多数流量。
-- **模型分档**:规划与终局 review 用主模型(判断质量要求高),triage / 单步质检 / 执行子步走快速档
-  (`HARNESS_FAST_MODEL`,未配则回退主模型)。
+- **模型分档**:三档。规划用主模型(判断质量要求高);终局 review 走 judge 档
+  (`HARNESS_JUDGE_MODEL`,未配则回退主模型)——用独立/更强模型当裁判可降低"自己给自己打高分"
+  的偏差,且恒定关思考;triage / 单步质检 / 执行子步走快速档(`HARNESS_FAST_MODEL`,未配则回退
+  主模型)。交付门的 grounding 事实核对**留在主模型**:它是拿答案对着检索到的原文核对有无依据,
+  不是自评打分,没有"给自己打高分"的偏差,不必占用(可能更贵的)裁判模型;但思考跟 judge 一样关掉。
 - **有状态流程强制单循环**:模拟考试走 `force_simple` + 主模型逐题推进——拆成多步再汇总会把
   "原样呈现下一题"的指令吞掉。
 - **收尾兜底**:预算超限或某步重试耗尽时不硬失败,把未完成步标 skipped,带现有成果尽力汇总。
@@ -165,6 +168,7 @@ dict / list 值写 JSON。生产务必设置随机 `AUTH_SECRET` 与真实 `HARN
 | `HARNESS_BASE_URL` | `https://api.openai.com/v1` | 任意 OpenAI 兼容端点 |
 | `HARNESS_MODEL` | `gpt-4o-mini` | 主模型 |
 | `HARNESS_FAST_MODEL` | 空 | 快速档模型;空则回退主模型(另有 `_BASE_URL` / `_API_KEY`) |
+| `HARNESS_JUDGE_MODEL` | 空 | 裁判档模型(终局 review / 打分);空则回退主模型(另有 `_BASE_URL` / `_API_KEY`) |
 | `AUTH_SECRET` | `dev-insecure-secret-change-me` | JWT 签名密钥,生产必改 |
 | `HARNESS_APP_HOST` / `HARNESS_APP_PORT` | `127.0.0.1` / `8000` | 监听地址 |
 | `HARNESS_APP_DB_PATH` | `app.db` | 应用领域各表统一存于此单一文件 |
