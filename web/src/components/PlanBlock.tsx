@@ -1,30 +1,13 @@
-import { type ReactNode } from "react";
-import { Box, Typography, CircularProgress, Chip, Accordion, AccordionSummary, AccordionDetails } from "@mui/material";
+import { Box, Typography, Chip, Accordion, AccordionSummary, AccordionDetails } from "@mui/material";
 import { EllipsisText } from "./EllipsisText";
-import CheckCircleIcon from "@mui/icons-material/CheckCircle";
-import CancelIcon from "@mui/icons-material/Cancel";
-import RadioButtonUncheckedIcon from "@mui/icons-material/RadioButtonUnchecked";
-import HelpOutlineIcon from "@mui/icons-material/HelpOutlined";
-import StopCircleIcon from "@mui/icons-material/StopCircle";
-import RemoveCircleOutlineIcon from "@mui/icons-material/RemoveCircleOutlined";
 import PlaylistAddCheckIcon from "@mui/icons-material/PlaylistAddCheck";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import { CollapsibleBlock } from "./CollapsibleBlock";
-import { fmtDuration } from "./duration";
 import { LiveDuration } from "./LiveDuration";
 import { ToolCallRows, mergeByKey, type ToolRow } from "./ToolCallRows";
-
-type PlanStatus = "pending" | "running" | "done" | "failed" | "skipped";
-// 计时字段由后端跨 update_plan 快照算出、烤进 plan JSON（见 app/tools/plan_tool.py）：
-// 已结束的步骤给 elapsed_ms（定格值），进行中的给 started_at_ms（epoch 毫秒，供前端读秒）。
-// plan 走 progress 通道落库，故刷新后耗时仍在、进行中的也能接着读。没走过 running 的两者皆无。
-// id：编排器计划步带（见 orchestrator._plan_progress），供把 executor:<id> 的执行明细挂到该步下；
-// ReAct 的 update_plan 清单无 id，则各步照常渲染成不可展开的纯行。
-type PlanStepData = {
-  id?: string; title: string; status: PlanStatus;
-  depends_on?: string[];   // 编排器计划步的依赖（步骤 id）；用于标并行/依赖关系
-  elapsed_ms?: number | null; started_at_ms?: number | null;
-};
+import {
+  type PlanStepData, parseSteps, fateOf, stepIcon, SUFFIX, StepDuration, fmtStep,
+} from "./planSteps";
 
 // 依赖层级：无依赖=0，否则 max(依赖层级)+1。同层且该层≥2 步 → 可并行。环由 validate_plan 挡掉，
 // 这里仍加 computing 守卫防脏数据死循环。返回 {levelOf, levelCount, idToNum} 供渲染并行徽章/依赖标注。
@@ -60,72 +43,6 @@ function analyzeDag(steps: PlanStepData[]) {
 
 // 归属该计划步的 executor 执行明细（工具调用），来自 scope=subagent:executor:<id> 的进度行
 type SubItem = ToolRow & { scope: string };
-
-// 步骤耗时多为秒级，fmtDuration 对不足 1 秒会显示「0 秒」，这里改用「<1 秒」避免误读
-const fmtStep = (ms: number) => (ms < 1000 ? "<1 秒" : fmtDuration(ms));
-
-// 行尾耗时：tabular-nums 让读秒时数字不跳宽
-function StepDuration({ children }: { children: ReactNode }) {
-  return (
-    <Typography
-      variant="caption"
-      color="text.secondary"
-      sx={{ flexShrink: 0, ml: "auto", pl: 1, opacity: 0.7,
-            fontVariantNumeric: "tabular-nums" }}
-    >
-      {children}
-    </Typography>
-  );
-}
-
-function parseSteps(text?: string | null): PlanStepData[] {
-  if (!text) return [];
-  try {
-    const arr = JSON.parse(text);
-    if (!Array.isArray(arr)) return [];
-    return arr.filter((s) => s && typeof s.title === "string");
-  } catch {
-    return [];
-  }
-}
-
-// 清单是模型的自述：它每完成一步就得再调一次 update_plan 传完整清单，前端显示的永远是
-// 它最后一次传的那份。而模型约六分之一的多步任务会中途停止更新（甚至列完清单一次没更过），
-// 于是运行早已成功结束，清单却还停在「第3步进行中、第4步待办」。
-//
-// 关键：此时那些步骤到底做没做，前端无从得知——实测有的轮次第4步明明干完了（文件都生成了），
-// 清单上仍是 pending。所以这里绝不能替模型断言，只能如实说「状态未知」：
-// - 正常跑完(done) + 非终态步骤 → 未知（可能做了也可能没做，别画成从没开始的空心圈）
-// - 失败/中断         + 非终态步骤 → 未完成（运行都没跑完，这步大概率真没做完）
-// - 用户停止          + 进行中步骤 → 已取消
-type Fate = "unknown" | "incomplete" | "cancelled" | "pending" | "live";
-
-function fateOf(s: PlanStepData, live: boolean, status?: string): Fate {
-  if (s.status === "done" || s.status === "failed" || s.status === "skipped") return "pending";  // 终态，不需裁决
-  // 生成中：只有正在执行的那步转圈；待办步保持静态（等待），不要全都转圈
-  if (live) return s.status === "running" ? "live" : "pending";
-  if (status === "stopped") return s.status === "running" ? "cancelled" : "pending";
-  if (status === "error" || status === "interrupted") return "incomplete";
-  if (status === "done") return "unknown";   // 运行成功但模型没再更新清单
-  return "pending";                          // 非 live 的 streaming（刷新等）：还没结论
-}
-
-function stepIcon(s: PlanStepData, fate: Fate) {
-  if (s.status === "done") return <CheckCircleIcon sx={{ fontSize: 17 }} color="success" />;
-  if (s.status === "failed") return <CancelIcon sx={{ fontSize: 17 }} color="error" />;
-  if (s.status === "skipped") return <RemoveCircleOutlineIcon sx={{ fontSize: 17 }} color="disabled" />;
-  if (fate === "live") return <CircularProgress size={14} />;
-  if (fate === "cancelled") return <StopCircleIcon sx={{ fontSize: 17 }} color="disabled" />;
-  // 未知用问号而非空心圈：空心圈=「没开始」，是个我们没资格下的断言
-  if (fate === "unknown") return <HelpOutlineIcon sx={{ fontSize: 17 }} color="disabled" />;
-  return <RadioButtonUncheckedIcon sx={{ fontSize: 17 }} color="disabled" />;
-}
-
-const SUFFIX: Partial<Record<Fate, string>> = {
-  cancelled: "（已取消）",
-  unknown: "（状态未知）",
-  incomplete: "（未完成）",
-};
 
 // 任务步骤各行统一的最小高度（px）：让可展开步（Accordion）与纯行等高，
 // 收起态不再「一会高一会低」；内容超高（标题换行）时仍可自然撑开
