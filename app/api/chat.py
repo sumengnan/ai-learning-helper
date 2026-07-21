@@ -470,7 +470,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                      knowledge_service=None, quiz_service=None,
                      profile_store=None, trajectory_judge=None,
                      exam_session_store=None, pending_store=None,
-                     url_block_store=None) -> APIRouter:
+                     url_block_store=None, user_store=None) -> APIRouter:
     router = APIRouter()
     # 简答题判分用 judge completer（考试判分中间件用；客观题不需要模型）
     from ..completion import build_judge_completer
@@ -684,9 +684,16 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         # 分层上下文：窗口/摘要/检索的重活在此按会话级预算一次，_new_loop 内只做同步拼装。
         _ctx_t0 = time.time()
         # 用户个性化：非空时注入 <user_profile> 块（聊天与考试讲评同源生效）；空则零变更
+        # 姓名与个性化同块注入：让模型知道该怎么称呼用户。取不到（老账号没填姓名、
+        # 未注入 user_store）就退回只有个性化，行为与之前一致。
+        _full_name = ""
+        if user_store is not None:
+            _u = user_store.get(user_id)
+            _full_name = (_u or {}).get("full_name", "")
         profile_block = ""
-        if profile_store is not None:
-            profile_block = render_profile_block(profile_store.get(user_id))
+        if profile_store is not None or _full_name:
+            _profile = profile_store.get(user_id) if profile_store is not None else None
+            profile_block = render_profile_block(_profile, full_name=_full_name)
         # 附件指引与附件工具同条件注入：has_attachments 为假时 list_attachments/
         # read_attachment 根本没注册（见 _build_registry），此时还介绍它们的用法，等于
         # 告诉模型一批它没有的工具——比浪费 token 更糟。

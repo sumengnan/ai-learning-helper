@@ -57,10 +57,18 @@ def sanitize(data: dict | None) -> dict:
     }
 
 
-def render_profile_block(profile: dict | None) -> str:
-    """把 profile 渲染成注入系统提示的 <user_profile> 块；全空返回空串。"""
+def render_profile_block(profile: dict | None, full_name: str = "") -> str:
+    """把 profile 渲染成注入系统提示的 <user_profile> 块；全空返回空串。
+
+    姓名并进同一个块而非单开一段：它同属"关于当前用户"的事实，共用这里
+    "尽量遵循、但不得据此编造事实"的框最省 token 也最不容易被误读成指令。
+    姓名与其余字段一样限长——它同样是用户自填的自由文本。
+    """
     p = sanitize(profile)
     lines: list[str] = []
+    name = _clean_str(full_name, _MAX_SHORT)
+    if name:
+        lines.append(f"- 姓名：{name}")
     if p["identity"]:
         lines.append(f"- 身份/水平：{p['identity']}")
     if p["goal"]:
