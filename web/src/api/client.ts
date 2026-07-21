@@ -57,6 +57,19 @@ export async function fetchVersion(): Promise<VersionInfo> {
   return r.json();
 }
 
+export interface SiteInfo {
+  icp: string;
+  police_icp: string;
+  copyright: string;
+}
+
+/** 站点备案信息（公开端点，无需鉴权）；未配置时各项为空串。 */
+export async function fetchSiteInfo(): Promise<SiteInfo> {
+  const r = await fetch("/api/site");
+  if (!r.ok) throw new Error("获取站点信息失败");
+  return r.json();
+}
+
 export interface Captcha {
   token: string;
   image: string; // data URI（SVG）

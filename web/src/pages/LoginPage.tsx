@@ -12,6 +12,7 @@ import InsightsRoundedIcon from "@mui/icons-material/InsightsRounded";
 import { motion } from "framer-motion";
 import { useAuth } from "../auth/AuthProvider";
 import { Captcha } from "../components/Captcha";
+import { BeianFooter } from "../components/BeianFooter";
 
 const MotionPaper = motion(Paper);
 
@@ -90,8 +91,8 @@ export function AuthLayout({ title, subtitle, children }:
   { title: string; subtitle: string; children: ReactNode }) {
   return (
     <Box sx={{
-      minHeight: "100vh", display: "flex", alignItems: "center",
-      justifyContent: "center", p: { xs: 2, sm: 3 },
+      minHeight: "100vh", display: "flex", flexDirection: "column",
+      alignItems: "center", justifyContent: "center", p: { xs: 2, sm: 3 },
       background: (t) => t.palette.mode === "dark"
         ? "radial-gradient(1200px 600px at 15% 0%, #1e1b4b 0%, transparent 55%), radial-gradient(1000px 600px at 100% 100%, #312e81 0%, transparent 50%), #0f1016"
         : "radial-gradient(1200px 600px at 15% 0%, #eef2ff 0%, transparent 55%), radial-gradient(1000px 600px at 100% 100%, #faf5ff 0%, transparent 50%), #f6f7f9",
@@ -118,6 +119,7 @@ export function AuthLayout({ title, subtitle, children }:
           </Box>
         </Box>
       </MotionPaper>
+      <BeianFooter />
     </Box>
   );
 }
