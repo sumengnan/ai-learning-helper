@@ -1,6 +1,9 @@
+import pytest
 from harness.events import Progress
 from harness.llm.base import StreamChunk
-from harness.tools.base import ToolRegistry
+from pydantic import BaseModel
+from harness.tools.base import Tool, ToolError, ToolRegistry
+from harness.types import ToolOutput
 from app.orchestration.executor import Executor, StepArtifact
 from app.orchestration.plan import Artifact, PlanStep
 
@@ -20,8 +23,9 @@ async def _collect(gen):
     async for ev in gen:
         if isinstance(ev, StepArtifact):
             artifact = ev.artifact
-            # 便于测试直接查 artifact.error，而不必额外返回整个 StepArtifact 信号
+            # 便于测试直接查 artifact.error/side_effects，而不必额外返回整个 StepArtifact 信号
             artifact.error = ev.error
+            artifact.side_effects = ev.side_effects
         else:
             events.append(ev)
     return events, artifact
@@ -334,3 +338,244 @@ def test_no_goal_keeps_prompt_unchanged():
     from app.orchestration.plan import PlanStep
     step = PlanStep(id="s1", description="搜索资料", expected="资料", depends_on=[])
     assert "用户的原始请求" not in _build_prompt(step, {}, "")
+
+
+# ---------- 副作用登记（供单步重试时清理）----------
+
+class _FakeSaveDownload(Tool):
+    """冒充 save_download：产物 id 走 marker 字段（与真实 SaveDownloadTool 一致——
+    marker 不进模型上下文，但会被 ToolExecutor 拼进 ToolResult.content）。"""
+    name = "save_download"
+    description = "保存下载"
+
+    class Params(BaseModel):
+        filename: str
+
+    def __init__(self, did="d1", fail=False):
+        self._did, self._fail = did, fail
+
+    async def run(self, params):
+        from harness.tools.base import ToolError
+        if self._fail:
+            raise ToolError(f"保存失败 〔下载ID:{self._did}〕")
+        return ToolOutput(text="已保存", marker=f"〔下载ID:{self._did}〕")
+
+
+def _reg_with_save_download(did="d1", fail=False):
+    reg = ToolRegistry(); reg.register(_FakeSaveDownload(did, fail))
+    return reg
+
+
+def _save_download_turns():
+    from harness.llm.base import ToolCallDelta
+    return [
+        [StreamChunk(type="tool_call", tool_call_delta=ToolCallDelta(
+            index=0, id="c1", name="save_download", arguments='{"filename": "a.md"}')),
+         StreamChunk(type="done")],
+        [StreamChunk(type="text", text="存好了"), StreamChunk(type="done")],
+    ]
+
+
+async def test_artifact_records_download_side_effect(make_mock):
+    """带副作用的工具调完，产物 id 要挂在 StepArtifact 上——否则重试时无从知道该删什么。"""
+    ex = Executor(client=make_mock(_save_download_turns()),
+                  registry=_reg_with_save_download(), system_prompt="s", model="m", max_steps=3)
+    _, artifact = await _collect(ex.execute(_step(), {}))
+    assert artifact.side_effects["download"] == ["d1"]
+
+
+async def test_artifact_records_nothing_when_tool_failed(make_mock):
+    """工具报错时没有真产物，报错文本里回显的标记不能当成要清理的东西。"""
+    ex = Executor(client=make_mock(_save_download_turns()),
+                  registry=_reg_with_save_download(fail=True),
+                  system_prompt="s", model="m", max_steps=3)
+    _, artifact = await _collect(ex.execute(_step(), {}))
+    assert artifact.side_effects["download"] == []
+
+
+async def test_artifact_side_effects_empty_without_side_effect_tools(make_mock):
+    from harness.tools.builtins.calculator import CalculatorTool
+    reg = ToolRegistry(); reg.register(CalculatorTool())
+    ex = Executor(client=make_mock(_tool_then_done_turns()),
+                  registry=reg, system_prompt="s", model="m", max_steps=3)
+    _, artifact = await _collect(ex.execute(_step(), {}))
+    assert not any(artifact.side_effects.values())
+
+
+class _BoomAfterSaveClient:
+    """先让模型调一次 save_download，工具成功后下一轮流式炸掉——模拟网络中断。"""
+    def __init__(self): self._n = 0
+
+    async def stream(self, messages, schemas):
+        from harness.llm.base import ToolCallDelta
+        self._n += 1
+        if self._n == 1:
+            yield StreamChunk(type="tool_call", tool_call_delta=ToolCallDelta(
+                index=0, id="c1", name="save_download", arguments='{"filename": "a.md"}'))
+            yield StreamChunk(type="done")
+            return
+        raise RuntimeError("连接断了")
+
+
+async def test_side_effects_kept_when_step_errors_out():
+    """工具已经落了盘、之后本步才出错 —— 产物 id 不能跟着错误一起丢，否则没人去删这个文件。
+
+    AgentLoop 把客户端异常转成 RunError 而非抛出，所以这条路上 StepArtifact 仍会产出；
+    清单同时写进 sink 与 artifact，两边都拿得到。
+    """
+    fx_sink = {}
+    ex = Executor(client=_BoomAfterSaveClient(), registry=_reg_with_save_download(),
+                  system_prompt="s", model="m", max_steps=3)
+    _, artifact = await _collect(ex.execute(_step(), {}, fx_sink=fx_sink))
+    assert artifact.error, "这轮应记为出错"
+    assert fx_sink.get("download") == ["d1"]
+    assert artifact.side_effects["download"] == ["d1"]
+
+
+async def test_fx_sink_filled_on_normal_path_too(make_mock):
+    """正常跑完时 sink 与 StepArtifact.side_effects 内容一致（调用方用哪个都对）。"""
+    fx_sink = {}
+    ex = Executor(client=make_mock(_save_download_turns()),
+                  registry=_reg_with_save_download(), system_prompt="s", model="m", max_steps=3)
+    _, artifact = await _collect(ex.execute(_step(), {}, fx_sink=fx_sink))
+    assert fx_sink["download"] == ["d1"] == artifact.side_effects["download"]
+
+
+# ---- effects：本次留下持久产物的工具，供重试时告知模型别重做 ----
+
+async def _effects_of(make_mock, tool, tool_name):
+    """跑一步「调一次该工具→出正文」，返回 StepArtifact.effects。"""
+    from harness.llm.base import ToolCallDelta
+    reg = ToolRegistry(); reg.register(tool)
+    client = make_mock([
+        [StreamChunk(type="tool_call", tool_call_delta=ToolCallDelta(
+            index=0, id="c1", name=tool_name, arguments="{}")),
+         StreamChunk(type="done")],
+        [StreamChunk(type="text", text="做完了"), StreamChunk(type="done")],
+    ])
+    ex = Executor(client=client, registry=reg, system_prompt="sp", model="m", max_steps=3)
+    out = None
+    async for ev in ex.execute(_step(), {}):
+        if isinstance(ev, StepArtifact):
+            out = ev
+    return out.effects
+
+
+class _NoParams(BaseModel):
+    pass
+
+
+class _MarkerTool(Tool):
+    """按既有约定给产物发 id 的工具（如 save_download 的〔下载ID:x〕）。"""
+    name = "saver"
+    description = "存点东西"
+    Params = _NoParams
+
+    async def run(self, params):
+        return ToolOutput(text="已保存", marker="〔下载ID:abc〕")
+
+
+class _CrashSaver(Tool):
+    """崩溃记账用：与 _MarkerTool 同形，单独一个类避免与别的用例共享状态。"""
+    name = "saver"
+    description = "存点东西"
+    Params = _NoParams
+
+    async def run(self, params):
+        return ToolOutput(text="已保存", marker="〔下载ID:x〕")
+
+
+class _PlainTool(Tool):
+    name = "reader"
+    description = "读点东西"
+    Params = _NoParams
+
+    async def run(self, params):
+        return "读到了一些内容"
+
+
+class _FailingMarkerTool(Tool):
+    name = "saver"
+    description = "存点东西"
+    Params = _NoParams
+
+    async def run(self, params):
+        raise ToolError("保存失败：磁盘满")
+
+
+async def test_effects_records_tool_that_left_a_product(make_mock):
+    """判据是「结果带了 marker」——marker 是既有约定（〔下载ID〕〔知识ID〕），
+    用它而非硬编码工具名单：名单会漂，marker 让新工具自动被覆盖。"""
+    assert await _effects_of(make_mock, _MarkerTool(), "saver") == ["saver"]
+
+
+async def test_effects_ignores_tools_without_a_product(make_mock):
+    """检索类工具重跑无害，还进 effects 会让模型在「内容不足」的重试里不敢再搜。"""
+    assert await _effects_of(make_mock, _PlainTool(), "reader") == []
+
+
+async def test_effects_ignores_failed_calls(make_mock):
+    """保存失败就没有产物，重试时当然该再存一次——报进去会让文件永远存不下来。"""
+    assert await _effects_of(make_mock, _FailingMarkerTool(), "saver") == []
+
+
+async def test_effects_accumulate_from_done_effects(make_mock):
+    """本次没再调，不代表上次的产物消失了；下次重试仍须被告知。"""
+    from harness.llm.base import ToolCallDelta   # noqa: F401  （本用例不调工具）
+    reg = ToolRegistry()
+    client = make_mock(_text_only_turns("这次只改文案，没调工具"))
+    ex = Executor(client=client, registry=reg, system_prompt="sp", model="m", max_steps=3)
+    out = None
+    async for ev in ex.execute(_step(), {}, done_effects=["save_download"]):
+        if isinstance(ev, StepArtifact):
+            out = ev
+    assert out.effects == ["save_download"]
+
+
+async def test_crash_after_tool_still_accounts(make_mock):
+    """子步崩在工具调用之后：产物已落库，调用方手里必须已经有账。"""
+    from harness.llm.base import ToolCallDelta
+    reg = ToolRegistry(); reg.register(_CrashSaver())
+    client = make_mock([
+        [StreamChunk(type="tool_call", tool_call_delta=ToolCallDelta(
+            index=0, id="c1", name="saver", arguments="{}")),
+         StreamChunk(type="done")],
+        [StreamChunk(type="text", text="继续"), StreamChunk(type="done")],
+    ])
+    ex = Executor(client=client, registry=reg, system_prompt="sp", model="m", max_steps=3)
+    ledger = []
+    gen = ex.execute(PlanStep(id="s1", description="d", expected="e"), {}, done_effects=ledger)
+    # 模拟中途崩溃/中断：拿到工具完成事件后就不再迭代
+    from harness.events import ToolFinished
+    async for ev in gen:
+        if isinstance(ev, ToolFinished):
+            break
+    await gen.aclose()
+    assert ledger == ["saver"], f"崩溃路径没记账：{ledger}"
+
+
+def test_orchestrator_only_passes_kwargs_that_executor_accepts():
+    """编排器传给 execute() 的关键字参数，必须都是真实 Executor 认的。
+
+    编排器测试里的 Executor 替身以 **_kw 收尾（两条工作线都在给 execute() 加参数，
+    每个替身写死全部参数就会每次都改十几处、合并必冲突）。代价是替身不再因为签名对不上
+    而报错——调用点打错字（done_effect=）或加了个 executor 没有的参数，1700 多个测试
+    照样全绿。此处把那道交叉校验补回来：没有任何测试把真实 Executor 接进 Orchestrator。
+    """
+    import inspect
+    import re
+
+    from app.orchestration.executor import Executor
+    from app.orchestration import orchestrator as orch_mod
+
+    accepted = {
+        n for n, p in inspect.signature(Executor.execute).parameters.items()
+        if p.kind in (p.KEYWORD_ONLY, p.POSITIONAL_OR_KEYWORD)
+    }
+    src = inspect.getsource(orch_mod.Orchestrator._schedule_rounds)
+    call = re.search(r"self\._executor\.execute\((.*?)\):", src, re.S)
+    assert call, "没找到编排器对 execute() 的调用点，本测试需要跟着改"
+    passed = set(re.findall(r"(\w+)\s*=", call.group(1)))
+
+    unknown = passed - accepted
+    assert not unknown, f"编排器传了 Executor 不认的参数：{unknown}"

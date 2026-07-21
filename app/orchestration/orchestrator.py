@@ -32,10 +32,12 @@ from harness.types import Message, Role
 
 from app.today import with_today
 
+from ..side_effects import empty_fx, has_any, tools_to_redo
 from .critic import Critic
 from .executor import CLARIFY_GUIDE, Executor, HidingRegistry, StepArtifact
 from .planner import Planner, PlannerError, render_tool_roster
-from .plan import _KB_REQUESTED_RE, Artifact, Plan, PlanStep, has_pending, ready_steps
+from .plan import (_KB_REQUESTED_RE, Artifact, Plan, PlanStep, file_saving_step_ids,
+                   has_pending, ready_steps)
 from .usage_ctx import (
     UsageAcc, record_usage, reset_acc, reset_reason_sink, set_acc, set_reason_sink,
 )
@@ -352,7 +354,7 @@ class Orchestrator:
     async def run(self, user_message: str, verify: bool = True, *,
                   context=None, registry=None, recent_dialogue: str = "",
                   force_simple: bool = False, in_stateful_exam: bool = False,
-                  run_id: str | None = None):
+                  run_id: str | None = None, purge_side_effects=None):
         """verify：对应前端结果校验开关。开 → 终局 Critic 把关 + 可重规划；关 → 跑完一轮
         直接汇总交付，不做终局 review/重规划（更快，但不把关）。
 
@@ -496,7 +498,8 @@ class Orchestrator:
             all_artifacts: dict[str, Artifact] = {}
             while True:
                 async for ev in self._schedule_rounds(plan, retry_hints, budget, exec_reg,
-                                                          goal=user_message):
+                                                          goal=user_message,
+                                                          purge_side_effects=purge_side_effects):
                     yield ev
                 for s in plan.steps:      # 收走本轮 done 产物（replan 换 plan 也不丢）
                     if s.status == "done" and s.result:
@@ -581,7 +584,23 @@ class Orchestrator:
 
     # ---- 调度：一轮轮跑就绪集，直到无 pending、预算超限或无法推进（后两者带现有成果收尾）----
     async def _schedule_rounds(self, plan: Plan, retry_hints: dict[str, str], budget=None,
-                               exec_reg=None, goal: str = ""):
+                               exec_reg=None, goal: str = "", purge_side_effects=None):
+        # 产出文件的步骤才拿得到 save_download。计划常拆成「1.生成内容 → 2.存成文件」，
+        # 而工具表原先是按轮算的，两步都看得见它：第 1 步校验没过、被要求重试时就会抓它用上，
+        # 第 2 步再存一次，下载区两份重复文件（实测症状）。此处按步收紧到该给的那步。
+        # savers 为 None（没有一步像是要产文件）时不限制，退回原行为——正则漏判把该存的那步
+        # 也堵死，比重复保存严重得多。
+        savers = file_saving_step_ids(plan)
+        # 每步「已经留下持久产物的工具」，跨重试累积。与 retry_hints 同生命周期：
+        # 重试的 prompt 里此前只有质检意见，没有「上次已经做过什么」，于是带副作用的工具
+        # 被原样重来——同一份笔记存两次即由此而来。
+        step_effects: dict[str, list[str]] = {}
+
+        def _reg_for(step: PlanStep):
+            if exec_reg is None or savers is None or step.id in savers:
+                return exec_reg
+            return HidingRegistry(exec_reg, {"save_download"})
+
         while has_pending(plan):
             if budget:
                 try:
@@ -612,18 +631,36 @@ class Orchestrator:
                 art = None
                 err = None
                 terminal = False
+                # 两份记录一起带：effects（工具名，告诉重跑的模型别重做）跨重试累积，
+                # fx（产物 id，供作废时删除）每次尝试新起一份。
+                # fx 传进去就地填：本步的异常若逃出 AgentLoop 的兜底（下面 except 分支），
+                # StepArtifact 根本 yield 不出来，而那时文件可能已经落了盘——只搭在返回值上就丢了。
+                effects = list(step_effects.get(step.id, ()))
+                fx = empty_fx()
                 try:
                     async for ev in self._executor.execute(
                             step, deps, retry_hints.get(step.id, ""),
-                            registry=exec_reg, goal=goal):
+                            registry=_reg_for(step), goal=goal,
+                            done_effects=effects, fx_sink=fx):
                         if isinstance(ev, StepArtifact):
                             art, err, terminal = ev.artifact, ev.error, ev.terminal
+                            effects = list(ev.effects)
+                            # 真实 executor 里这与 fx_sink 是同一个对象，取哪个都一样。
+                            # 判"有没有内容"而非用 or：empty_fx() 是含三个键的 dict、恒为真，
+                            # 用 or 会让返回值无条件压过 sink——只填 sink、忘了设 side_effects
+                            # 的实现，产物会被默认空值整个抹掉，既不清理也不摘工具名。
+                            # 也不能 merge：两者常是同一对象，合并会把 id 记两遍。
+                            if has_any(ev.side_effects):
+                                fx = ev.side_effects
                         else:
                             await queue.put(("ev", ev))
                 except Exception as e:  # 单步崩溃隔离
-                    await queue.put(("done", (step, None, str(e), False)))
+                    # 崩在工具调用之后也要记账：产物已经落库了，重试时照样不能重做
+                    step_effects[step.id] = effects
+                    await queue.put(("done", (step, None, str(e), False, fx)))
                     return
-                await queue.put(("done", (step, art, err, terminal)))
+                step_effects[step.id] = effects
+                await queue.put(("done", (step, art, err, terminal, fx)))
 
             tasks = [asyncio.create_task(_worker(s)) for s in ready]
             remaining = len(tasks)
@@ -633,11 +670,14 @@ class Orchestrator:
                     if kind == "ev":
                         yield payload
                         continue
-                    step, art, err, terminal = payload
+                    step, art, err, terminal, fx = payload
                     remaining -= 1
                     if art is None or err:
                         self._on_step_fail(step, retry_hints, err or "执行未产出结果",
                                            terminal=terminal)
+                        for _ev in self._settle_failed_attempt(
+                                step, fx, purge_side_effects, step_effects):
+                            yield _ev
                         continue
                     verdict = await self._critic.validate(step, art)
                     if verdict.ok:
@@ -650,6 +690,9 @@ class Orchestrator:
                         # 重跑只会把同一个弹窗再怼给用户一次，答案不会变。
                         self._on_step_fail(step, retry_hints, verdict.reason,
                                            terminal=terminal)
+                        for _ev in self._settle_failed_attempt(
+                                step, fx, purge_side_effects, step_effects):
+                            yield _ev
             finally:
                 # 提前放弃迭代（客户端断连/停止 → 本生成器 aclose，GeneratorExit 抛在 yield 处）
                 # 时，同批未完成的 worker 必须取消，否则会变成继续跑 LLM 的悬挂任务。正常跑完时
@@ -665,6 +708,45 @@ class Orchestrator:
         for s in plan.steps:
             if s.status in ("pending", "running"):
                 s.status = "skipped"
+
+    @staticmethod
+    def _settle_failed_attempt(step, fx, purge_side_effects, step_effects=None):
+        """作废一次尝试：删掉它产出的用户可见产物，并让前端抖掉这一步的旧记录。
+
+        为什么立即删而不像交付门那样延迟到交付时结算：单步重试的语义是"这次尝试整个作废"，
+        产物当场失效，没有"等新版产出了同类东西再决定"的必要。延迟反而会让用户在重跑期间
+        看到一个指向作废产物的下载按钮。
+
+        清理与前端通知都不该影响主流程：purge 内部已吞掉 store 异常，这里也不因为
+        没注入回调就中断——精简装配下本就可能没有下载/知识库能力。
+        """
+        # 顺序要紧：先把清理做完，再 yield。yield 是可被中断的点——客户端在这里断连，
+        # GeneratorExit 抛出，后面的 purge 与摘工具名就都不执行了，产物成孤儿。
+        # purge 是同步调用，提前做零成本。
+        purged = None
+        if purge_side_effects is not None and has_any(fx):
+            purged = purge_side_effects(fx) or []
+            if isinstance(purged, dict):
+                # 删掉的产物要让模型重做：把对应工具名从该步的 done_effects 里摘掉。
+                # 不摘的话重跑时模型仍被告知「你已经做过了」，于是不再保存——旧的删了、
+                # 新的没生成，用户手里一个文件都不剩。这是两套机制的接缝，只有分组 dict
+                # 才知道删的是哪一类，故只在这一支处理。
+                if step_effects is not None:
+                    redo = tools_to_redo(purged)
+                    if redo:
+                        step_effects[step.id] = [t for t in step_effects.get(step.id, ())
+                                                 if t not in redo]
+                purged = list(purged.get("download") or ())
+
+        # 让前端抖掉这一步的旧记录，否则同一步里同一个工具会显示调了两遍。
+        # **只在真会重跑时发**（_on_step_fail 已把状态置好：pending=重跑，failed=到此为止）。
+        # 不重跑还抖掉记录，等于把失败现场一并抹了——这步调了什么、错在哪，用户再也看不到。
+        if step.status == "pending":
+            yield Progress("step_reset", step.id, status="ok")
+        # 归一成扁平的下载 id 数组：前端拿到非数组会 Array.isArray 判假、直接 return——
+        # 按钮永远撤不掉且不报错。
+        if purged:
+            yield Progress("purged", json.dumps(list(purged), ensure_ascii=False), status="ok")
 
     def _on_step_fail(self, step, retry_hints: dict[str, str], reason: str, *,
                       terminal: bool = False) -> None:

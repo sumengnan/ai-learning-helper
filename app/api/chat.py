@@ -40,6 +40,7 @@ from ..conversation_memory import ConversationMemoryService
 from ..orchestration.orchestrator import VERIFY_TRACE_KEY
 from ..orchestration.executor import CLARIFY_GUIDE
 from ..profile import render_profile_block
+from ..side_effects import SideEffectPurger
 from ..sandbox_manager import reset_sandbox_conv, sandbox_guide, set_sandbox_conv
 from ..summaries import SummaryStore
 from ..summarizer import RollingSummarizer
@@ -321,8 +322,15 @@ def _split_stale_fx(stale: dict[str, list[str]], cur: dict[str, list[str]]
 
     后者是 _redo_fx_note 的确定性兜底：那条纠正指令只是「告诉」模型重做，管不住它照不照
     做；真没照做时，宁可留下上一版的产物（并在步骤里标明出处），也不能让用户什么都拿不到。
+
+    铁律：**交付版正在用的 id 一个都不能删**。产物按内容判重（见 DownloadStore.create），
+    重答时若文件内容与上一版逐字节相同，重存拿回的就是同一条记录——此时 stale 与 cur 里是
+    同一个 id，照「cur 非空就把 stale 全删」的老写法会把交付版自己的文件删掉：校验通过了、
+    答案交付了，用户却既没有下载按钮，点在途界面的旧按钮还是 404。而「校验挂在正文措辞、
+    文件内容原样重生成」正是最常见的重答形态，故这不是边角情况。
     """
-    purge = {k: (v if cur.get(k) else []) for k, v in stale.items()}
+    purge = {k: ([i for i in v if i not in set(cur.get(k) or ())] if cur.get(k) else [])
+             for k, v in stale.items()}
     keep = {k: ([] if cur.get(k) else v) for k, v in stale.items()}
     return purge, keep
 
@@ -886,6 +894,19 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         e["cost"] += ev.cost_usd or 0.0
                         collect["usage"] = {"tokens": sum(x["tokens"] for x in ubm.values()),
                                             "cost": sum(x["cost"] for x in ubm.values())}
+                    elif isinstance(ev, Progress) and ev.scope in ("step_reset", "purged"):
+                        # 控制事件：照常下发给在途前端（撤按钮/抖记录靠它们），但不入 progress 列
+                        # ——它们不是给用户看的过程记录，留着纯属脏数据。
+                        # step_reset 还要顺手把该步上一次的行从**落库副本**里抖掉：前端的实时
+                        # 处理器只管内存态，progress 列是这里另攒的——只清实时不清落库，刷新
+                        # 后 ChatView 从 progress 列重新取，重复的工具调用又冒出来。
+                        # 必须切片就地改：落库读的是外层那个 progress 变量（见 gen() 末尾），
+                        # 重新绑定 collect["progress"] 只换了 dict 里的引用，落库的那份纹丝不动。
+                        if ev.scope == "step_reset":
+                            _sid = ev.text or ""
+                            collect["progress"][:] = [
+                                p for p in collect["progress"]
+                                if p.get("scope") != f"subagent:executor:{_sid}"]
                     elif isinstance(ev, Progress):
                         collect["progress"].append({"scope": ev.scope, "text": ev.text,
                                                     "status": ev.status, "key": ev.key,
@@ -1001,11 +1022,32 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     if getattr(harness, "skill_registry", None) is not None:
                         from harness.skills.context import SkillContextManager
                         _octx = SkillContextManager(_octx, harness.skill_registry)
+                    # 单步校验不过要重跑时，先把这一版已产出的下载/知识/题目删掉：
+                    # 不删则模型重跑会把 save_download 再调一遍，消息下方挂出两个下载按钮，
+                    # 其中一个还是判定不合格的那版。user_id 在这里绑定，编排器不必知道用户是谁。
+                    _purger = SideEffectPurger(
+                        download_store=getattr(harness, "download_store", None),
+                        knowledge_service=knowledge_service,
+                        question_store=question_store)
+
+                    def _purge_step_fx(fx) -> dict[str, list[str]]:
+                        # 只按**实际删掉的**剥标记：删除失败是被吞掉的（清理不该中断回答），
+                        # 若按"想删的"剥，磁盘上文件还在而用户的下载入口没了——静默的数据不一致。
+                        done = _purger.purge(user_id, fx)
+                        # 产物没了，落库 steps 里的机读标记也不能留——否则历史消息重新加载时
+                        # 前端照样渲染出下载按钮，点开是已删的文件
+                        _drop_purged_marks(steps, done)
+                        # 回传**按类分组的 dict** 而非仅下载 id 列表：编排器要据此把对应
+                        # 工具名从该步的 done_effects 里摘掉，让模型重做。只回列表的话
+                        # 它认不出删的是哪一类，接缝静默失效——文件删了却没人重存。
+                        return done
+
                     _orch_src = SimpleNamespace(
                         run=lambda m: harness.orchestrator.run(
                             m, verify=req.verify, context=_octx, registry=registry,
                             recent_dialogue=recent_dialogue, force_simple=force_simple,
                             in_stateful_exam=in_stateful_exam,
+                            purge_side_effects=_purge_step_fx,
                             run_id=run_id_a))   # 事件归到 conversation_runs 登记的 run_id，统计才认
                     # 告诉在途客户端「本轮开了校验门」。必须赶在编排器跑之前发：执行子步的
                     # save_download 远早于编排器那条「结果校验中…」（后者要等所有步骤跑完），

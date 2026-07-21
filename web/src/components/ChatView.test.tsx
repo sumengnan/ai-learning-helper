@@ -2,7 +2,7 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { ChatView, fmtDuration } from "./ChatView";
+import { ChatView, fmtDuration, dropStepProgress } from "./ChatView";
 import { GATE_OPEN_KEY } from "./VerifyBadge";
 import { streamChat, attachChat, stopRun, sendDecision, api } from "../api/client";
 
@@ -561,5 +561,43 @@ describe("计划来源区分（ReAct 清单 vs 编排器计划）", () => {
     } as any]} />);
     expect((await screen.findAllByText(/查资料/)).length).toBeGreaterThan(0);
     expect(screen.queryAllByText(/search_knowledge/)).toHaveLength(0);
+  });
+});
+
+describe("dropStepProgress：单步重跑前抖掉这一步的旧工具记录", () => {
+  const row = (scope: string, text: string, key: string) =>
+    ({ scope, text, status: "ok" as const, key });
+
+  it("只移除目标步的进度行", () => {
+    const progress = [
+      row("subagent:executor:s1", "调用工具 甲", "a1"),
+      row("subagent:executor:s2", "调用工具 乙", "b1"),
+    ];
+    // 并行跑的其它步不能被误伤——它们没失败，记录该留着
+    expect(dropStepProgress(progress, "s1")).toEqual([progress[1]]);
+  });
+
+  it("连同步骤头行一起清掉：重跑会重新发一条头行", () => {
+    const progress = [
+      row("subagent:executor:s1", "写笔记", "__hdr__:s1"),
+      row("subagent:executor:s1", "调用工具 save_download", "c1"),
+    ];
+    expect(dropStepProgress(progress, "s1")).toEqual([]);
+  });
+
+  it("不碰计划快照等其它 scope", () => {
+    const progress = [row("plan", "[]", "plan"), row("subagent:executor:s1", "调用", "c1")];
+    expect(dropStepProgress(progress, "s1")).toEqual([progress[0]]);
+  });
+
+  it("步骤 id 前缀相同也不误伤（s1 不该清掉 s10）", () => {
+    const progress = [row("subagent:executor:s10", "调用工具 甲", "a1")];
+    expect(dropStepProgress(progress, "s1")).toEqual(progress);
+  });
+
+  it("空进度/缺失 id 时原样返回，不抛", () => {
+    expect(dropStepProgress(undefined, "s1")).toEqual([]);
+    expect(dropStepProgress([row("subagent:executor:s1", "x", "c1")], "")).toEqual(
+      [row("subagent:executor:s1", "x", "c1")]);
   });
 });

@@ -1,0 +1,151 @@
+"""副作用产物的识别与清理（编排器单步重试与交付门重答共用）。"""
+import pytest
+
+from app.side_effects import SideEffectPurger, empty_fx, ids_from_tool, merge_fx
+
+
+def test_ids_from_save_download():
+    fx = ids_from_tool("save_download", "已保存 〔下载ID:d1〕", is_error=False)
+    assert fx["download"] == ["d1"]
+    assert fx["knowledge"] == [] and fx["questions"] == []
+
+
+def test_ids_from_knowledge_and_questions():
+    assert ids_from_tool("save_to_knowledge", "〔知识ID:k1〕", False)["knowledge"] == ["k1"]
+    # 出题工具一次产出多个 id，逗号分隔在同一个标记里
+    fx = ids_from_tool("generate_questions", "〔题目ID:q1,q2,q3〕", False)
+    assert fx["questions"] == ["q1", "q2", "q3"]
+
+
+def test_failed_tool_call_produces_nothing():
+    # 工具报错时没有真产物，标记若混在报错文本里也不能当成要清理的东西
+    assert ids_from_tool("save_download", "失败 〔下载ID:d1〕", is_error=True) == empty_fx()
+
+
+def test_unknown_tool_produces_nothing():
+    assert ids_from_tool("calculator", "〔下载ID:d1〕", False) == empty_fx()
+
+
+def test_merge_accumulates_across_calls():
+    a = ids_from_tool("save_download", "〔下载ID:d1〕", False)
+    b = ids_from_tool("save_download", "〔下载ID:d2〕", False)
+    assert merge_fx(a, b)["download"] == ["d1", "d2"]
+
+
+def test_empty_fx_is_not_shared_between_callers():
+    # empty_fx() 被当默认值到处传，若返回同一个可变对象，一处 append 会污染所有调用方
+    a = ids_from_tool("calculator", "", False)
+    a["download"].append("脏数据")
+    assert ids_from_tool("calculator", "", False)["download"] == []
+
+
+# ---------- SideEffectPurger ----------
+
+class _FakeDownloads:
+    def __init__(self): self.deleted = []
+    def delete(self, uid, did): self.deleted.append((uid, did))
+
+
+class _FakeKnowledge:
+    def __init__(self): self.deleted = []
+    def delete(self, uid, kid): self.deleted.append((uid, kid))
+
+
+class _FakeQuestions:
+    def __init__(self): self.deleted = []
+    def delete_many(self, uid, ids): self.deleted.append((uid, list(ids)))
+
+
+def _purger():
+    dl, kb, q = _FakeDownloads(), _FakeKnowledge(), _FakeQuestions()
+    return SideEffectPurger(download_store=dl, knowledge_service=kb, question_store=q), dl, kb, q
+
+
+def test_purge_deletes_each_kind():
+    p, dl, kb, q = _purger()
+    purged = p.purge("u1", {"download": ["d1"], "knowledge": ["k1"], "questions": ["q1", "q2"]})
+    assert dl.deleted == [("u1", "d1")]
+    assert kb.deleted == [("u1", "k1")]
+    assert q.deleted == [("u1", ["q1", "q2"])]
+    # 返回实际删掉的（按类分组），供通知在途前端撤掉按钮、剥消息里的标记
+    assert purged == {"download": ["d1"], "knowledge": ["k1"], "questions": ["q1", "q2"]}
+
+
+def test_purge_on_empty_touches_nothing():
+    p, dl, kb, q = _purger()
+    assert p.purge("u1", empty_fx()) == empty_fx()
+    assert not dl.deleted and not kb.deleted and not q.deleted
+
+
+def test_purge_survives_store_failure():
+    """清理失败绝不能把整轮带崩——产物残留只是脏数据，抛异常会中断用户的这次回答。"""
+    class _Boom:
+        def delete(self, *a): raise RuntimeError("磁盘炸了")
+    p = SideEffectPurger(download_store=_Boom(), knowledge_service=None, question_store=None)
+    assert p.purge("u1", {"download": ["d1"], "knowledge": [], "questions": []}) == empty_fx()
+
+
+def test_purge_tolerates_missing_stores():
+    # 精简装配（测试/无下载能力部署）下 store 可能为 None
+    p = SideEffectPurger(download_store=None, knowledge_service=None, question_store=None)
+    assert p.purge("u1", {"download": ["d1"], "knowledge": ["k1"], "questions": ["q1"]}) == empty_fx()
+
+
+# ---------- purge 只报"真删掉的" ----------
+
+def test_purge_reports_only_what_actually_got_deleted():
+    """删除失败被吞掉时，不能把它算进"已清理"。
+
+    调用方拿这个返回值去剥消息里的下载标记并标注"此产物已作废删除"。若把没删成的
+    也算进去，磁盘上文件还在、库里行还在，用户的下载入口却没了——静默的数据不一致。
+    """
+    class _HalfBroken:
+        def __init__(self): self.deleted = []
+        def delete(self, uid, did):
+            if did == "bad":
+                raise RuntimeError("磁盘炸了")
+            self.deleted.append(did)
+            return True
+    p = SideEffectPurger(download_store=_HalfBroken())
+    assert p.purge("u1", {"download": ["ok1", "bad", "ok2"],
+                          "knowledge": [], "questions": []})["download"] == ["ok1", "ok2"]
+
+
+def test_purge_respects_store_false_return():
+    """DownloadStore.delete 对"不存在/不属于该用户"返回 False 而非抛异常——同样不算删掉。"""
+    class _AlwaysFalse:
+        def delete(self, uid, did): return False
+    p = SideEffectPurger(download_store=_AlwaysFalse())
+    assert p.purge("u1", {"download": ["d1"], "knowledge": [], "questions": []})["download"] == []
+
+
+def test_purge_reports_knowledge_and_questions_too():
+    """三类产物都要回传实际删掉的，调用方才能按类精确剥标记。"""
+    p, dl, kb, q = _purger()
+    got = p.purge("u1", {"download": ["d1"], "knowledge": ["k1"], "questions": ["q1"]})
+    assert got == {"download": ["d1"], "knowledge": ["k1"], "questions": ["q1"]}
+
+
+def test_purge_missing_stores_report_nothing_deleted():
+    p = SideEffectPurger()
+    got = p.purge("u1", {"download": ["d1"], "knowledge": ["k1"], "questions": ["q1"]})
+    assert got == empty_fx()
+
+
+# ---------- 删了就让模型重做 ----------
+
+def test_tools_to_redo_maps_kinds_back_to_tools():
+    from app.side_effects import tools_to_redo
+    assert tools_to_redo({"download": ["d1"], "knowledge": [], "questions": []}) == {"save_download"}
+    # 出题有两个入口，删了题目意味着这两个都可能要重做
+    assert tools_to_redo({"download": [], "knowledge": [], "questions": ["q1"]}) == {
+        "add_questions", "generate_questions"}
+
+
+def test_tools_to_redo_ignores_kinds_that_were_not_deleted():
+    """删除失败的类别不能算进去：产物还在，再让模型存一遍就真成两份了。"""
+    from app.side_effects import tools_to_redo
+    assert tools_to_redo({"download": [], "knowledge": ["k1"], "questions": []}) == {
+        "save_to_knowledge"}
+    assert tools_to_redo(empty_fx()) == set()
+    assert tools_to_redo(None) == set()

@@ -30,7 +30,8 @@ def _sqlite_allow_cross_thread(monkeypatch):
 class FakeOrchestrator:
     """签名与真 Orchestrator.run 一致（含每请求 context/registry/recent_dialogue/force_simple），只 yield 既有 Event。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
-                  recent_dialogue="", force_simple=False, in_stateful_exam=False, run_id=None):
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False,
+                  run_id=None, purge_side_effects=None):
         from harness.events import RunStarted, TextDelta, RunFinished
         from harness.types import Message, Role
         yield RunStarted(run_id="r1")
@@ -75,7 +76,8 @@ def _last_assistant(store, cid):
 class DetailOrchestrator:
     """发一条带 detail 的子代理工具进度 + 正常收尾。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
-                  recent_dialogue="", force_simple=False, in_stateful_exam=False, run_id=None):
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False,
+                  run_id=None, purge_side_effects=None):
         from harness.events import RunStarted, Progress, TextDelta, RunFinished
         from harness.types import Message, Role
         yield RunStarted(run_id="r1")
@@ -119,7 +121,8 @@ class RunIdToolOrchestrator:
     """尊重 run_id 参数（真 Orchestrator 已如此），并发一个 ToolStarted/ToolFinished——
     用于验证工具埋点落到 chat 登记进 conversation_runs 的 run_id 下（否则统计滤掉）。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
-                  recent_dialogue="", force_simple=False, in_stateful_exam=False, run_id=None):
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False,
+                  run_id=None, purge_side_effects=None):
         from harness.events import RunStarted, ToolStarted, ToolFinished, TextDelta, RunFinished
         from harness.types import Message, Role, ToolCall, ToolResult
         yield RunStarted(run_id=run_id or "internal")
@@ -155,7 +158,8 @@ def test_orchestrator_events_recorded_under_registered_run_id(make_mock, monkeyp
 class EmbeddingUsageOrchestrator:
     """模拟 run 期间有 embedding/子调用经 emit 上报逐模型用量（带模型名）。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
-                  recent_dialogue="", force_simple=False, in_stateful_exam=False, run_id=None):
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False,
+                  run_id=None, purge_side_effects=None):
         from harness.events import RunStarted, TextDelta, RunFinished, ModelUsage
         from harness.usage import Usage
         from harness.progress import emit
@@ -194,7 +198,8 @@ def test_emit_model_usage_reaches_sse_and_trajectory(make_mock, monkeypatch):
 class FileToolOrchestrator:
     """模拟执行子步调 save_download：ToolFinished 里带〔下载ID:x〕机读标记。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
-                  recent_dialogue="", force_simple=False, in_stateful_exam=False, run_id=None):
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False,
+                  run_id=None, purge_side_effects=None):
         from harness.events import RunStarted, ToolStarted, ToolFinished, RunFinished
         from harness.types import Message, Role, ToolCall, ToolResult
         yield RunStarted(run_id=run_id or "r1")
@@ -255,7 +260,8 @@ def test_no_gate_open_when_verify_off(make_mock, monkeypatch):
 class ApprovalOrchestrator:
     """模拟执行子步里工具命中危险命令时的行为：run_shell 检出后即调 request_approval。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
-                  recent_dialogue="", force_simple=False, in_stateful_exam=False, run_id=None):
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False,
+                  run_id=None, purge_side_effects=None):
         from harness.events import RunStarted, RunFinished
         from harness.types import Message, Role
         from harness.approval import request_approval
@@ -290,7 +296,8 @@ def test_approval_required_reaches_sse_on_orchestrator_path(make_mock, monkeypat
 class RedoOrchestrator:
     """模拟考试轮校验未过 → 清屏重答。两版都发够 25+ 个 TextDelta，以触发去抖 flush_partial。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
-                  recent_dialogue="", force_simple=False, in_stateful_exam=False, run_id=None):
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False,
+                  run_id=None, purge_side_effects=None):
         from harness.events import RunStarted, Progress, TextDelta, RunFinished
         from harness.types import Message, Role
         yield RunStarted(run_id="r1")
@@ -340,7 +347,7 @@ class VerifyTraceOrchestrator:
     """模拟编排器收尾时发的结构化留痕。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
                   recent_dialogue="", force_simple=False, in_stateful_exam=False,
-                  run_id=None):
+                  run_id=None, purge_side_effects=None):
         from harness.events import Progress, RunStarted, RunFinished
         from harness.types import Message, Role
         from app.orchestration.orchestrator import VERIFY_TRACE_KEY
@@ -400,7 +407,7 @@ class _QualityOrchestrator:
     """多步产出（工具步 > 1），满足轨迹 judge 的触发条件。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
                   recent_dialogue="", force_simple=False, in_stateful_exam=False,
-                  run_id=None):
+                  run_id=None, purge_side_effects=None):
         from harness.events import RunStarted, RunFinished, ToolStarted, ToolFinished
         from harness.types import Message, Role, ToolCall, ToolResult
         yield RunStarted(run_id=run_id or "r1")
@@ -467,3 +474,74 @@ async def test_quality_score_still_emitted_when_verify_on(make_mock, monkeypatch
     c, _ = _quality_client(make_mock, monkeypatch, scored)
     _run_turn(c, verify=True)
     assert scored, "开着结果校验时轨迹 judge 应照常打分"
+
+
+class StepResetOrchestrator:
+    """模拟单步重跑：先发一次工具进度，再发 step_reset，然后发重跑那次的工具进度。"""
+    async def run(self, message, verify=True, *, context=None, registry=None,
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False,
+                  run_id=None, purge_side_effects=None):
+        from harness.events import RunStarted, Progress, TextDelta, RunFinished
+        from harness.types import Message, Role
+        yield RunStarted(run_id=run_id or "r1")
+        yield Progress("subagent:executor:s1", "调用工具 save_download", status="ok", key="c1",
+                       detail={"tool": "save_download", "args": {}, "result": "旧版",
+                               "is_error": False})
+        yield Progress("step_reset", "s1", status="ok")
+        yield Progress("subagent:executor:s1", "调用工具 save_download", status="ok", key="c2",
+                       detail={"tool": "save_download", "args": {}, "result": "新版",
+                               "is_error": False})
+        yield TextDelta(text="答复")
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content="答复"))
+
+
+def test_step_reset_also_drops_persisted_progress(make_mock, monkeypatch):
+    """step_reset 必须同时清掉**落库**的那一步旧进度。
+
+    前端的实时处理器只作用于内存态；progress 列是服务端另外攒的。只清实时不清落库，
+    刷新页面后 execSubs 从 progress 列重新取，重复的工具调用又冒出来——正是本特性要消除的。
+    """
+    c, store = _client(make_mock, monkeypatch, orchestrator=StepResetOrchestrator())
+    cid, _ = _chat(c, _auth(c))
+    saved = [p for m in store.ui_messages(cid) if m["role"] == "assistant"
+             for p in (m.get("progress") or [])
+             if p.get("scope") == "subagent:executor:s1"]
+    assert len(saved) == 1, f"应只剩重跑那次，实际留了 {len(saved)} 条"
+    assert saved[0]["detail"]["result"] == "新版"
+
+
+def test_step_reset_control_event_not_persisted(make_mock, monkeypatch):
+    """控制事件本身不该落进 progress 列——它不是给用户看的过程记录。"""
+    c, store = _client(make_mock, monkeypatch, orchestrator=StepResetOrchestrator())
+    cid, _ = _chat(c, _auth(c))
+    kept = [p for m in store.ui_messages(cid) if m["role"] == "assistant"
+            for p in (m.get("progress") or []) if p.get("scope") == "step_reset"]
+    assert kept == []
+
+
+class PurgedOrchestrator:
+    """发一条 purged 控制事件。"""
+    async def run(self, message, verify=True, *, context=None, registry=None,
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False,
+                  run_id=None, purge_side_effects=None):
+        from harness.events import RunStarted, Progress, TextDelta, RunFinished
+        from harness.types import Message, Role
+        yield RunStarted(run_id=run_id or "r1")
+        yield Progress("purged", '["d1"]', status="ok")
+        yield TextDelta(text="答复")
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content="答复"))
+
+
+def test_purged_control_event_not_persisted(make_mock, monkeypatch):
+    """purged 与 step_reset 同属控制事件，都不该落进 progress 列。
+
+    渲染层按 scope 白名单过滤，留着不会显示；但它是纯脏数据，且每多留一类
+    未被白名单覆盖的 scope，就多一分将来白名单放宽时冒出野行的风险。
+    """
+    c, store = _client(make_mock, monkeypatch, orchestrator=PurgedOrchestrator())
+    cid, events = _chat(c, _auth(c))
+    # 仍须下发给在途前端（撤按钮靠它）
+    assert any(e["type"] == "Progress" and e["data"]["scope"] == "purged" for e in events)
+    kept = [p for m in store.ui_messages(cid) if m["role"] == "assistant"
+            for p in (m.get("progress") or []) if p.get("scope") == "purged"]
+    assert kept == [], "控制事件不该落库"

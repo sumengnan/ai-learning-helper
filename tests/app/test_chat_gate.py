@@ -965,3 +965,41 @@ def test_plan_from_orchestrator_uses_last_plan_entry():
     mixed = [{"scope": "plan", "text": _j.dumps([{"title": "自述", "status": "running"}])},
              {"scope": "plan", "text": _j.dumps([{"id": "s1", "title": "编排", "status": "done"}])}]
     assert _plan_from_orchestrator(mixed) is True
+
+
+def test_split_stale_fx_never_purges_an_id_the_delivered_version_uses():
+    """回归：产物按内容判重后，重答存回同样内容拿到的是**同一条记录**——
+    此时 stale 与 cur 里是同一个 id，照「cur 非空就把 stale 全删」会把交付版自己的文件删掉。
+    症状：校验通过、答案交付，用户却没有下载按钮，旧按钮 404，还被告知产物已作废。
+    「校验挂在正文措辞、文件内容原样重生成」正是最常见的重答形态，不是边角情况。
+    """
+    from app.api.chat import _split_stale_fx
+    same = "abc123"
+    purge, keep = _split_stale_fx({"download": [same], "knowledge": [], "questions": []},
+                                  {"download": [same], "knowledge": [], "questions": []})
+    assert purge["download"] == [], "交付版正在用的 id 一个都不能删"
+    assert keep["download"] == []          # 它本就是本版产物，无需标「沿用上一版」
+
+
+def test_split_stale_fx_still_purges_genuinely_superseded_products():
+    """内容真变了 → 新记录、新 id → 上一版那份是废内容，仍须删掉，否则是指向废内容的死按钮。"""
+    from app.api.chat import _split_stale_fx
+    purge, keep = _split_stale_fx({"download": ["old"], "knowledge": [], "questions": []},
+                                  {"download": ["new"], "knowledge": [], "questions": []})
+    assert purge["download"] == ["old"] and keep["download"] == []
+
+
+def test_split_stale_fx_mixed_keeps_shared_drops_orphan():
+    """交付版既复用了一份、又新出了一份：只删它没在用的那份。"""
+    from app.api.chat import _split_stale_fx
+    purge, keep = _split_stale_fx({"download": ["shared", "orphan"], "knowledge": [], "questions": []},
+                                  {"download": ["shared", "brand-new"], "knowledge": [], "questions": []})
+    assert purge["download"] == ["orphan"]
+
+
+def test_split_stale_fx_keeps_everything_when_current_version_made_none():
+    """本版一件同类产物都没有 → 上一版那份是唯一的一份，删了用户彻底空手（既有兜底不变）。"""
+    from app.api.chat import _split_stale_fx
+    purge, keep = _split_stale_fx({"download": ["only"], "knowledge": [], "questions": []},
+                                  {"download": [], "knowledge": [], "questions": []})
+    assert purge["download"] == [] and keep["download"] == ["only"]
