@@ -1965,6 +1965,7 @@ class _RecordingExecutor:
     def __init__(self, fxs):
         self._fxs = list(fxs); self._i = 0
         self.seen_done_effects = []
+        self.seed_effect = "save_download"   # 本替身"上次调过"的那个工具
 
     async def execute(self, step, deps, hint="", *, registry=None, goal="",
                       done_effects=None, fx_sink=None, **_kw):
@@ -1976,8 +1977,8 @@ class _RecordingExecutor:
         yield Progress(f"subagent:executor:{step.id}", "调用工具 save_download", status="ok")
         # effects 累积：模型这次调了 save_download 且留下了产物
         eff = list(done_effects or [])
-        if fx.get("download") and "save_download" not in eff:
-            eff.append("save_download")
+        if any(fx.values()) and self.seed_effect not in eff:
+            eff.append(self.seed_effect)
         yield StepArtifact(Artifact(summary=f"done-{step.id}"), effects=eff, side_effects=fx)
 
 
@@ -2018,3 +2019,86 @@ async def test_done_effects_kept_when_nothing_was_actually_purged():
 
 def empty_fx_for_test():
     return {"download": [], "knowledge": [], "questions": []}
+
+
+async def test_sink_content_survives_an_artifact_that_forgot_side_effects():
+    """只填了 sink、忘了设 StepArtifact.side_effects 的实现，产物清单不能被抹掉。
+
+    `fx = ev.side_effects or fx` 看着像在做这个兼容，其实相反：empty_fx() 是含三个键的
+    dict、恒为真，于是返回值无条件压过 sink——这种实现的产物会被默认空值整个抹掉，
+    既不清理也不摘工具名。
+    """
+    class _SinkOnly:
+        async def execute(self, step, deps, hint="", *, fx_sink=None, **_kw):
+            from app.orchestration.executor import StepArtifact
+            if fx_sink is not None:
+                fx_sink.update({"download": ["d1"], "knowledge": [], "questions": []})
+            yield Progress(f"subagent:executor:{step.id}", "存了文件", status="ok")
+            yield StepArtifact(Artifact(summary="稿子"))      # 忘了带 side_effects
+
+    purger = _RecordingPurger()
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), _SeqCritic([False, True]), [])
+    orch._executor = _SinkOnly()
+    [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    assert purger.calls and purger.calls[0]["download"] == ["d1"]
+
+
+async def test_no_double_counting_when_sink_and_artifact_are_the_same_object():
+    """真实 executor 里 sink 与 artifact.side_effects 是同一个 dict——合并时不能把 id 记两遍。"""
+    class _Both:
+        async def execute(self, step, deps, hint="", *, fx_sink=None, **_kw):
+            from app.orchestration.executor import StepArtifact
+            fx = fx_sink if fx_sink is not None else {}
+            fx.update({"download": ["d1"], "knowledge": [], "questions": []})
+            yield Progress(f"subagent:executor:{step.id}", "存了文件", status="ok")
+            yield StepArtifact(Artifact(summary="稿子"), side_effects=fx)   # 同一对象
+
+    purger = _RecordingPurger()
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), _SeqCritic([False, True]), [])
+    orch._executor = _Both()
+    [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    assert purger.calls[0]["download"] == ["d1"], "同一对象不该被记两遍"
+
+
+async def test_seam_also_covers_knowledge_kind():
+    """接缝此前只测过 download 一类；知识条目走同一条路，也得摘对应工具名。"""
+    ex = _RecordingExecutor([
+        {"download": [], "knowledge": ["k1"], "questions": []},
+        {"download": [], "knowledge": ["k2"], "questions": []},
+    ])
+    # _RecordingExecutor 只在有 download 时补 save_download，这里手工种一个知识类的账
+    ex.seed_effect = "save_to_knowledge"
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), _SeqCritic([False, True]), [])
+    orch._executor = ex
+    [ev async for ev in orch.run("做点事", purge_side_effects=lambda fx: dict(fx))]
+    assert "save_to_knowledge" not in ex.seen_done_effects[1], (
+        "知识条目被删了，重跑时不能再告诉模型「你已经存过了」")
+
+
+async def test_parallel_failing_steps_prune_their_own_effects_only():
+    """同一轮两个步都失败、各自带产物时，摘工具名不能串台。"""
+    class _PerStep:
+        def __init__(self): self.seen = {}
+        async def execute(self, step, deps, hint="", *, done_effects=None, fx_sink=None, **_kw):
+            from app.orchestration.executor import StepArtifact
+            self.seen.setdefault(step.id, []).append(list(done_effects or []))
+            # s1 存文件、s2 存知识，各自独立
+            fx = ({"download": ["d1"], "knowledge": [], "questions": []} if step.id == "s1"
+                  else {"download": [], "knowledge": ["k1"], "questions": []})
+            if fx_sink is not None:
+                fx_sink.update(fx)
+            eff = list(done_effects or [])
+            tool = "save_download" if step.id == "s1" else "save_to_knowledge"
+            if tool not in eff:
+                eff.append(tool)
+            yield Progress(f"subagent:executor:{step.id}", "干活", status="ok")
+            yield StepArtifact(Artifact(summary=step.id), effects=eff, side_effects=fx)
+
+    ex = _PerStep()
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2"))]), _SeqCritic([False, False, True, True]), [])
+    orch._executor = ex
+    [ev async for ev in orch.run("做点事", purge_side_effects=lambda fx: dict(fx))]
+    # 各自第二次尝试读到的都该是"自己那件事被撤销了"，且不含对方的工具名
+    assert "save_download" not in ex.seen["s1"][1]
+    assert "save_to_knowledge" not in ex.seen["s2"][1]
+    assert "save_to_knowledge" not in ex.seen["s1"][1], "不该串到别的步"

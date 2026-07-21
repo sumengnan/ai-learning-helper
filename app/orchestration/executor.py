@@ -18,7 +18,7 @@ from harness.tools.base import ToolRegistry
 from ..search_guidance import SEARCH_SYSTEM_GUIDANCE
 from app.today import today_guide
 
-from ..side_effects import empty_fx, ids_from_tool, merge_fx
+from ..side_effects import empty_fx, ids_from_tool
 from .plan import Artifact, PlanStep
 from .usage_ctx import record_usage
 

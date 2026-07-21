@@ -1030,7 +1030,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         knowledge_service=knowledge_service,
                         question_store=question_store)
 
-                    def _purge_step_fx(fx) -> list[str]:
+                    def _purge_step_fx(fx) -> dict[str, list[str]]:
                         # 只按**实际删掉的**剥标记：删除失败是被吞掉的（清理不该中断回答），
                         # 若按"想删的"剥，磁盘上文件还在而用户的下载入口没了——静默的数据不一致。
                         done = _purger.purge(user_id, fx)

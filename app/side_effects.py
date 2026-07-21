@@ -128,6 +128,9 @@ class SideEffectPurger:
 TOOLS_BY_KIND = {
     "download": ("save_download",),
     "knowledge": ("save_to_knowledge",),
+    # 出题工具当前进不了 executor 的 effects（它把〔题目ID:x〕拼在正文而非 marker 字段，
+    # 见 exam_tools.py），故这一行在「摘工具名」路径上目前是空转。留着是因为口径一旦
+    # 对齐它就该生效，且少了它反而会变成"删了题却仍告诉模型别重出"。
     "questions": ("add_questions", "generate_questions"),
 }
 

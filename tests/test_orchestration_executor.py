@@ -439,6 +439,8 @@ async def test_fx_sink_filled_on_normal_path_too(make_mock):
                   registry=_reg_with_save_download(), system_prompt="s", model="m", max_steps=3)
     _, artifact = await _collect(ex.execute(_step(), {}, fx_sink=fx_sink))
     assert fx_sink["download"] == ["d1"] == artifact.side_effects["download"]
+
+
 # ---- effects：本次留下持久产物的工具，供重试时告知模型别重做 ----
 
 async def _effects_of(make_mock, tool, tool_name):
@@ -550,3 +552,30 @@ async def test_crash_after_tool_still_accounts(make_mock):
             break
     await gen.aclose()
     assert ledger == ["saver"], f"崩溃路径没记账：{ledger}"
+
+
+def test_orchestrator_only_passes_kwargs_that_executor_accepts():
+    """编排器传给 execute() 的关键字参数，必须都是真实 Executor 认的。
+
+    编排器测试里的 Executor 替身以 **_kw 收尾（两条工作线都在给 execute() 加参数，
+    每个替身写死全部参数就会每次都改十几处、合并必冲突）。代价是替身不再因为签名对不上
+    而报错——调用点打错字（done_effect=）或加了个 executor 没有的参数，1700 多个测试
+    照样全绿。此处把那道交叉校验补回来：没有任何测试把真实 Executor 接进 Orchestrator。
+    """
+    import inspect
+    import re
+
+    from app.orchestration.executor import Executor
+    from app.orchestration import orchestrator as orch_mod
+
+    accepted = {
+        n for n, p in inspect.signature(Executor.execute).parameters.items()
+        if p.kind in (p.KEYWORD_ONLY, p.POSITIONAL_OR_KEYWORD)
+    }
+    src = inspect.getsource(orch_mod.Orchestrator._schedule_rounds)
+    call = re.search(r"self\._executor\.execute\((.*?)\):", src, re.S)
+    assert call, "没找到编排器对 execute() 的调用点，本测试需要跟着改"
+    passed = set(re.findall(r"(\w+)\s*=", call.group(1)))
+
+    unknown = passed - accepted
+    assert not unknown, f"编排器传了 Executor 不认的参数：{unknown}"

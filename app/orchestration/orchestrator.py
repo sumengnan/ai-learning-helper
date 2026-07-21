@@ -645,9 +645,13 @@ class Orchestrator:
                         if isinstance(ev, StepArtifact):
                             art, err, terminal = ev.artifact, ev.error, ev.terminal
                             effects = list(ev.effects)
-                            # 真实 executor 里这与 fx_sink 是同一个对象；显式取一次，
-                            # 让"只填了返回值"的实现（测试替身、将来的别种 executor）同样成立
-                            fx = ev.side_effects or fx
+                            # 真实 executor 里这与 fx_sink 是同一个对象，取哪个都一样。
+                            # 判"有没有内容"而非用 or：empty_fx() 是含三个键的 dict、恒为真，
+                            # 用 or 会让返回值无条件压过 sink——只填 sink、忘了设 side_effects
+                            # 的实现，产物会被默认空值整个抹掉，既不清理也不摘工具名。
+                            # 也不能 merge：两者常是同一对象，合并会把 id 记两遍。
+                            if has_any(ev.side_effects):
+                                fx = ev.side_effects
                         else:
                             await queue.put(("ev", ev))
                 except Exception as e:  # 单步崩溃隔离
@@ -716,31 +720,32 @@ class Orchestrator:
         清理与前端通知都不该影响主流程：purge 内部已吞掉 store 异常，这里也不因为
         没注入回调就中断——精简装配下本就可能没有下载/知识库能力。
         """
-        # step_reset 先发：让前端在新一轮工具调用进来之前就把这一步的旧记录抖掉，
-        # 否则同一步里同一个工具会显示调了两遍。
+        # 顺序要紧：先把清理做完，再 yield。yield 是可被中断的点——客户端在这里断连，
+        # GeneratorExit 抛出，后面的 purge 与摘工具名就都不执行了，产物成孤儿。
+        # purge 是同步调用，提前做零成本。
+        purged = None
+        if purge_side_effects is not None and has_any(fx):
+            purged = purge_side_effects(fx) or []
+            if isinstance(purged, dict):
+                # 删掉的产物要让模型重做：把对应工具名从该步的 done_effects 里摘掉。
+                # 不摘的话重跑时模型仍被告知「你已经做过了」，于是不再保存——旧的删了、
+                # 新的没生成，用户手里一个文件都不剩。这是两套机制的接缝，只有分组 dict
+                # 才知道删的是哪一类，故只在这一支处理。
+                if step_effects is not None:
+                    redo = tools_to_redo(purged)
+                    if redo:
+                        step_effects[step.id] = [t for t in step_effects.get(step.id, ())
+                                                 if t not in redo]
+                purged = list(purged.get("download") or ())
+
+        # 让前端抖掉这一步的旧记录，否则同一步里同一个工具会显示调了两遍。
         # **只在真会重跑时发**（_on_step_fail 已把状态置好：pending=重跑，failed=到此为止）。
         # 不重跑还抖掉记录，等于把失败现场一并抹了——这步调了什么、错在哪，用户再也看不到。
         if step.status == "pending":
             yield Progress("step_reset", step.id, status="ok")
-        if purge_side_effects is None or not has_any(fx):
-            return
-        purged = purge_side_effects(fx) or []
-        # 归一成扁平的下载 id 数组再发。前端拿到非数组会 Array.isArray 判假、直接 return——
-        # 按钮永远撤不掉且不报错。回调既可能返回 id 列表，也可能是 purge() 那种按类分组的
-        # dict（两者名字相近，接错很自然），这里都收下。
-        if isinstance(purged, dict):
-            # 删掉的产物要让模型重做：把对应工具名从该步的 done_effects 里摘掉。
-            # 不摘的话重跑时模型仍被告知「你已经做过了」，于是不再保存——旧的删了、
-            # 新的没生成，用户手里一个文件都不剩。这是两套机制的接缝，只有分组 dict
-            # 才知道删的是哪一类，故只在这一支处理。
-            if step_effects is not None:
-                redo = tools_to_redo(purged)
-                if redo:
-                    step_effects[step.id] = [t for t in step_effects.get(step.id, ())
-                                             if t not in redo]
-            purged = list(purged.get("download") or ())
+        # 归一成扁平的下载 id 数组：前端拿到非数组会 Array.isArray 判假、直接 return——
+        # 按钮永远撤不掉且不报错。
         if purged:
-            # 告诉在途前端撤掉已渲染的下载按钮——产物没了，按钮点开是 404
             yield Progress("purged", json.dumps(list(purged), ensure_ascii=False), status="ok")
 
     def _on_step_fail(self, step, retry_hints: dict[str, str], reason: str, *,
