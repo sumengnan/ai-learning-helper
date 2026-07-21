@@ -101,8 +101,21 @@ def _iso_delta_ms(start: str, end: str) -> float | None:
     return (b - a).total_seconds() * 1000.0
 
 
-def _by_model_rows(by_model: dict) -> list[dict]:
-    """把 {model: {...}} 转成按 total token 降序的列表，供前端分模型表格。"""
+def _by_model_rows(by_model: dict, active: list | None = None) -> list[dict]:
+    """把 {model: {...}} 转成按 total token 降序的列表，供前端分模型表格。
+
+    active 非空时只保留在用模型，并把没跑过的在用模型补成 0 行：
+    - 过滤停用的：轨迹事件永久保留，换过模型后旧模型的用量会一直挂着，且往往体量最大，
+      看着像它还在跑。
+    - 补 0 行：配了却没用量本身就是信息——可能是这一档压根没被走到（如 judge 没接上、
+      rerank 没开），零行看得见，缺行只会让人以为「统计漏了」。
+    """
+    if active:
+        allow = set(active)
+        by_model = {k: v for k, v in by_model.items() if k in allow}
+        for m in active:
+            by_model.setdefault(m, {"prompt": 0, "completion": 0, "total": 0,
+                                    "calls": 0, "cost": 0.0, "has_cost": False})
     rows = [{
         "model": name,
         "calls": m["calls"],
@@ -173,6 +186,7 @@ class StatsService:
                  price_tiers_by_model: dict | None = None,
                  price_map: dict | None = None,
                  currency: str = "$",
+                 active_models: list | None = None,
                  now=None) -> None:
         self._traj = trajectory_conn
         self._app = app_conn
@@ -189,6 +203,11 @@ class StatsService:
         self._price_tiers_by_model = price_tiers_by_model or {}
         self._price_map = price_map or {}
         self._currency = currency
+        # 当前在用的模型（主/快速/judge/embedding/rerank，去重去空）。「分模型用量」只认这几个：
+        # 轨迹事件是永久的，换过模型后旧模型的历史用量会一直挂在表里——实测某库里已停用的
+        # qwen-turbo 占 119 万 token，稳居第一行，把在用模型全压下去，看着像它还在跑。
+        # 为空时不过滤（保持旧行为），避免装配没传就把整张表清空。
+        self._active_models = [m for m in dict.fromkeys(active_models or []) if m]
         self._now = now or (lambda: datetime.now(timezone.utc))
 
     def _model_cost(self, prompt: int, completion: int, model: str) -> float | None:
@@ -823,7 +842,7 @@ class StatsService:
             },
             # 分模型明细：token/调用次数/成本按模型拆开，供前端表格展示（totals 是全部模型的汇总）。
             # 含 embedding/rerank：它们的 emit 用量已经 _merged 并入主流落 trajectory（见 chat.py pump）。
-            "by_model": _by_model_rows(agg["by_model"]),
+            "by_model": _by_model_rows(agg["by_model"], self._active_models),
             "daily": series,
             "tools": self._tools_list(agg["tool_counts"], agg["tool_errors"]),
             "steps_histogram": self._steps_histogram(agg["steps_per_run"]),

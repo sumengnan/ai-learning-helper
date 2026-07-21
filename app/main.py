@@ -201,7 +201,17 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
                                      price_tiers=config.model_price_tiers,
                                      price_tiers_by_model=config.model_price_tiers_by_model,
                                      price_map=config.price_map,
-                                     currency=config.price_currency)
+                                     currency=config.price_currency,
+                                     # 「分模型用量」只认这五档当前在用的模型：未配的角色回退
+                                     # 主模型（与 build_*_completer 的回退口径一致），去重后
+                                     # 停用模型的历史用量不再进表，没跑过的在用模型补 0 行。
+                                     active_models=[
+                                         config.model,
+                                         config.fast_model or config.model,
+                                         config.judge_model or config.model,
+                                         config.embedding_model,
+                                         config.rerank_model if config.enable_rerank else "",
+                                     ])
     app.include_router(make_stats_router(stats_service))
 
     # 会话级沙箱：启动时清扫上次遗留的孤儿容器；关停时销毁全部会话容器。
