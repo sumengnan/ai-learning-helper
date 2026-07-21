@@ -40,3 +40,56 @@ def test_guide_forbids_past_year_ranges():
     """只给日期不够：实测模型仍会写出「2025-2026」这种已过去的区间，需明确禁止。"""
     from app.today import today_guide
     assert "不要写出已经过去的年份" in today_guide()
+
+
+# ---------- 覆盖度：所有模型调用都得知道今天 ----------
+
+async def test_every_single_shot_completer_gets_the_date():
+    """所有单轮模型调用（校验、交付门、出题判分、起标题、题目抽取…）都经 build_completer，
+    日期在那里统一注入。此测试直接盯住那个收口。
+
+    不逐个去 16 个 *_SYSTEM 常量上加：那样今天加全了，下次新增一个提示词又会漏，
+    而且不会有任何报错——正是这个项目反复吃亏的模式。
+    """
+    from app.completion import build_completer
+
+    seen = {}
+
+    class _FakeClient:
+        async def stream(self, *a, **kw):
+            raise AssertionError("不应真的发请求")
+
+    import app.completion as comp
+
+    class _Loop:
+        def __init__(self, *, context, **kw):
+            seen["system"] = getattr(context, "_system_prompt", None)
+
+        async def run(self, _user):
+            from harness.events import RunFinished
+            from harness.types import Message, Role
+            yield RunFinished(message=Message(role=Role.ASSISTANT, content="ok"))
+
+    orig, comp.AgentLoop = comp.AgentLoop, _Loop
+    try:
+        await build_completer(_FakeClient(), "m")("你是裁判。", "判一下")
+    finally:
+        comp.AgentLoop = orig
+    assert "【当前日期】" in (seen["system"] or ""), "单轮模型调用必须带当前日期"
+
+
+def test_injection_is_idempotent():
+    """个别调用方（如 Planner）会自己先拼一份日期，收口处不能再拼一遍。"""
+    from app.today import today_guide, with_today
+    once = "你是规划器。" + today_guide()
+    assert with_today(once) == once
+    assert with_today("裸提示").count("【当前日期】") == 1
+
+
+def test_synthesize_and_simple_answer_prompts_carry_date():
+    """写最终答复的那两条路径不走 build_completer（是带工具的 AgentLoop），单独确认。"""
+    import inspect
+    from app.orchestration import orchestrator as o
+    src = inspect.getsource(o)
+    assert "ContextManager(with_today(SYNTH_SYSTEM))" in src
+    assert "with_today(SYNTH_SYSTEM + CLARIFY_GUIDE)" in src

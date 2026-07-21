@@ -7,11 +7,15 @@ from harness.loop.agent_loop import AgentLoop
 from harness.tools.base import ToolRegistry
 
 from .orchestration.usage_ctx import record_reasoning, record_usage
+from .today import with_today
 
 
 def build_completer(client, model_name: str, *, max_prompt_tokens: int = 0,
                     count_model: str | None = None):
     """返回 async (system_prompt, user_prompt) -> str：跑一轮无工具 AgentLoop，取最终文本。
+
+    所有单轮模型调用（规划、校验、交付门 grounding/judge、出题判分、起标题、题目抽取…）
+    都经由这里，故当前日期在此统一注入——见 with_today。
 
     复用 harness 的重试/预算/OTel 封装；不给 harness 加任何能力。
     max_prompt_tokens>0 时给上下文包一层 ClampedContextManager，对总输入按 (count_model, 上限)
@@ -22,7 +26,7 @@ def build_completer(client, model_name: str, *, max_prompt_tokens: int = 0,
     cmodel = count_model or model_name
 
     async def complete(system_prompt: str, user_prompt: str) -> str:
-        ctx = ContextManager(system_prompt)
+        ctx = ContextManager(with_today(system_prompt))
         if cap > 0:
             from harness.context.clamp import ClampedContextManager
             ctx = ClampedContextManager(ctx, cmodel, cap)

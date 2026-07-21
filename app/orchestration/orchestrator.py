@@ -30,6 +30,8 @@ from harness.reliability.budget import BudgetExceeded
 from harness.tools.base import ToolRegistry
 from harness.types import Message, Role
 
+from app.today import with_today
+
 from .critic import Critic
 from .executor import CLARIFY_GUIDE, Executor, HidingRegistry, StepArtifact
 from .planner import Planner, PlannerError, render_tool_roster
@@ -232,7 +234,8 @@ class Orchestrator:
             message = (
                 "【可参考的技能流程】以下是处理这类请求的推荐步骤，请据此完成本次请求"
                 f"（仍以用户实际需求为准）：\n\n{skill_hint}\n\n---\n用户请求：{message}")
-        ctx = context if context is not None else ContextManager(SYNTH_SYSTEM + CLARIFY_GUIDE)
+        ctx = context if context is not None else ContextManager(
+            with_today(SYNTH_SYSTEM + CLARIFY_GUIDE))
         client = self._client if prefer_main else self._fast_client
         model = self._model if prefer_main else self._fast_model
         # 按快速模型口径重裁（>0 时）：仅在真用快速档时才收——主档 base_ctx 已按主模型裁好
@@ -303,7 +306,8 @@ class Orchestrator:
         多轮上下文。"""
         loop = AgentLoop(
             client=self._client, registry=ToolRegistry(),
-            context=ContextManager(SYNTH_SYSTEM), max_steps=1, model_name=self._model)
+            context=ContextManager(with_today(SYNTH_SYSTEM)), max_steps=1,
+            model_name=self._model)
         final = ""
         streamed = False
         async for ev in loop.run(_synth_user(goal, artifacts, recent_dialogue)):
