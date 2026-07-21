@@ -27,6 +27,8 @@ import { SubagentProgress } from "./SubagentProgress";
 import { VerifyBadge, isGateOpen } from "./VerifyBadge";
 import { PlanBlock } from "./PlanBlock";
 import { RouteBadge, routeModeOf } from "./RouteBadge";
+import { SelfPlanBlock } from "./SelfPlanBlock";
+import { isOrchestratorPlan, lastPlanText } from "./planSteps";
 import { Markdown } from "./Markdown";
 import { RollingNumber } from "./RollingNumber";
 import { AttachmentChips, type AttachmentItem } from "./Attachments";
@@ -74,23 +76,6 @@ function pendingActionIds(steps?: { tool: string; result?: string }[]) {
     }
   }
   return out;
-}
-
-// 判断本轮的计划块是不是**编排器**发的。编排器的计划步带 id（见 orchestrator._plan_progress），
-// 工具明细靠 id 挂到步下；而简单直答路径里模型自己调 update_plan 发的 ReAct 清单只有
-// title/status、没有 id，明细永远挂不上去。
-// 两者都用 scope="plan"，若不加区分就会出事：ReAct 清单一到，下面的扁平工具块被隐藏，
-// 而清单本身又展不开明细——用户看到工具块闪现后消失、点开步骤空空如也。
-function isOrchestratorPlan(progress?: { scope: string; text?: string }[]) {
-  const items = (progress || []).filter((p) => p.scope === "plan");
-  const last = items[items.length - 1];
-  if (!last?.text) return false;
-  try {
-    const steps = JSON.parse(last.text);
-    return Array.isArray(steps) && steps.some((s: any) => s && s.id);
-  } catch {
-    return false;
-  }
 }
 
 // 等待 AI 回复时的“正在输入”三点动画（framer-motion 循环，风格与全站统一）
@@ -616,9 +601,14 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                 if (!plan) return null;
                 const streamingLast = busy && i === messages.length - 1 && m.status === "streaming";
                 const thinking = streamingLast && !m.content;
+                // 同一条 scope=plan 通道上有两种清单：编排器计划（步骤带 id）与模型在单循环里
+                // 自己调 update_plan 发的自述清单（只有 title/status）。后者此前也渲染成
+                // 「任务步骤」，于是「简单直答」底下跟着个和编排器一模一样的块，自相矛盾。
                 return (
                   <>
-                    <PlanBlock text={plan.text} live={live} status={m.status} subItems={execSubs} />
+                    {isOrchestratorPlan(plan.text)
+                      ? <PlanBlock text={plan.text} live={live} status={m.status} subItems={execSubs} />
+                      : <SelfPlanBlock text={plan.text} live={live} status={m.status} />}
                     {/* 任务步骤块下面：编排器"结果思考"（最终答复的思考） */}
                     {m.reasoning && (
                       <ThinkingBlock reasoning={m.reasoning} thinking={thinking}
@@ -659,7 +649,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                   再平铺一份是重复）。简单直答里模型调 update_plan 发的 ReAct 清单没有 id、
                   挂不了明细，此时必须保留本列表——否则工具调用会凭空消失且无处可看。*/}
               {showTools && m.role === "assistant" && m.steps && m.steps.length > 0
-                && !isOrchestratorPlan(m.progress) && (
+                && !isOrchestratorPlan(lastPlanText(m.progress)) && (
                 <AgentProgress steps={m.steps}
                   live={busy && i === messages.length - 1 && m.status === "streaming"}
                   stopped={m.status === "stopped"} />
