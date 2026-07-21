@@ -294,3 +294,43 @@ def test_build_prompt_does_not_glue_step_id_to_content():
     assert "[s2] # AI发展与应用总结" not in p     # 前缀不得紧贴正文首行
     assert "# AI发展与应用总结" in p              # 内容本身仍在
     assert "s2" in p                              # 仍能看出这是哪一步的产出
+
+
+# ---------- 子步必须看得见用户原话 ----------
+
+def test_step_prompt_carries_user_goal():
+    """回归：用户发「翻译这段：<日志>」，子步回「请提供文本」。
+
+    子步的上下文是全新的 ContextManager（只有系统提示词、无对话历史），execute() 此前
+    也不收用户消息。计划步的 description 是对任务的**转述**，原料不在里面——规划器写出
+    「将提供的英文文本翻译成中文」，子步拿到的就只有这句，文本本身丢了。
+    终局校验连判三次未通过，判得没错：活确实没干成。
+    """
+    from app.orchestration.executor import _build_prompt
+    from app.orchestration.plan import PlanStep
+    step = PlanStep(id="s1", description="将提供的英文文本翻译成中文",
+                    expected="写进答复正文的中文翻译", depends_on=[])
+    goal = "翻译这段：Node 20 is being deprecated. Removing builder"
+    p = _build_prompt(step, {}, "", goal)
+    assert "Node 20 is being deprecated" in p, "要翻译的原文必须进子步提示词"
+    assert "Removing builder" in p
+    assert "将提供的英文文本翻译成中文" in p          # 子任务描述仍在
+
+
+def test_long_goal_is_capped_not_dropped():
+    """超长原文截断而非丢弃：丢了等于回到「请提供文本」，截断至少还能干大半。"""
+    from app.orchestration.executor import _GOAL_MAX, _build_prompt
+    from app.orchestration.plan import PlanStep
+    step = PlanStep(id="s1", description="翻译", expected="译文", depends_on=[])
+    p = _build_prompt(step, {}, "", "开头标记" + "x" * (_GOAL_MAX * 2))
+    assert "开头标记" in p, "保头：原文开头不能被截掉"
+    assert "已截断" in p, "截断要显式说明，别让模型以为原文就这么短"
+    assert len(p) < _GOAL_MAX * 2
+
+
+def test_no_goal_keeps_prompt_unchanged():
+    """不传 goal 时不加空壳段落（旧调用方与测试不受影响）。"""
+    from app.orchestration.executor import _build_prompt
+    from app.orchestration.plan import PlanStep
+    step = PlanStep(id="s1", description="搜索资料", expected="资料", depends_on=[])
+    assert "用户的原始请求" not in _build_prompt(step, {}, "")
