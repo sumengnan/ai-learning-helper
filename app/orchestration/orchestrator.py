@@ -614,14 +614,18 @@ class Orchestrator:
                 art = None
                 err = None
                 terminal = False
-                fx = empty_fx()          # 本次尝试的产物，失败时据此清理
+                # 传给 executor 就地填：本步的异常若逃出 AgentLoop 的兜底（下面 except 分支），
+                # StepArtifact 根本 yield 不出来，而那时文件可能已经落了盘——清单只搭在返回值上就丢了
+                fx = empty_fx()
                 try:
                     async for ev in self._executor.execute(
                             step, deps, retry_hints.get(step.id, ""),
-                            registry=exec_reg, goal=goal):
+                            registry=exec_reg, goal=goal, fx_sink=fx):
                         if isinstance(ev, StepArtifact):
                             art, err, terminal = ev.artifact, ev.error, ev.terminal
-                            fx = ev.side_effects
+                            # 真实 executor 里这与 fx_sink 是同一个对象；显式取一次，
+                            # 让"只填了返回值"的实现（测试替身、将来的别种 executor）同样成立
+                            fx = ev.side_effects or fx
                         else:
                             await queue.put(("ev", ev))
                 except Exception as e:  # 单步崩溃隔离
@@ -686,8 +690,11 @@ class Orchestrator:
         没注入回调就中断——精简装配下本就可能没有下载/知识库能力。
         """
         # step_reset 先发：让前端在新一轮工具调用进来之前就把这一步的旧记录抖掉，
-        # 否则同一步里同一个工具会显示调了两遍。无论有没有产物都要发。
-        yield Progress("step_reset", step.id, status="ok")
+        # 否则同一步里同一个工具会显示调了两遍。
+        # **只在真会重跑时发**（_on_step_fail 已把状态置好：pending=重跑，failed=到此为止）。
+        # 不重跑还抖掉记录，等于把失败现场一并抹了——这步调了什么、错在哪，用户再也看不到。
+        if step.status == "pending":
+            yield Progress("step_reset", step.id, status="ok")
         if purge_side_effects is None or not has_any(fx):
             return
         purged = purge_side_effects(fx) or []

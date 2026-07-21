@@ -474,3 +474,46 @@ async def test_quality_score_still_emitted_when_verify_on(make_mock, monkeypatch
     c, _ = _quality_client(make_mock, monkeypatch, scored)
     _run_turn(c, verify=True)
     assert scored, "开着结果校验时轨迹 judge 应照常打分"
+
+
+class StepResetOrchestrator:
+    """模拟单步重跑：先发一次工具进度，再发 step_reset，然后发重跑那次的工具进度。"""
+    async def run(self, message, verify=True, *, context=None, registry=None,
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False,
+                  run_id=None, purge_side_effects=None):
+        from harness.events import RunStarted, Progress, TextDelta, RunFinished
+        from harness.types import Message, Role
+        yield RunStarted(run_id=run_id or "r1")
+        yield Progress("subagent:executor:s1", "调用工具 save_download", status="ok", key="c1",
+                       detail={"tool": "save_download", "args": {}, "result": "旧版",
+                               "is_error": False})
+        yield Progress("step_reset", "s1", status="ok")
+        yield Progress("subagent:executor:s1", "调用工具 save_download", status="ok", key="c2",
+                       detail={"tool": "save_download", "args": {}, "result": "新版",
+                               "is_error": False})
+        yield TextDelta(text="答复")
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content="答复"))
+
+
+def test_step_reset_also_drops_persisted_progress(make_mock, monkeypatch):
+    """step_reset 必须同时清掉**落库**的那一步旧进度。
+
+    前端的实时处理器只作用于内存态；progress 列是服务端另外攒的。只清实时不清落库，
+    刷新页面后 execSubs 从 progress 列重新取，重复的工具调用又冒出来——正是本特性要消除的。
+    """
+    c, store = _client(make_mock, monkeypatch, orchestrator=StepResetOrchestrator())
+    cid, _ = _chat(c, _auth(c))
+    saved = [p for m in store.ui_messages(cid) if m["role"] == "assistant"
+             for p in (m.get("progress") or [])
+             if p.get("scope") == "subagent:executor:s1"]
+    assert len(saved) == 1, f"应只剩重跑那次，实际留了 {len(saved)} 条"
+    assert saved[0]["detail"]["result"] == "新版"
+
+
+def test_step_reset_control_event_not_persisted(make_mock, monkeypatch):
+    """控制事件本身不该落进 progress 列——它不是给用户看的过程记录。"""
+    c, store = _client(make_mock, monkeypatch, orchestrator=StepResetOrchestrator())
+    cid, _ = _chat(c, _auth(c))
+    kept = [p for m in store.ui_messages(cid) if m["role"] == "assistant"
+            for p in (m.get("progress") or []) if p.get("scope") == "step_reset"]
+    assert kept == []

@@ -37,7 +37,7 @@ class FakeExecutor:
     """每步产出 summary=step.id 的 Artifact；记录执行顺序供并行断言。"""
     def __init__(self, order):
         self._order = order
-    async def execute(self, step, deps, hint="", *, registry=None, goal=""):
+    async def execute(self, step, deps, hint="", *, registry=None, goal="", fx_sink=None):
         from app.orchestration.executor import StepArtifact
         self._order.append(step.id)
         yield Progress(f"subagent:executor:{step.id}", "开始")
@@ -244,7 +244,7 @@ async def test_run_aggregates_all_usage_incl_planner_critic():
     from app.orchestration.plan import Artifact
 
     class UExec:
-        async def execute(self, step, deps, hint="", *, registry=None, goal=""):
+        async def execute(self, step, deps, hint="", *, registry=None, goal="", fx_sink=None):
             record_usage(Usage(0, 0, 100), 0.01)
             yield StepArtifact(Artifact(summary=f"done-{step.id}"))
 
@@ -473,7 +473,7 @@ async def test_parallel_steps_actually_concurrent():
     class ProbeExecutor:
         def __init__(self):
             self.now = 0; self.peak = 0
-        async def execute(self, step, deps, hint="", *, registry=None, goal=""):
+        async def execute(self, step, deps, hint="", *, registry=None, goal="", fx_sink=None):
             self.now += 1; self.peak = max(self.peak, self.now)
             await asyncio.sleep(0)
             self.now -= 1
@@ -495,7 +495,7 @@ async def test_early_abort_cancels_pending_workers():
 
     class MixedExecutor:
         """s_fast 立刻产出一个事件；s_slow 阻塞，被取消时记录自己。"""
-        async def execute(self, step, deps, hint="", *, registry=None, goal=""):
+        async def execute(self, step, deps, hint="", *, registry=None, goal="", fx_sink=None):
             if step.id == "s_slow":
                 try:
                     await asyncio.sleep(100)
@@ -541,7 +541,7 @@ async def test_run_wraps_registry_as_hiding_view_for_executor():
     from app.orchestration.executor import HidingRegistry
     seen = {}
     class CapExec:
-        async def execute(self, step, deps, hint="", *, registry=None, goal=""):
+        async def execute(self, step, deps, hint="", *, registry=None, goal="", fx_sink=None):
             from app.orchestration.executor import StepArtifact
             seen["reg"] = registry
             yield StepArtifact(Artifact(summary="x"))
@@ -724,7 +724,7 @@ async def test_run_emits_per_model_usage():
     from app.orchestration.plan import Artifact
 
     class MExec:
-        async def execute(self, step, deps, hint="", *, registry=None, goal=""):
+        async def execute(self, step, deps, hint="", *, registry=None, goal="", fx_sink=None):
             record_usage(Usage(0, 0, 100), 0.01, "fast-model")
             yield StepArtifact(Artifact(summary=f"done-{step.id}"))
 
@@ -846,7 +846,7 @@ class _DenyingExecutor:
     def __init__(self, order):
         self._order = order
 
-    async def execute(self, step, deps, hint="", *, registry=None, goal=""):
+    async def execute(self, step, deps, hint="", *, registry=None, goal="", fx_sink=None):
         from app.orchestration.executor import StepArtifact
         self._order.append(step.id)
         yield Progress(f"subagent:executor:{step.id}", "开始")
@@ -900,7 +900,7 @@ class _CapturingExecutor:
     def __init__(self):
         self.seen = []
 
-    async def execute(self, step, deps, hint="", *, registry=None, goal=""):
+    async def execute(self, step, deps, hint="", *, registry=None, goal="", fx_sink=None):
         from app.orchestration.executor import StepArtifact
         self.seen.append({t.name for t in registry.tools()} if registry else set())
         yield StepArtifact(Artifact(summary="done"))
@@ -1553,7 +1553,7 @@ class _FxExecutor:
     def __init__(self, fxs, terminal=False):
         self._fxs = list(fxs); self._i = 0
 
-    async def execute(self, step, deps, hint="", *, registry=None, goal=""):
+    async def execute(self, step, deps, hint="", *, registry=None, goal="", fx_sink=None):
         from app.orchestration.executor import StepArtifact
         fx, terminal = self._fxs[min(self._i, len(self._fxs) - 1)]
         self._i += 1
@@ -1638,3 +1638,47 @@ async def test_runs_without_purger_injected():
     """未注入清理回调（精简装配/测试）时照常跑完，不报错。"""
     orch = _fx_orch([(_fx(download=["d1"]), False), (_fx(), False)], [False, True])
     [ev async for ev in orch.run("做点事")]
+
+
+async def test_no_step_reset_when_step_wont_rerun():
+    """终态失败/重试耗尽 → 该步不会重跑，就不能抖掉它的工具记录。
+
+    抖掉等于把失败现场一并抹了：这一步到底调了什么、错在哪，用户再也看不到。
+    step_reset 的语义是「旧记录马上会被新一轮取代」，不重跑就不成立。
+    产物照样要清——它已经作废了，与重不重跑无关。
+    """
+    purger = _RecordingPurger()
+    orch = _fx_orch([(_fx(download=["d1"]), True)], [False])   # terminal=True → 判 failed
+    evs = [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    assert purger.calls == [_fx(download=["d1"])]              # 产物仍清
+    resets = [e for e in evs if isinstance(e, Progress) and e.scope == "step_reset"]
+    assert resets == [], "不重跑的步不该抖掉工具记录"
+
+
+async def test_no_step_reset_after_retries_exhausted():
+    """重试次数用尽（max_step_retry=2）判 failed 的那次，同样不发 step_reset。"""
+    purger = _RecordingPurger()
+    orch = _fx_orch([(_fx(), False)], [False, False])          # 两次都不过 → 第二次判 failed
+    evs = [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    resets = [e for e in evs if isinstance(e, Progress) and e.scope == "step_reset"]
+    assert len(resets) == 1, "只有第一次（会重跑）该发，最后一次判 failed 不该发"
+
+
+async def test_purges_even_when_step_crashes_after_producing():
+    """本步异常逃出 AgentLoop 兜底时，已落盘的产物照样要清。
+
+    这条路上 StepArtifact 根本 yield 不出来，产物清单只能靠传给 executor 的 sink 拿到。
+    """
+    class _CrashAfterSave:
+        async def execute(self, step, deps, hint="", *, registry=None, goal="", fx_sink=None):
+            if fx_sink is not None:
+                fx_sink.update({"download": ["d1"], "knowledge": [], "questions": []})
+            yield Progress(f"subagent:executor:{step.id}", "调用工具 save_download", status="ok")
+            raise RuntimeError("连接断了")
+
+    purger = _RecordingPurger()
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), _SeqCritic([True]), [])
+    orch._executor = _CrashAfterSave()
+    [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
+    # 崩了会重试，重试又崩 —— 两次尝试各自的产物都要清，故调用 2 次
+    assert purger.calls == [{"download": ["d1"], "knowledge": [], "questions": []}] * 2

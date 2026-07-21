@@ -887,6 +887,15 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         e["cost"] += ev.cost_usd or 0.0
                         collect["usage"] = {"tokens": sum(x["tokens"] for x in ubm.values()),
                                             "cost": sum(x["cost"] for x in ubm.values())}
+                    elif isinstance(ev, Progress) and ev.scope == "step_reset":
+                        # 单步重跑：把该步上一次的进度行从**落库副本**里也抖掉。前端的实时
+                        # 处理器只管内存态，progress 列是这里另攒的——只清实时不清落库，刷新
+                        # 后 ChatView 从 progress 列重新取，重复的工具调用又冒出来。
+                        # 控制事件本身不入列：它不是给用户看的过程记录。
+                        _sid = ev.text or ""
+                        collect["progress"][:] = [
+                            p for p in collect["progress"]
+                            if p.get("scope") != f"subagent:executor:{_sid}"]
                     elif isinstance(ev, Progress):
                         collect["progress"].append({"scope": ev.scope, "text": ev.text,
                                                     "status": ev.status, "key": ev.key,
@@ -1011,11 +1020,13 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         question_store=question_store)
 
                     def _purge_step_fx(fx) -> list[str]:
-                        purged = _purger.purge(user_id, fx)
+                        # 只按**实际删掉的**剥标记：删除失败是被吞掉的（清理不该中断回答），
+                        # 若按"想删的"剥，磁盘上文件还在而用户的下载入口没了——静默的数据不一致。
+                        done = _purger.purge(user_id, fx)
                         # 产物没了，落库 steps 里的机读标记也不能留——否则历史消息重新加载时
                         # 前端照样渲染出下载按钮，点开是已删的文件
-                        _drop_purged_marks(steps, fx)
-                        return purged
+                        _drop_purged_marks(steps, done)
+                        return done["download"]
 
                     _orch_src = SimpleNamespace(
                         run=lambda m: harness.orchestrator.run(

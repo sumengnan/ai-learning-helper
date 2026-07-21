@@ -77,32 +77,38 @@ class SideEffectPurger:
         self._knowledge = knowledge_service
         self._questions = question_store
 
-    def purge(self, user_id: str, fx) -> list[str]:
-        """删掉这批产物，返回**确实删掉的下载 id**（供通知在途前端撤掉已渲染的按钮）。
+    def purge(self, user_id: str, fx) -> dict[str, list[str]]:
+        """删掉这批产物，返回**确实删掉的** id（按类分组）。
+
+        只报真删掉的，是因为调用方拿这个结果去剥消息里的产物标记、并标注"已作废删除"。
+        把没删成的也算进去，会造成静默的数据不一致：磁盘上文件还在、库里行还在，
+        用户的下载入口却没了。store.delete 返回 False（不存在/不属于该用户）同样不算。
 
         任何一处删除失败都只记日志、不抛：清理是善后动作，产物残留至多是脏数据，
         而抛异常会中断用户正在进行的这次回答——两害相权取其轻。
         """
-        purged_downloads: list[str] = []
+        done = empty_fx()
         for did in fx.get("download") or ():
             if self._downloads is None:
                 continue
             try:
-                self._downloads.delete(user_id, did)
-                purged_downloads.append(did)
+                if self._downloads.delete(user_id, did) is not False:
+                    done["download"].append(did)
             except Exception:
                 log.warning("清理下载产物失败 user=%s id=%s", user_id, did, exc_info=True)
         for kid in fx.get("knowledge") or ():
             if self._knowledge is None:
                 continue
             try:
-                self._knowledge.delete(user_id, kid)
+                if self._knowledge.delete(user_id, kid) is not False:
+                    done["knowledge"].append(kid)
             except Exception:
                 log.warning("清理知识条目失败 user=%s id=%s", user_id, kid, exc_info=True)
         qids = list(fx.get("questions") or ())
         if qids and self._questions is not None:
             try:
                 self._questions.delete_many(user_id, qids)
+                done["questions"] = qids     # 批量接口不逐条回报，全成或全败
             except Exception:
                 log.warning("清理题目失败 user=%s n=%d", user_id, len(qids), exc_info=True)
-        return purged_downloads
+        return done

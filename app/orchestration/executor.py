@@ -166,11 +166,16 @@ class Executor:
         self._disable_thinking = disable_thinking
 
     async def execute(self, step: PlanStep, deps: dict[str, Artifact], hint: str = "",
-                      *, registry: ToolRegistry | None = None, goal: str = ""):
+                      *, registry: ToolRegistry | None = None, goal: str = "",
+                      fx_sink: dict | None = None):
         """执行一步。yield Progress 事件，最后 yield 一个 StepArtifact。
 
         registry：本轮每请求工具表（含用户级 save_download/知识库/考试/附件工具）。编排器传入
-        （已隐藏 update_plan）；缺省回退装配期 registry（主要供测试）。"""
+        （已隐藏 update_plan）；缺省回退装配期 registry（主要供测试）。
+
+        fx_sink：调用方给的产物清单收集器，边跑边就地更新。StepArtifact 也会带同样的内容，
+        但本步中途崩溃时它根本 yield 不出来——而那时文件可能已经落了盘，清单一丢就再没人
+        去删它。故清单必须写进调用方持有的对象，而不是只搭在返回值上。"""
         prompt = _build_prompt(step, deps, hint, goal)
         loop = AgentLoop(
             client=self._client, registry=registry if registry is not None else self._registry,
@@ -182,7 +187,9 @@ class Executor:
         final_text = ""
         error = None
         user_denied = False
-        side_effects = empty_fx()          # 本次尝试的产物 id，随 StepArtifact 回传供清理
+        # 本次尝试的产物 id：既写进调用方的 sink（崩溃也不丢），也随 StepArtifact 回传
+        side_effects = fx_sink if fx_sink is not None else {}
+        side_effects.update(empty_fx())
         tool_names: dict[str, str] = {}
         tool_args: dict[str, object] = {}   # 暂存入参，供完成行带全（前端按 key 合并只留最后一条）
         token = set_current_agent(f"executor:{step.id}")
@@ -214,8 +221,10 @@ class Executor:
                         user_denied = True          # 本步含被用户拒绝的操作 → 不可重试
                     # 登记产物：必须在这里而不是事后从 Progress 里扒——这里同时看得见
                     # 工具名、结果文本与 is_error，是唯一能准确判定"真产出了东西"的位置
-                    side_effects = merge_fx(
-                        side_effects, ids_from_tool(name, r.content or "", r.is_error))
+                    # 就地更新（不重新绑定）：调用方持有同一个 dict，崩溃时仍看得到已产出的东西
+                    _new = ids_from_tool(name, r.content or "", r.is_error)
+                    for _k, _v in _new.items():
+                        side_effects[_k] += _v
                     yield ev
                     yield Progress(scope, f"调用工具 {name}",
                                    status="error" if r.is_error else "ok", key=r.tool_call_id,

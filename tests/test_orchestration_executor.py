@@ -1,3 +1,4 @@
+import pytest
 from harness.events import Progress
 from harness.llm.base import StreamChunk
 from harness.types import ToolOutput
@@ -399,3 +400,42 @@ async def test_artifact_side_effects_empty_without_side_effect_tools(make_mock):
                   registry=reg, system_prompt="s", model="m", max_steps=3)
     _, artifact = await _collect(ex.execute(_step(), {}))
     assert not any(artifact.side_effects.values())
+
+
+class _BoomAfterSaveClient:
+    """先让模型调一次 save_download，工具成功后下一轮流式炸掉——模拟网络中断。"""
+    def __init__(self): self._n = 0
+
+    async def stream(self, messages, schemas):
+        from harness.llm.base import ToolCallDelta
+        self._n += 1
+        if self._n == 1:
+            yield StreamChunk(type="tool_call", tool_call_delta=ToolCallDelta(
+                index=0, id="c1", name="save_download", arguments='{"filename": "a.md"}'))
+            yield StreamChunk(type="done")
+            return
+        raise RuntimeError("连接断了")
+
+
+async def test_side_effects_kept_when_step_errors_out():
+    """工具已经落了盘、之后本步才出错 —— 产物 id 不能跟着错误一起丢，否则没人去删这个文件。
+
+    AgentLoop 把客户端异常转成 RunError 而非抛出，所以这条路上 StepArtifact 仍会产出；
+    清单同时写进 sink 与 artifact，两边都拿得到。
+    """
+    fx_sink = {}
+    ex = Executor(client=_BoomAfterSaveClient(), registry=_reg_with_save_download(),
+                  system_prompt="s", model="m", max_steps=3)
+    _, artifact = await _collect(ex.execute(_step(), {}, fx_sink=fx_sink))
+    assert artifact.error, "这轮应记为出错"
+    assert fx_sink.get("download") == ["d1"]
+    assert artifact.side_effects["download"] == ["d1"]
+
+
+async def test_fx_sink_filled_on_normal_path_too(make_mock):
+    """正常跑完时 sink 与 StepArtifact.side_effects 内容一致（调用方用哪个都对）。"""
+    fx_sink = {}
+    ex = Executor(client=make_mock(_save_download_turns()),
+                  registry=_reg_with_save_download(), system_prompt="s", model="m", max_steps=3)
+    _, artifact = await _collect(ex.execute(_step(), {}, fx_sink=fx_sink))
+    assert fx_sink["download"] == ["d1"] == artifact.side_effects["download"]

@@ -67,12 +67,13 @@ def test_purge_deletes_each_kind():
     assert dl.deleted == [("u1", "d1")]
     assert kb.deleted == [("u1", "k1")]
     assert q.deleted == [("u1", ["q1", "q2"])]
-    assert purged == ["d1"]        # 返回被删下载 id，供通知在途前端撤掉按钮
+    # 返回实际删掉的（按类分组），供通知在途前端撤掉按钮、剥消息里的标记
+    assert purged == {"download": ["d1"], "knowledge": ["k1"], "questions": ["q1", "q2"]}
 
 
 def test_purge_on_empty_touches_nothing():
     p, dl, kb, q = _purger()
-    assert p.purge("u1", empty_fx()) == []
+    assert p.purge("u1", empty_fx()) == empty_fx()
     assert not dl.deleted and not kb.deleted and not q.deleted
 
 
@@ -81,10 +82,51 @@ def test_purge_survives_store_failure():
     class _Boom:
         def delete(self, *a): raise RuntimeError("磁盘炸了")
     p = SideEffectPurger(download_store=_Boom(), knowledge_service=None, question_store=None)
-    assert p.purge("u1", {"download": ["d1"], "knowledge": [], "questions": []}) == []
+    assert p.purge("u1", {"download": ["d1"], "knowledge": [], "questions": []}) == empty_fx()
 
 
 def test_purge_tolerates_missing_stores():
     # 精简装配（测试/无下载能力部署）下 store 可能为 None
     p = SideEffectPurger(download_store=None, knowledge_service=None, question_store=None)
-    assert p.purge("u1", {"download": ["d1"], "knowledge": ["k1"], "questions": ["q1"]}) == []
+    assert p.purge("u1", {"download": ["d1"], "knowledge": ["k1"], "questions": ["q1"]}) == empty_fx()
+
+
+# ---------- purge 只报"真删掉的" ----------
+
+def test_purge_reports_only_what_actually_got_deleted():
+    """删除失败被吞掉时，不能把它算进"已清理"。
+
+    调用方拿这个返回值去剥消息里的下载标记并标注"此产物已作废删除"。若把没删成的
+    也算进去，磁盘上文件还在、库里行还在，用户的下载入口却没了——静默的数据不一致。
+    """
+    class _HalfBroken:
+        def __init__(self): self.deleted = []
+        def delete(self, uid, did):
+            if did == "bad":
+                raise RuntimeError("磁盘炸了")
+            self.deleted.append(did)
+            return True
+    p = SideEffectPurger(download_store=_HalfBroken())
+    assert p.purge("u1", {"download": ["ok1", "bad", "ok2"],
+                          "knowledge": [], "questions": []})["download"] == ["ok1", "ok2"]
+
+
+def test_purge_respects_store_false_return():
+    """DownloadStore.delete 对"不存在/不属于该用户"返回 False 而非抛异常——同样不算删掉。"""
+    class _AlwaysFalse:
+        def delete(self, uid, did): return False
+    p = SideEffectPurger(download_store=_AlwaysFalse())
+    assert p.purge("u1", {"download": ["d1"], "knowledge": [], "questions": []})["download"] == []
+
+
+def test_purge_reports_knowledge_and_questions_too():
+    """三类产物都要回传实际删掉的，调用方才能按类精确剥标记。"""
+    p, dl, kb, q = _purger()
+    got = p.purge("u1", {"download": ["d1"], "knowledge": ["k1"], "questions": ["q1"]})
+    assert got == {"download": ["d1"], "knowledge": ["k1"], "questions": ["q1"]}
+
+
+def test_purge_missing_stores_report_nothing_deleted():
+    p = SideEffectPurger()
+    got = p.purge("u1", {"download": ["d1"], "knowledge": ["k1"], "questions": ["q1"]})
+    assert got == empty_fx()
