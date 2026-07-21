@@ -196,3 +196,45 @@ async def test_legacy_rows_without_hash_do_not_match_each_other():
     # 新导入照常，不会被旧行干扰
     doc = await svc.ingest("u1", "new.txt", "新内容".encode())
     assert doc["duplicate"] is False
+
+
+# ---------- 入库失败要给人话 + embedding 分批 ----------
+
+def test_ingest_hint_maps_real_batch_error():
+    """用户实测的 400：DashScope 单次最多 20 条，超了直接报 batch size invalid。"""
+    from app.api.documents import _ingest_hint
+    raw = Exception("Error code: 400 - {'error': {'message': '<400> InternalError.Algo."
+                    "InvalidParameter: Value error, batch size is invalid, it should not be "
+                    "larger than 20.: input.contents'}}")
+    h = _ingest_hint(raw)
+    assert "上传失败" in h and "拆成几个小文件" in h
+    assert "InternalError" not in h and "400" not in h, "厂商原文不该露给用户"
+
+
+def test_ingest_hint_covers_common_causes_and_falls_back():
+    from app.api.documents import _ingest_hint
+    assert "限流" in _ingest_hint(Exception("Rate limit exceeded"))
+    assert "密钥" in _ingest_hint(Exception("Incorrect API key provided"))
+    assert "额度" in _ingest_hint(Exception("insufficient quota"))
+    # 认不出的走通用兜底，但仍要告诉用户下一步做什么
+    g = _ingest_hint(Exception("某种没见过的故障"))
+    assert "稍后重试" in g and "服务端日志" in g
+
+
+async def test_embedding_client_splits_oversized_batches():
+    """回归：整篇文档的全部分块一次性发出去，稍长的文档必然超限。
+
+    切片后必须按原顺序拼回——分块与向量错位比直接失败更糟（检索会张冠李戴）。
+    """
+    from harness.memory.embeddings import OpenAICompatibleEmbeddingClient as C
+    c = C.__new__(C)
+    c.dimension, c._model, c._batch = 4, "m", 20
+    sizes = []
+
+    async def _fake(texts):
+        sizes.append(len(texts))
+        return [[float(t)] for t in texts]
+    c._embed_batch = _fake
+    out = await c.embed(list(range(45)))
+    assert sizes == [20, 20, 5], "应按上限切片"
+    assert out == [[float(i)] for i in range(45)], "必须按原顺序拼回"

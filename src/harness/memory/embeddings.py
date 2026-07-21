@@ -23,12 +23,24 @@ class OpenAICompatibleEmbeddingClient:
         model: str,
         dimension: int,
         timeout: float = 60.0,
+        batch_size: int = 20,
     ) -> None:
         self.dimension = dimension
         self._model = model
+        self._batch = max(1, int(batch_size or 20))
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
+        # 分批：多数厂商对单次条数有上限（DashScope text-embedding-v4 为 20，超了直接
+        # 400 InvalidParameter「batch size is invalid」）。而知识库入库是按整篇文档的全部
+        # 分块一次性调用的——稍长一点的文档必然超限，表现为「上传失败」。
+        # 按上限切片顺序请求，结果按原顺序拼回：分块与向量必须一一对应，错位比失败更糟。
+        out: list[list[float]] = []
+        for i in range(0, len(texts), self._batch):
+            out += await self._embed_batch(texts[i:i + self._batch])
+        return out
+
+    async def _embed_batch(self, texts: list[str]) -> list[list[float]]:
         # 显式请求目标维度：text-embedding-v4 等模型默认维度可能不是配置值
         # （如默认 1024），不指定就会与向量表 float[dimension] 不符。
         resp = await self._client.embeddings.create(
