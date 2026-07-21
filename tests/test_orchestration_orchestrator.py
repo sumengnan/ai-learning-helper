@@ -45,7 +45,7 @@ class FakeExecutor:
 
 
 def _mk(planner, critic, order, triage_simple=False, synth="最终答复", max_replan=2):
-    async def fake_triage(msg):
+    async def fake_triage(msg, recent_dialogue=""):
         return triage_simple
     async def fake_synth(goal, artifacts, recent_dialogue=""):
         from harness.events import TextDelta
@@ -602,7 +602,7 @@ async def test_greeting_short_circuits_without_llm_triage():
     """纯寒暄应零成本短路：不调 LLM triage，直接简单直答。"""
     from harness.types import Message, Role
     calls = {"triage": 0}
-    async def counting_triage(msg):
+    async def counting_triage(msg, recent_dialogue=""):
         calls["triage"] += 1
         return False
     hit = {"simple": 0}
@@ -620,7 +620,7 @@ async def test_greeting_short_circuits_without_llm_triage():
 async def test_non_greeting_still_uses_llm_triage():
     """非寒暄消息仍交 LLM triage 判简单/复杂。"""
     calls = {"triage": 0}
-    async def counting_triage(msg):
+    async def counting_triage(msg, recent_dialogue=""):
         calls["triage"] += 1
         return True
     orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [])
@@ -645,7 +645,7 @@ async def test_force_simple_bypasses_triage_and_planning():
         async def replan(self, goal, plan, feedback, skill_hint="", *, tools_desc=""):
             return _plan(_s("s1"))
 
-    async def counting_triage(msg):
+    async def counting_triage(msg, recent_dialogue=""):
         calls["triage"] += 1
         return False   # 判复杂：只有真正短路才不会走到规划
 
@@ -979,7 +979,7 @@ async def test_skill_hit_skips_triage_call():
     called = {"n": 0}
     orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [])
 
-    async def _counting_triage(msg):
+    async def _counting_triage(msg, recent_dialogue=""):
         called["n"] += 1
         return True
     orch._is_simple = _counting_triage
@@ -1310,3 +1310,64 @@ async def test_skill_hint_reaches_simple_answer_under_force_simple():
     orch._simple_answer = cap_simple
     [ev async for ev in orch.run("讲讲我的错题", verify=False, force_simple=True)]
     assert seen["skill_hint"] == "剧本正文"
+
+
+# ---------- triage 必须看得见上下文 ----------
+
+def _triage_orch(reply: str):
+    """只装 triage 需要的那点依赖，直接测 _is_simple 本身（不是替身）。"""
+    seen = {}
+
+    async def _fc(system, user):
+        seen["system"], seen["user"] = system, user
+        return reply
+    o = Orchestrator.__new__(Orchestrator)
+    o._fast_complete = _fc
+    return o, seen
+
+
+async def test_triage_receives_recent_dialogue():
+    """回归：triage 只看孤立的一句话，多步任务的追问被判成简单。
+
+    后果不只是显示忽合忽分（计划树 vs 计划块+独立工具块）——它真的跳过了规划，
+    该拆成多步的活儿退化成一轮 ReAct。
+    """
+    o, seen = _triage_orch("complex")
+    await o._is_simple("再详细点", "用户：帮我调研 AI 现状并整理成笔记\n助手：已完成三步…")
+    assert "再详细点" in seen["user"]
+    assert "帮我调研" in seen["user"], "最近对话必须进 triage 的输入"
+    assert "最近对话" in seen["user"] and "本次消息" in seen["user"]   # 两段要能分辨
+
+
+async def test_triage_prompt_tells_model_followups_are_complex():
+    """光把对话塞进去不够：得明说「承接前文任务的追问算复杂」，否则短句照样判 simple。"""
+    from app.orchestration.orchestrator import TRIAGE_SYSTEM
+    assert "追问" in TRIAGE_SYSTEM and "复杂" in TRIAGE_SYSTEM
+
+
+async def test_triage_without_dialogue_keeps_bare_message():
+    """首轮没有上下文时保持原样，不给 triage 塞空壳标签。"""
+    o, seen = _triage_orch("simple")
+    assert await o._is_simple("你好") is True
+    assert seen["user"] == "你好"
+
+
+async def test_triage_dialogue_is_capped_and_keeps_tail():
+    """对话截断保尾：越近的轮次越能说明当前意图，且 triage 每轮都跑，不能无界增长。"""
+    from app.orchestration.orchestrator import _TRIAGE_DIALOGUE_MAX
+    o, seen = _triage_orch("complex")
+    long_dialogue = "【最早这轮】" + "中间无关内容。" * 500 + "【最近这轮】帮我调研 AI 现状"
+    await o._is_simple("继续", long_dialogue)
+    assert "【最近这轮】帮我调研 AI 现状" in seen["user"], "必须保住最近的轮次"
+    assert "【最早这轮】" not in seen["user"], "超限部分应从头部截掉"
+    assert len(seen["user"]) < _TRIAGE_DIALOGUE_MAX + 200
+
+
+async def test_triage_failure_still_falls_back_to_full_orchestration():
+    """triage 调用失败时仍走完整编排（宁可多做不可少做），不因新增参数改变。"""
+    o = Orchestrator.__new__(Orchestrator)
+
+    async def _boom(system, user):
+        raise RuntimeError("端点抖动")
+    o._fast_complete = _boom
+    assert await o._is_simple("继续", "前文…") is False
