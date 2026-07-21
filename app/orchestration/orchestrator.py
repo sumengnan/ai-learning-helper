@@ -269,7 +269,8 @@ class Orchestrator:
             yield ev
 
     async def _simple_answer_verified(self, message: str, budget=None, *, context=None,
-                                      registry=None, skill_hint: str = ""):
+                                      registry=None, skill_hint: str = "",
+                                      in_exam: bool = True):
         """带终局校验的简单直答。用于考试轮（force_simple + 前端结果校验开）。
 
         与多步路径的区别是**不重规划**：考试是有状态流程，重新拆解会打乱逐题推进。
@@ -301,7 +302,8 @@ class Orchestrator:
         # 校验器只看到「目标：抽取 5 道题考试」和「产出：第 1 题」，于是判「缺失第 2~5 题、
         # 实质性内容遗漏」——而逐题呈现恰恰是对的。误判的代价不对称：它会触发整轮重答，
         # 用户白等一次，重答出来的还是同一道题。故把考试的推进规则明确告诉校验器。
-        review = await self._critic.review(_EXAM_REVIEW_NOTE + message, plan, arts)
+        review = await self._critic.review(
+            (_EXAM_REVIEW_NOTE + message) if in_exam else message, plan, arts)
         if review.accept:
             yield Progress(scope="verify", text="结果校验通过", status="ok")
             if finished_ev is not None:
@@ -439,10 +441,15 @@ class Orchestrator:
                 # 讲解讲错（判定说反、漏告知「已存入错题集」、篡改下一题）此前无人兜底。
                 # 其余简单轮维持原样：校验寒暄没有意义，且每轮多一次主模型往返会显著拖慢
                 # 最快的那条路径。
-                if force_simple and verify:
+                # 开了结果校验就校验，寒暄除外。此前只有考试轮（force_simple）才校验，理由是
+                # 「校验寒暄没意义、且拖慢最快那条路径」——但简单路径如今也承接实质任务
+                # （翻译/总结/改写这一段：原料已在消息里，不需拆步骤，triage 判 simple），
+                # 那些是真交付物，开了开关却完全不校验，等于开关在这条路上形同虚设。
+                # 仍放过 _obvious_simple（纯寒暄/致谢）：校验「你好」纯属白烧一次往返。
+                if verify and (force_simple or not _obvious_simple(user_message)):
                     async for ev in self._simple_answer_verified(
                             user_message, budget, context=context, registry=registry,
-                            skill_hint=skill_hint):
+                            skill_hint=skill_hint, in_exam=force_simple):
                         yield ev
                 else:
                     async for ev in self._simple_answer(user_message, budget, context=context,
