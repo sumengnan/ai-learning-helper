@@ -46,7 +46,11 @@ class DownloadStore:
             "WHERE user_id IS ? AND content_hash=?",
             (user_id, h)).fetchone()
         if row is not None:
-            return {"id": row[0], "filename": row[1], "size": row[2], "content_type": row[3]}
+            # reused=True：这条记录是**早先存的**（可能来自上一轮、甚至上周的另一个会话）。
+            # 调用方据此判断"这个 id 是不是本次新建的"——按 id 清理作废产物时，
+            # 删掉一条复用来的记录等于删用户早先的文件。
+            return {"id": row[0], "filename": row[1], "size": row[2],
+                    "content_type": row[3], "reused": True}
         did = uuid4().hex
         with open(os.path.join(self._dir, did), "wb") as f:
             f.write(data)
@@ -57,7 +61,7 @@ class DownloadStore:
             (did, user_id, filename, len(data), content_type, _now(), self._seq, h))
         self._db.commit()
         return {"id": did, "filename": filename, "size": len(data),
-                "content_type": content_type}
+                "content_type": content_type, "reused": False}
 
     def _row(self, r) -> dict:
         return {"id": r[0], "filename": r[1], "size": r[2],
