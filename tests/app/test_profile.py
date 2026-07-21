@@ -79,7 +79,7 @@ def test_render_full_joins_prefs():
 # ---------- API ----------
 
 def _auth(client, username="u"):
-    r = client.post("/api/auth/register", json={"username": username, "password": "pw1234"})
+    r = client.post("/api/auth/register", json={"username": username, "full_name": "测试用户", "password": "pw1234"})
     token = r.json()["token"]
     return {"Authorization": f"Bearer {token}"}
 
@@ -122,3 +122,30 @@ def test_api_isolated_between_users():
     client.put("/api/profile", headers=ha, json={
         "identity": "alice的", "goal": "", "explain_prefs": [], "tone": "", "notes": ""})
     assert client.get("/api/profile", headers=hb).json()["identity"] == ""
+
+
+# ---------- 姓名并入 <user_profile> ----------
+
+def test_full_name_rendered_into_block():
+    # 让模型知道该怎么称呼用户；与个性化同块，共用「遵循但不得编造」的框
+    block = render_profile_block({"identity": "初学者"}, full_name="张三")
+    assert "- 姓名：张三" in block
+    assert "初学者" in block
+
+
+def test_full_name_alone_is_enough_to_render_block():
+    # 只有姓名、个性化全空时也要出块——否则新用户的姓名进不了 prompt
+    block = render_profile_block(None, full_name="张三")
+    assert "- 姓名：张三" in block
+
+
+def test_blank_full_name_changes_nothing():
+    assert render_profile_block(None, full_name="") == ""
+    assert render_profile_block(None, full_name="   ") == ""
+    assert render_profile_block(None) == ""
+
+
+def test_full_name_is_length_capped():
+    # 姓名字段来自用户自填，和其余个性化字段一样要限长，别把系统提示撑爆
+    block = render_profile_block(None, full_name="长" * 500)
+    assert len(block) < 500

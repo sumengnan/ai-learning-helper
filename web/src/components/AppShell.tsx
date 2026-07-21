@@ -7,6 +7,7 @@ import {
   Button, Menu, MenuItem, Avatar,
 } from "@mui/material";
 import type { Theme } from "@mui/material/styles";
+import type { User } from "../types";
 import { AnimatePresence, motion } from "framer-motion";
 import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutlined";
 import SpaceDashboardIcon from "@mui/icons-material/SpaceDashboard";
@@ -18,6 +19,8 @@ import Brightness4Icon from "@mui/icons-material/Brightness4";
 import Brightness7Icon from "@mui/icons-material/Brightness7";
 import LogoutIcon from "@mui/icons-material/Logout";
 import TuneIcon from "@mui/icons-material/Tune";
+import BadgeIcon from "@mui/icons-material/BadgeOutlined";
+import LockResetIcon from "@mui/icons-material/LockReset";
 import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import FaceRetouchingNaturalIcon from "@mui/icons-material/FaceRetouchingNatural";
 import { useColorMode } from "../ThemeModeProvider";
@@ -25,12 +28,20 @@ import { useAuth } from "../auth/AuthProvider";
 import { useProfileDrawer } from "../pages/ProfileDrawer";
 import { VersionBadge } from "./VersionBadge";
 import { BeianFooter } from "./BeianFooter";
+import { ChangeNameDialog, ChangePasswordDialog } from "./AccountDialogs";
 
 const WIDTH = 220;
 const MINI = 68;
 
 // 菜单/历史等“外壳”统一的浅色背景，与白色内容区拉开层次
 export const chromeBg = (t: Theme) => (t.palette.mode === "light" ? "#eceef2" : "#181a1f");
+
+/** 顶栏按钮显示的名字：优先姓名，老账号 full_name 为空则回退账号。 */
+export function displayName(user: User | null): string {
+  return user?.full_name?.trim() || user?.username || "未登录";
+}
+
+export const avatarLetter = (name: string) => name.trim()[0]?.toUpperCase() || "?";
 
 const NAV: { to: string; label: string; icon: ReactNode }[] = [
   { to: "/", label: "概览", icon: <SpaceDashboardIcon /> },
@@ -50,6 +61,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
   const [navOpen, setNavOpen] = useState(true);
   const width = navOpen ? WIDTH : MINI;
+  const name = displayName(user);
+  const [dialog, setDialog] = useState<null | "name" | "password">(null);
 
   const isActive = (to: string) =>
     to === "/" ? location.pathname === "/" : location.pathname.startsWith(to);
@@ -181,14 +194,35 @@ export function AppShell({ children }: { children: ReactNode }) {
             </Tooltip>
             <Button color="inherit" onClick={(e) => setMenuAnchor(e.currentTarget)}
               startIcon={<Avatar sx={{ width: 24, height: 24, fontSize: 14 }}>
-                {user?.username?.[0]?.toUpperCase() || "?"}
+                {avatarLetter(name)}
               </Avatar>}>
-              {user?.username || "未登录"}
+              {name}
             </Button>
             <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)}
               onClose={() => setMenuAnchor(null)}
+              // 右对齐：按钮贴着视口右缘，用 center 反而居中不了——菜单会超出屏幕、
+              // 被 MUI 的贴边保护推回来，位置看着更随意。右缘对齐是这个位置的正解。
               anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
               transformOrigin={{ vertical: "top", horizontal: "right" }}>
+              {/* 账号只在菜单里露出：账号 + 姓名这一对正是「忘记密码」的核身凭据
+                  （UserStore.verify_name），不并排常驻在顶栏上给旁人一眼看全。 */}
+              {user && (
+                <Box sx={{ px: 2, py: 1, minWidth: 180 }}>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>{name}</Typography>
+                  <Typography variant="caption" color="text.secondary" noWrap>
+                    @{user.username}
+                  </Typography>
+                </Box>
+              )}
+              {user && <Divider />}
+              <MenuItem onClick={() => { setMenuAnchor(null); setDialog("name"); }}>
+                <ListItemIcon><BadgeIcon fontSize="small" /></ListItemIcon>
+                修改姓名
+              </MenuItem>
+              <MenuItem onClick={() => { setMenuAnchor(null); setDialog("password"); }}>
+                <ListItemIcon><LockResetIcon fontSize="small" /></ListItemIcon>
+                修改密码
+              </MenuItem>
               <MenuItem onClick={() => { setMenuAnchor(null); openProfile(); }}>
                 <ListItemIcon><TuneIcon fontSize="small" /></ListItemIcon>
                 AI 个性化
@@ -207,6 +241,12 @@ export function AppShell({ children }: { children: ReactNode }) {
         {/* 备案信息挂在外壳而非各页面：一处渲染即覆盖全部路由，且切页不重新拉取 */}
         <BeianFooter divider />
       </Box>
+
+      {/* key 让对话框每次打开都是全新状态：否则上次填了一半的密码会留在表单里 */}
+      <ChangeNameDialog key={`name-${dialog}`}
+        open={dialog === "name"} onClose={() => setDialog(null)} />
+      <ChangePasswordDialog key={`pwd-${dialog}`}
+        open={dialog === "password"} onClose={() => setDialog(null)} />
     </Box>
   );
 }

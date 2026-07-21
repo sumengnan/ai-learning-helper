@@ -64,7 +64,7 @@ def _client(make_mock, turns, http_tool, **cfg_kw):
 
 
 def _auth(client):
-    r = client.post("/api/auth/register", json={"username": "u", "password": "pw1234"})
+    r = client.post("/api/auth/register", json={"username": "u", "full_name": "测试用户", "password": "pw1234"})
     return {"Authorization": f"Bearer {r.json()['token']}"}
 
 
@@ -150,7 +150,7 @@ def test_blocklist_shared_across_users(make_mock, tool_turn, text_turn):
     cid_a = client.post("/api/conversations", json={}, headers=ha).json()["id"]
     _chat(client, ha, cid_a, "A 查")
 
-    rb = client.post("/api/auth/register", json={"username": "b", "password": "pw1234"})
+    rb = client.post("/api/auth/register", json={"username": "b", "full_name": "测试用户", "password": "pw1234"})
     hb = {"Authorization": f"Bearer {rb.json()['token']}"}
     cid_b = client.post("/api/conversations", json={}, headers=hb).json()["id"]
     r = _tool_results(_chat(client, hb, cid_b, "B 查"))

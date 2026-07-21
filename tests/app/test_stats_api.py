@@ -31,7 +31,7 @@ def _cfg():
 
 
 def _auth_headers(client, username="u"):
-    r = client.post("/api/auth/register", json={"username": username, "password": "pw1234"})
+    r = client.post("/api/auth/register", json={"username": username, "full_name": "测试用户", "password": "pw1234"})
     token = r.json()["token"]
     uid = client.app.state.auth.verify_token(token)[0]
     return {"Authorization": f"Bearer {token}"}, uid

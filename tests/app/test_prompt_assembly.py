@@ -53,7 +53,7 @@ def _client(rec, tmp_path, **cfg_kw):
 
 
 def _auth(c):
-    r = c.post("/api/auth/register", json={"username": "u", "password": "pw1234"})
+    r = c.post("/api/auth/register", json={"username": "u", "full_name": "测试用户", "password": "pw1234"})
     return {"Authorization": f"Bearer {r.json()['token']}"}
 
 

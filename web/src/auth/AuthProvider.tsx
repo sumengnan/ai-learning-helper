@@ -11,8 +11,10 @@ type AuthState = {
   user: User | null;
   login: (username: string, password: string,
           captchaToken?: string, captchaText?: string) => Promise<void>;
-  register: (username: string, password: string,
+  register: (username: string, password: string, fullName: string,
              captchaToken?: string, captchaText?: string) => Promise<void>;
+  /** 用后端返回的最新 user 覆盖本地缓存（改姓名后刷新顶栏显示） */
+  refreshUser: (u: User) => void;
   logout: () => void;
 };
 
@@ -20,6 +22,7 @@ const AuthContext = createContext<AuthState>({
   user: null,
   login: async () => {},
   register: async () => {},
+  refreshUser: () => {},
   logout: () => {},
 });
 
@@ -67,9 +70,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { token, user: u } = await authApi.login(username, password, captchaToken, captchaText);
       persist(token, u);
     },
-    register: async (username, password, captchaToken, captchaText) => {
-      const { token, user: u } = await authApi.register(username, password, captchaToken, captchaText);
+    register: async (username, password, fullName, captchaToken, captchaText) => {
+      const { token, user: u } = await authApi.register(
+        username, password, fullName, captchaToken, captchaText);
       persist(token, u);
+    },
+    refreshUser: (u) => {
+      localStorage.setItem(USER_KEY, JSON.stringify(u));
+      setUser(u);
     },
     logout,
   };

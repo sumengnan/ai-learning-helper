@@ -1,4 +1,11 @@
 html, body, #root { height: 100%; margin: 0; }
-/* 整体等比缩小到 90%，等价于浏览器缩放 100%→90%；zoom 按布局缩放，
-   不会像 transform:scale 那样留白或破坏 position:fixed 的侧边栏 */
-body { zoom: 0.93; }
+/* 整体等比缩小到 93%，等价于浏览器缩放 100%→93%；zoom 按布局缩放，
+   不会像 transform:scale 那样留白或破坏 position:fixed 的侧边栏。
+
+   必须挂在 #root 而不是 body：MUI 的浮层（Menu/Select/Tooltip/Dialog）portal 到
+   document.body。挂 body 时浮层落进 zoom 作用域，而 Popover 是拿锚点的
+   getBoundingClientRect()（已是 zoom 后的视觉坐标）去写 left，绘制时又被 zoom 乘一次，
+   于是所有浮层都往左上偏，锚点越靠右偏得越狠（实测顶栏右上角的菜单偏了 130px）。
+   挂 #root 后浮层在 zoom 之外，坐标系与 rect 一致，位置就对了。
+   代价：浮层内容按 100% 渲染，比 93% 的主体略大一点。 */
+#root { zoom: 0.93; }

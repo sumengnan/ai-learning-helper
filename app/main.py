@@ -169,7 +169,8 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
                                         trajectory_judge=trajectory_judge,
                                         exam_session_store=exam_session_store,
                                         pending_store=pending_store,
-                                        url_block_store=url_block_store))
+                                        url_block_store=url_block_store,
+                                        user_store=auth.users))
     app.include_router(make_exam_router(exam_session_store))
     app.include_router(make_pending_actions_router(pending_store, question_store, wrong_store))
     app.include_router(make_documents_router(service, doc_store, config))

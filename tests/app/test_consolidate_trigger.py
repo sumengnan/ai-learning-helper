@@ -74,7 +74,7 @@ def _client(mock_embedder, text_turn, make_mock, *, count: int, maintainer,
 
 def _chat(client) -> float:
     """跑一轮聊天，返回墙钟耗时。"""
-    r = client.post("/api/auth/register", json={"username": "u", "password": "pw1234"})
+    r = client.post("/api/auth/register", json={"username": "u", "full_name": "测试用户", "password": "pw1234"})
     h = {"Authorization": f"Bearer {r.json()['token']}"}
     cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
     t0 = time.time()
@@ -151,7 +151,7 @@ def test_no_concurrent_consolidation_for_same_conversation(mock_embedder, text_t
     app = create_app(config=cfg, harness=harness, store=ConversationStore(":memory:"),
                      doc_store=DocumentStore(":memory:"))
     with TestClient(app) as client:           # 一个 portal 跨两次请求
-        r = client.post("/api/auth/register", json={"username": "u", "password": "pw1234"})
+        r = client.post("/api/auth/register", json={"username": "u", "full_name": "测试用户", "password": "pw1234"})
         h = {"Authorization": f"Bearer {r.json()['token']}"}
         cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
         for _ in range(2):                    # 同一会话连问两轮

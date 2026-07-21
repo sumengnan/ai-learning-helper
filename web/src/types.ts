@@ -42,4 +42,4 @@ export type ChatMessage = {
   elapsedMs?: number;   // 本轮总耗时（毫秒），完成时冻结
 };
 export type Conversation = { id: string; title: string; created_at: string };
-export type User = { id: string; username: string };
+export type User = { id: string; username: string; full_name?: string };

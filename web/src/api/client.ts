@@ -83,17 +83,32 @@ export const auth = {
     return r.json();
   },
   register: async (
-    username: string, password: string,
+    username: string, password: string, fullName: string,
     captchaToken = "", captchaText = "",
   ): Promise<{ token: string; user: User }> => {
     const r = await fetch("/api/auth/register", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        username, password, captcha_token: captchaToken, captcha_text: captchaText,
+        username, password, full_name: fullName,
+        captcha_token: captchaToken, captcha_text: captchaText,
       }),
     });
     if (!r.ok) throw new Error(await detail(r, "注册失败"));
     return r.json();
+  },
+  // 忘记密码：账号 + 姓名核身后直接设新密码。刻意不返回 token——重置完要求重新登录。
+  resetPassword: async (
+    username: string, fullName: string, newPassword: string,
+    captchaToken = "", captchaText = "",
+  ): Promise<void> => {
+    const r = await fetch("/api/auth/reset-password", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username, full_name: fullName, new_password: newPassword,
+        captcha_token: captchaToken, captcha_text: captchaText,
+      }),
+    });
+    if (!r.ok) throw new Error(await detail(r, "重置失败"));
   },
   login: async (
     username: string, password: string,
@@ -107,6 +122,25 @@ export const auth = {
     });
     if (!r.ok) throw new Error(await detail(r, "登录失败"));
     return r.json();
+  },
+  // 登录后自助改姓名，返回更新后的 user（调用方据此刷新顶栏显示）
+  updateName: async (fullName: string): Promise<User> => {
+    const r = await authFetch("/api/auth/profile", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ full_name: fullName }),
+    });
+    if (!r.ok) throw new Error(await detail(r, "修改姓名失败"));
+    return r.json();
+  },
+  // 登录后自助改密码。后端要核对当前密码，且不返回新 token
+  changePassword: async (currentPassword: string, newPassword: string): Promise<void> => {
+    const r = await authFetch("/api/auth/change-password", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        current_password: currentPassword, new_password: newPassword,
+      }),
+    });
+    if (!r.ok) throw new Error(await detail(r, "修改密码失败"));
   },
 };
 
