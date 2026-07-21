@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from harness.context.manager import ContextManager
 from harness.events import (
@@ -64,10 +64,15 @@ class StepArtifact:
 
     terminal=True 表示这次失败不可通过重试挽回（当前唯一来源：用户拒绝了危险操作），
     调度器应直接判 failed，不再重跑本步。
+
+    effects：本次尝试里**已经留下持久产物**的工具名（去重、保序）。重试时要告诉模型
+    「这些你上次已经做过了」，否则它会把带副作用的工具原样再调一遍——实测就是同一份笔记
+    被存两次。判据见 execute() 里对 marker 的说明。
     """
     artifact: Artifact
     error: str | None = None
     terminal: bool = False
+    effects: list[str] = field(default_factory=list)
 
 
 # 子步默认只有裸系统提示词，缺少主聊天那套工具引导，模型会拿 http_request/浏览器乱抓网页
@@ -109,8 +114,17 @@ def _system_with_guide(base: str, sandbox_guide_text: str = "") -> str:
 _GOAL_MAX = 6000
 
 
+# 重试时的既成事实告知。语气必须是「已经做完了，别再做一遍」而非「你上次做过」——
+# 后者模型会读成一句中性陈述，照样再调一次（实测：同一份笔记被存两次）。
+def _done_effects_note(effects: list[str]) -> str:
+    return ("\n【上次尝试已经做完的事，不要重复做】本步上次运行时已经成功调用过："
+            + "、".join(effects)
+            + "。它们产生的东西**已经存在并保留着**，本次重试是为了改进产出内容，"
+              "不是重做这些动作。**不要再调用一次**，否则会产生重复的文件/记录。")
+
+
 def _build_prompt(step: PlanStep, deps: dict[str, Artifact], hint: str = "",
-                  goal: str = "") -> str:
+                  goal: str = "", effects: list[str] | None = None) -> str:
     lines = []
     if goal:
         # 子步的上下文是全新的 ContextManager（只有系统提示词，无对话历史），execute() 此前
@@ -136,6 +150,8 @@ def _build_prompt(step: PlanStep, deps: dict[str, Artifact], hint: str = "",
                      "只有当它们明显不足以完成本步时，才另行补充检索。")
     if hint:
         lines.append(f"\n上次尝试未通过质检，请改进：{hint}")
+    if effects:
+        lines.append(_done_effects_note(effects))
     # 节流引导：减少每步的联网/工具往返（延迟主要来自这些串行调用）
     lines.append("\n要高效：检索类工具最多调用 2-3 次，信息够了就直接作答，不必反复搜。")
     lines.append("完成后直接给出该子任务的结果。")
@@ -160,12 +176,13 @@ class Executor:
         self._disable_thinking = disable_thinking
 
     async def execute(self, step: PlanStep, deps: dict[str, Artifact], hint: str = "",
-                      *, registry: ToolRegistry | None = None, goal: str = ""):
+                      *, registry: ToolRegistry | None = None, goal: str = "",
+                      done_effects: list[str] | None = None):
         """执行一步。yield Progress 事件，最后 yield 一个 StepArtifact。
 
         registry：本轮每请求工具表（含用户级 save_download/知识库/考试/附件工具）。编排器传入
         （已隐藏 update_plan）；缺省回退装配期 registry（主要供测试）。"""
-        prompt = _build_prompt(step, deps, hint, goal)
+        prompt = _build_prompt(step, deps, hint, goal, done_effects)
         loop = AgentLoop(
             client=self._client, registry=registry if registry is not None else self._registry,
             context=ContextManager(
@@ -178,6 +195,7 @@ class Executor:
         user_denied = False
         tool_names: dict[str, str] = {}
         tool_args: dict[str, object] = {}   # 暂存入参，供完成行带全（前端按 key 合并只留最后一条）
+        effects: list[str] = []             # 本次已留下持久产物的工具（供重试时告知模型）
         token = set_current_agent(f"executor:{step.id}")
         think_token = None
         if self._disable_thinking:  # 本步强制关思考：叠加在外层 override 之上，finally 还原
@@ -205,6 +223,16 @@ class Executor:
                     name = tool_names.get(r.tool_call_id, "工具")
                     if r.is_error and _USER_DENIED_MARK in (r.content or ""):
                         user_denied = True          # 本步含被用户拒绝的操作 → 不可重试
+                    # 「这次调用留下了持久产物」的判据：结果带了 marker（model_content 非空
+                    # 即表示 content 里有只给机器看的尾巴，如〔下载ID:x〕〔知识ID:x〕）。
+                    # 用 marker 而非硬编码工具名单：名单会漂，而 marker 是既有约定——
+                    # 任何新工具只要按约定给产物发 id，就自动被这里覆盖，不用记得回来改。
+                    # 失败的调用没有 marker：ToolExecutor 只在成功分支设 model_content，
+                    # 故 is_error 那半边判断当前是冗余的（去掉行为不变，试过）。留着是因为
+                    # 「失败的保存不该算数」是这里的实质要求，而它现在只由另一处实现保证——
+                    # 那处一改，这里就是最后一道闸。
+                    if not r.is_error and r.model_content is not None and name not in effects:
+                        effects.append(name)
                     yield ev
                     yield Progress(scope, f"调用工具 {name}",
                                    status="error" if r.is_error else "ok", key=r.tool_call_id,
@@ -224,5 +252,8 @@ class Executor:
             if think_token is not None:
                 from harness.llm.openai_compat import reset_extra_body_override
                 reset_extra_body_override(think_token)
+        # 累进而非覆盖：本次没再调不代表上次的产物消失了，下次重试仍须被告知。
+        merged = list(done_effects or [])
+        merged += [e for e in effects if e not in merged]
         yield StepArtifact(Artifact(summary=final_text, data={}, files=[]),
-                           error=error, terminal=user_denied)
+                           error=error, terminal=user_denied, effects=merged)

@@ -589,6 +589,10 @@ class Orchestrator:
         # savers 为 None（没有一步像是要产文件）时不限制，退回原行为——正则漏判把该存的那步
         # 也堵死，比重复保存严重得多。
         savers = file_saving_step_ids(plan)
+        # 每步「已经留下持久产物的工具」，跨重试累积。与 retry_hints 同生命周期：
+        # 重试的 prompt 里此前只有质检意见，没有「上次已经做过什么」，于是带副作用的工具
+        # 被原样重来——同一份笔记存两次即由此而来。
+        step_effects: dict[str, list[str]] = {}
 
         def _reg_for(step: PlanStep):
             if exec_reg is None or savers is None or step.id in savers:
@@ -625,17 +629,23 @@ class Orchestrator:
                 art = None
                 err = None
                 terminal = False
+                effects = list(step_effects.get(step.id, ()))
                 try:
                     async for ev in self._executor.execute(
                             step, deps, retry_hints.get(step.id, ""),
-                            registry=_reg_for(step), goal=goal):
+                            registry=_reg_for(step), goal=goal,
+                            done_effects=effects):
                         if isinstance(ev, StepArtifact):
                             art, err, terminal = ev.artifact, ev.error, ev.terminal
+                            effects = list(ev.effects)
                         else:
                             await queue.put(("ev", ev))
                 except Exception as e:  # 单步崩溃隔离
+                    # 崩在工具调用之后也要记账：产物已经落库了，重试时照样不能重做
+                    step_effects[step.id] = effects
                     await queue.put(("done", (step, None, str(e), False)))
                     return
+                step_effects[step.id] = effects
                 await queue.put(("done", (step, art, err, terminal)))
 
             tasks = [asyncio.create_task(_worker(s)) for s in ready]

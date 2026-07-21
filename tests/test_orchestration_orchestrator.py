@@ -37,7 +37,7 @@ class FakeExecutor:
     """每步产出 summary=step.id 的 Artifact；记录执行顺序供并行断言。"""
     def __init__(self, order):
         self._order = order
-    async def execute(self, step, deps, hint="", *, registry=None, goal=""):
+    async def execute(self, step, deps, hint="", *, registry=None, goal="", done_effects=None):
         from app.orchestration.executor import StepArtifact
         self._order.append(step.id)
         yield Progress(f"subagent:executor:{step.id}", "开始")
@@ -244,7 +244,7 @@ async def test_run_aggregates_all_usage_incl_planner_critic():
     from app.orchestration.plan import Artifact
 
     class UExec:
-        async def execute(self, step, deps, hint="", *, registry=None, goal=""):
+        async def execute(self, step, deps, hint="", *, registry=None, goal="", done_effects=None):
             record_usage(Usage(0, 0, 100), 0.01)
             yield StepArtifact(Artifact(summary=f"done-{step.id}"))
 
@@ -473,7 +473,7 @@ async def test_parallel_steps_actually_concurrent():
     class ProbeExecutor:
         def __init__(self):
             self.now = 0; self.peak = 0
-        async def execute(self, step, deps, hint="", *, registry=None, goal=""):
+        async def execute(self, step, deps, hint="", *, registry=None, goal="", done_effects=None):
             self.now += 1; self.peak = max(self.peak, self.now)
             await asyncio.sleep(0)
             self.now -= 1
@@ -495,7 +495,7 @@ async def test_early_abort_cancels_pending_workers():
 
     class MixedExecutor:
         """s_fast 立刻产出一个事件；s_slow 阻塞，被取消时记录自己。"""
-        async def execute(self, step, deps, hint="", *, registry=None, goal=""):
+        async def execute(self, step, deps, hint="", *, registry=None, goal="", done_effects=None):
             if step.id == "s_slow":
                 try:
                     await asyncio.sleep(100)
@@ -541,7 +541,7 @@ async def test_run_wraps_registry_as_hiding_view_for_executor():
     from app.orchestration.executor import HidingRegistry
     seen = {}
     class CapExec:
-        async def execute(self, step, deps, hint="", *, registry=None, goal=""):
+        async def execute(self, step, deps, hint="", *, registry=None, goal="", done_effects=None):
             from app.orchestration.executor import StepArtifact
             seen["reg"] = registry
             yield StepArtifact(Artifact(summary="x"))
@@ -724,7 +724,7 @@ async def test_run_emits_per_model_usage():
     from app.orchestration.plan import Artifact
 
     class MExec:
-        async def execute(self, step, deps, hint="", *, registry=None, goal=""):
+        async def execute(self, step, deps, hint="", *, registry=None, goal="", done_effects=None):
             record_usage(Usage(0, 0, 100), 0.01, "fast-model")
             yield StepArtifact(Artifact(summary=f"done-{step.id}"))
 
@@ -846,7 +846,7 @@ class _DenyingExecutor:
     def __init__(self, order):
         self._order = order
 
-    async def execute(self, step, deps, hint="", *, registry=None, goal=""):
+    async def execute(self, step, deps, hint="", *, registry=None, goal="", done_effects=None):
         from app.orchestration.executor import StepArtifact
         self._order.append(step.id)
         yield Progress(f"subagent:executor:{step.id}", "开始")
@@ -900,7 +900,7 @@ class _CapturingExecutor:
     def __init__(self):
         self.seen = []
 
-    async def execute(self, step, deps, hint="", *, registry=None, goal=""):
+    async def execute(self, step, deps, hint="", *, registry=None, goal="", done_effects=None):
         from app.orchestration.executor import StepArtifact
         self.seen.append({t.name for t in registry.tools()} if registry else set())
         yield StepArtifact(Artifact(summary="done"))
@@ -1561,9 +1561,10 @@ async def _run_capturing_regs(plan, goal="把内容整理好并存成可下载�
     order = []
 
     class RecordingExecutor(FakeExecutor):
-        async def execute(self, step, deps, hint="", *, registry=None, goal=""):
+        async def execute(self, step, deps, hint="", *, registry=None, goal="", done_effects=None):
             seen[step.id] = _names(registry)
-            async for ev in super().execute(step, deps, hint, registry=registry, goal=goal):
+            async for ev in super().execute(step, deps, hint, registry=registry, goal=goal,
+                                            done_effects=done_effects):
                 yield ev
 
     orch = _mk(FakePlanner([plan]), FakeCritic(), order)
@@ -1606,3 +1607,52 @@ async def test_multiple_file_steps_all_get_the_tool():
     seen = await _run_capturing_regs(plan)
     assert "save_download" in seen["s1"] and "save_download" in seen["s2"]
     assert "save_download" not in seen["s3"]
+
+
+# ---- 重试时告知「上次已经做过的带副作用调用」----
+
+async def test_retry_prompt_carries_previous_side_effects():
+    """重试的 prompt 此前只有质检意见，没有「上次已经做过什么」，于是带副作用的工具被原样
+    重来——同一份笔记存两次即由此而来。"""
+    prompts = []
+
+    class ReExecutor:
+        def __init__(self, order):
+            self._n = 0
+
+        async def execute(self, step, deps, hint="", *, registry=None, goal="",
+                          done_effects=None):
+            from app.orchestration.executor import StepArtifact, _build_prompt
+            prompts.append(_build_prompt(step, deps, hint, goal, done_effects))
+            self._n += 1
+            # 第一次：调过 save_download 并留下产物；第二次：什么也没再调
+            eff = ["save_download"] if self._n == 1 else []
+            merged = list(done_effects or []) + [e for e in eff if e not in (done_effects or [])]
+            yield StepArtifact(Artifact(summary=f"稿子v{self._n}"), effects=merged)
+
+    orch = _mk(FakePlanner([_plan(_s("s1"))]),
+               FakeCritic(validate_ok=False, reviews=(True,)), [])
+    orch._executor = ReExecutor([])
+    async for _ in orch._schedule_rounds(_plan(_s("s1")), {}, None, None, goal="g"):
+        pass
+    assert len(prompts) == 2, "该重试一次"
+    assert "save_download" not in prompts[0], "首次尝试不该凭空提到工具"
+    assert "save_download" in prompts[1], "重试必须告知上次已经存过文件"
+    assert "不要再调用一次" in prompts[1], "语气要是「别再做」，中性陈述模型会照样再调"
+
+
+async def test_side_effects_accumulate_across_retries():
+    """第 2 次没再调，不代表第 1 次的产物消失了——第 3 次仍须被告知。"""
+    from app.orchestration.executor import _build_prompt
+    step = _s("s1")
+    # 累进逻辑本身（executor.execute 末尾同款）：done_effects 与本次 effects 求并
+    got = _build_prompt(step, {}, "改进一下", "g", ["save_download"])
+    assert "save_download" in got and "不要再调用一次" in got
+
+
+def test_effects_note_absent_without_effects():
+    """没有副作用就不该平白多出一段告诫——那会让模型以为自己做过什么。"""
+    from app.orchestration.executor import _build_prompt
+    for eff in (None, []):
+        got = _build_prompt(_s("s1"), {}, "改进一下", "g", eff)
+        assert "不要再调用一次" not in got
