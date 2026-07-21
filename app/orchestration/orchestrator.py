@@ -51,6 +51,11 @@ TRIAGE_SYSTEM = (
     "若给出了最近对话，务必据此判断本次消息是不是某个多步任务的延续——"
     "承接前文任务的追问（如「再详细点」「那第三点呢」「继续」「换个角度」）算复杂，"
     "哪怕它本身很短。只有与前文任务无关的寒暄/闲聊才算简单。"
+    # 长文本容易被误读成「复杂」。但用户把原文/数据直接贴在消息里、只要求就地加工的，
+    # 不需要拆步骤也不需要工具，正是简单直答该管的；判成复杂反而绕远路。
+    "**用户已把要处理的原文/代码/数据贴在消息里、只需就地加工的**（翻译这段、总结这段、"
+    "润色一下、解释这段代码、这段报错是什么意思），一律算简单——哪怕贴的内容很长。"
+    "长度不是复杂度：要不要检索、要不要多步才是。\n"
     "只回一个词：simple 或 complex。"
 )
 
@@ -473,7 +478,8 @@ class Orchestrator:
             # 否则终局 synthesize/review 只剩最后一轮的产物 —— 违反 spec §4「保留成果」并使闭环残废。
             all_artifacts: dict[str, Artifact] = {}
             while True:
-                async for ev in self._schedule_rounds(plan, retry_hints, budget, exec_reg):
+                async for ev in self._schedule_rounds(plan, retry_hints, budget, exec_reg,
+                                                          goal=user_message):
                     yield ev
                 for s in plan.steps:      # 收走本轮 done 产物（replan 换 plan 也不丢）
                     if s.status == "done" and s.result:
@@ -558,7 +564,7 @@ class Orchestrator:
 
     # ---- 调度：一轮轮跑就绪集，直到无 pending、预算超限或无法推进（后两者带现有成果收尾）----
     async def _schedule_rounds(self, plan: Plan, retry_hints: dict[str, str], budget=None,
-                               exec_reg=None):
+                               exec_reg=None, goal: str = ""):
         while has_pending(plan):
             if budget:
                 try:
@@ -591,7 +597,8 @@ class Orchestrator:
                 terminal = False
                 try:
                     async for ev in self._executor.execute(
-                            step, deps, retry_hints.get(step.id, ""), registry=exec_reg):
+                            step, deps, retry_hints.get(step.id, ""),
+                            registry=exec_reg, goal=goal):
                         if isinstance(ev, StepArtifact):
                             art, err, terminal = ev.artifact, ev.error, ev.terminal
                         else:
