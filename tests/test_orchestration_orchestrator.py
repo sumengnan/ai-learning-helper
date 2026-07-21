@@ -37,7 +37,7 @@ class FakeExecutor:
     """每步产出 summary=step.id 的 Artifact；记录执行顺序供并行断言。"""
     def __init__(self, order):
         self._order = order
-    async def execute(self, step, deps, hint="", *, registry=None):
+    async def execute(self, step, deps, hint="", *, registry=None, goal=""):
         from app.orchestration.executor import StepArtifact
         self._order.append(step.id)
         yield Progress(f"subagent:executor:{step.id}", "开始")
@@ -244,7 +244,7 @@ async def test_run_aggregates_all_usage_incl_planner_critic():
     from app.orchestration.plan import Artifact
 
     class UExec:
-        async def execute(self, step, deps, hint="", *, registry=None):
+        async def execute(self, step, deps, hint="", *, registry=None, goal=""):
             record_usage(Usage(0, 0, 100), 0.01)
             yield StepArtifact(Artifact(summary=f"done-{step.id}"))
 
@@ -473,7 +473,7 @@ async def test_parallel_steps_actually_concurrent():
     class ProbeExecutor:
         def __init__(self):
             self.now = 0; self.peak = 0
-        async def execute(self, step, deps, hint="", *, registry=None):
+        async def execute(self, step, deps, hint="", *, registry=None, goal=""):
             self.now += 1; self.peak = max(self.peak, self.now)
             await asyncio.sleep(0)
             self.now -= 1
@@ -495,7 +495,7 @@ async def test_early_abort_cancels_pending_workers():
 
     class MixedExecutor:
         """s_fast 立刻产出一个事件；s_slow 阻塞，被取消时记录自己。"""
-        async def execute(self, step, deps, hint="", *, registry=None):
+        async def execute(self, step, deps, hint="", *, registry=None, goal=""):
             if step.id == "s_slow":
                 try:
                     await asyncio.sleep(100)
@@ -541,7 +541,7 @@ async def test_run_wraps_registry_as_hiding_view_for_executor():
     from app.orchestration.executor import HidingRegistry
     seen = {}
     class CapExec:
-        async def execute(self, step, deps, hint="", *, registry=None):
+        async def execute(self, step, deps, hint="", *, registry=None, goal=""):
             from app.orchestration.executor import StepArtifact
             seen["reg"] = registry
             yield StepArtifact(Artifact(summary="x"))
@@ -724,7 +724,7 @@ async def test_run_emits_per_model_usage():
     from app.orchestration.plan import Artifact
 
     class MExec:
-        async def execute(self, step, deps, hint="", *, registry=None):
+        async def execute(self, step, deps, hint="", *, registry=None, goal=""):
             record_usage(Usage(0, 0, 100), 0.01, "fast-model")
             yield StepArtifact(Artifact(summary=f"done-{step.id}"))
 
@@ -846,7 +846,7 @@ class _DenyingExecutor:
     def __init__(self, order):
         self._order = order
 
-    async def execute(self, step, deps, hint="", *, registry=None):
+    async def execute(self, step, deps, hint="", *, registry=None, goal=""):
         from app.orchestration.executor import StepArtifact
         self._order.append(step.id)
         yield Progress(f"subagent:executor:{step.id}", "开始")
@@ -900,7 +900,7 @@ class _CapturingExecutor:
     def __init__(self):
         self.seen = []
 
-    async def execute(self, step, deps, hint="", *, registry=None):
+    async def execute(self, step, deps, hint="", *, registry=None, goal=""):
         from app.orchestration.executor import StepArtifact
         self.seen.append({t.name for t in registry.tools()} if registry else set())
         yield StepArtifact(Artifact(summary="done"))
@@ -1439,3 +1439,14 @@ async def test_non_exam_round_review_has_no_exam_note():
     orch = _mk(FakePlanner([_plan(_s("s1"))]), _CapturingCritic(), [], triage_simple=False)
     await _run(orch, "调研 AI 现状并整理成报告")
     assert "一次只出一道" not in seen.get("goal", "")
+
+
+async def test_triage_prompt_treats_pasted_material_as_simple():
+    """「翻译这段：<长日志>」不该走编排器：原文已在消息里，不需拆步骤也不需工具。
+
+    长度不是复杂度。判成复杂会绕远路，而在子步拿不到原文时（见 executor 的 goal 修复前）
+    还会直接失败成「请提供文本」。
+    """
+    from app.orchestration.orchestrator import TRIAGE_SYSTEM
+    assert "贴在消息里" in TRIAGE_SYSTEM
+    assert "长度不是复杂度" in TRIAGE_SYSTEM

@@ -104,8 +104,24 @@ def _system_with_guide(base: str, sandbox_guide_text: str = "") -> str:
     return guide + (sandbox_guide_text or "")
 
 
-def _build_prompt(step: PlanStep, deps: dict[str, Artifact], hint: str = "") -> str:
-    lines = [f"你的子任务：{step.description}", f"预期产出：{step.expected}"]
+# 带进子步的用户原始请求上限。够覆盖「翻译/总结/改写这一大段」这类把原料贴在消息里的
+# 用法；再长的（整篇文档）本就该走附件或知识库，不宜每步都重复搬运。
+_GOAL_MAX = 6000
+
+
+def _build_prompt(step: PlanStep, deps: dict[str, Artifact], hint: str = "",
+                  goal: str = "") -> str:
+    lines = []
+    if goal:
+        # 子步的上下文是全新的 ContextManager（只有系统提示词，无对话历史），execute() 此前
+        # 也不收用户消息——于是子步对「用户到底说了什么」完全失明。
+        # 计划步的 description 是对任务的**转述**，原料不在里面：用户发「翻译这段：<日志>」，
+        # 规划器写出「将提供的英文文本翻译成中文」，子步拿到的就只有这句话，于是回
+        # 「请提供文本」。终局校验连判三次未通过，判得没错——活确实没干成。
+        # 描述自足的任务（如「搜索 AI 资讯」）不受影响，但原料贴在消息里的一大类必然失败。
+        g = goal if len(goal) <= _GOAL_MAX else goal[:_GOAL_MAX] + "\n…（原文过长已截断）"
+        lines.append(f"【用户的原始请求（可能含本步要处理的原文/数据，务必据此作答）】\n{g}\n")
+    lines += [f"你的子任务：{step.description}", f"预期产出：{step.expected}"]
     if deps:
         # 措辞刻意强硬：上面的 EXECUTOR_GUIDE 在推「优先用联网搜索工具」，两者方向相反。
         # 原文只说「供参考」，压不过那股拉力——子步照样把前置结果晾在一边自己重搜一遍，
@@ -144,12 +160,12 @@ class Executor:
         self._disable_thinking = disable_thinking
 
     async def execute(self, step: PlanStep, deps: dict[str, Artifact], hint: str = "",
-                      *, registry: ToolRegistry | None = None):
+                      *, registry: ToolRegistry | None = None, goal: str = ""):
         """执行一步。yield Progress 事件，最后 yield 一个 StepArtifact。
 
         registry：本轮每请求工具表（含用户级 save_download/知识库/考试/附件工具）。编排器传入
         （已隐藏 update_plan）；缺省回退装配期 registry（主要供测试）。"""
-        prompt = _build_prompt(step, deps, hint)
+        prompt = _build_prompt(step, deps, hint, goal)
         loop = AgentLoop(
             client=self._client, registry=registry if registry is not None else self._registry,
             context=ContextManager(
