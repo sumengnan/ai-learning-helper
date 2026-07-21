@@ -517,3 +517,31 @@ def test_step_reset_control_event_not_persisted(make_mock, monkeypatch):
     kept = [p for m in store.ui_messages(cid) if m["role"] == "assistant"
             for p in (m.get("progress") or []) if p.get("scope") == "step_reset"]
     assert kept == []
+
+
+class PurgedOrchestrator:
+    """发一条 purged 控制事件。"""
+    async def run(self, message, verify=True, *, context=None, registry=None,
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False,
+                  run_id=None, purge_side_effects=None):
+        from harness.events import RunStarted, Progress, TextDelta, RunFinished
+        from harness.types import Message, Role
+        yield RunStarted(run_id=run_id or "r1")
+        yield Progress("purged", '["d1"]', status="ok")
+        yield TextDelta(text="答复")
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content="答复"))
+
+
+def test_purged_control_event_not_persisted(make_mock, monkeypatch):
+    """purged 与 step_reset 同属控制事件，都不该落进 progress 列。
+
+    渲染层按 scope 白名单过滤，留着不会显示；但它是纯脏数据，且每多留一类
+    未被白名单覆盖的 scope，就多一分将来白名单放宽时冒出野行的风险。
+    """
+    c, store = _client(make_mock, monkeypatch, orchestrator=PurgedOrchestrator())
+    cid, events = _chat(c, _auth(c))
+    # 仍须下发给在途前端（撤按钮靠它）
+    assert any(e["type"] == "Progress" and e["data"]["scope"] == "purged" for e in events)
+    kept = [p for m in store.ui_messages(cid) if m["role"] == "assistant"
+            for p in (m.get("progress") or []) if p.get("scope") == "purged"]
+    assert kept == [], "控制事件不该落库"

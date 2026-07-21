@@ -698,9 +698,14 @@ class Orchestrator:
         if purge_side_effects is None or not has_any(fx):
             return
         purged = purge_side_effects(fx) or []
+        # 归一成扁平的下载 id 数组再发。前端拿到非数组会 Array.isArray 判假、直接 return——
+        # 按钮永远撤不掉且不报错。回调既可能返回 id 列表，也可能是 purge() 那种按类分组的
+        # dict（两者名字相近，接错很自然），这里都收下。
+        if isinstance(purged, dict):
+            purged = list(purged.get("download") or ())
         if purged:
             # 告诉在途前端撤掉已渲染的下载按钮——产物没了，按钮点开是 404
-            yield Progress("purged", json.dumps(purged, ensure_ascii=False), status="ok")
+            yield Progress("purged", json.dumps(list(purged), ensure_ascii=False), status="ok")
 
     def _on_step_fail(self, step, retry_hints: dict[str, str], reason: str, *,
                       terminal: bool = False) -> None:

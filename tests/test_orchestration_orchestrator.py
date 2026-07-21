@@ -1,3 +1,4 @@
+import json
 from harness.events import Progress, RunError, RunFinished, RunStarted, TextDelta
 from harness.tools.base import ToolRegistry
 from app.orchestration.orchestrator import Orchestrator
@@ -1682,3 +1683,34 @@ async def test_purges_even_when_step_crashes_after_producing():
     [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
     # 崩了会重试，重试又崩 —— 两次尝试各自的产物都要清，故调用 2 次
     assert purger.calls == [{"download": ["d1"], "knowledge": [], "questions": []}] * 2
+
+
+async def test_purged_payload_is_a_flat_id_array():
+    """purged 的载荷必须是**扁平 id 数组**，前端 Array.isArray 不过就静默丢弃。
+
+    这条容易踩：SideEffectPurger.purge 返回的是按类分组的 dict，而本回调约定返回 list。
+    两者名字相近、都叫"清理结果"，直接把 purger 接上来就会发出 {"download": [...]}，
+    前端 JSON.parse 得到对象 → Array.isArray 为假 → 直接 return，按钮永远撤不掉，
+    且不报任何错。只断言"文本里含 d1"是抓不住的——dict 的 JSON 里同样含 d1。
+    """
+    orch = _fx_orch([(_fx(download=["d1"]), False), (_fx(), False)], [False, True])
+    evs = [ev async for ev in orch.run(
+        "做点事", purge_side_effects=lambda fx: ["d1", "d2"])]
+    payload = [e for e in evs if isinstance(e, Progress) and e.scope == "purged"][0].text
+    assert json.loads(payload) == ["d1", "d2"]
+
+
+async def test_purged_payload_normalized_when_callback_returns_grouped_dict():
+    """回调若返回 purge() 那种分组 dict，也要归一成下载 id 数组再发，不能原样丢给前端。"""
+    orch = _fx_orch([(_fx(download=["d1"]), False), (_fx(), False)], [False, True])
+    evs = [ev async for ev in orch.run("做点事", purge_side_effects=lambda fx: {
+        "download": ["d1"], "knowledge": ["k1"], "questions": []})]
+    payload = [e for e in evs if isinstance(e, Progress) and e.scope == "purged"][0].text
+    assert json.loads(payload) == ["d1"]
+
+
+async def test_no_purged_event_when_nothing_actually_deleted():
+    """删除全失败时不发 purged：前端据它标注"已作废删除"，而文件其实还在。"""
+    orch = _fx_orch([(_fx(download=["d1"]), False), (_fx(), False)], [False, True])
+    evs = [ev async for ev in orch.run("做点事", purge_side_effects=lambda fx: [])]
+    assert [e for e in evs if isinstance(e, Progress) and e.scope == "purged"] == []

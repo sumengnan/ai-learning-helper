@@ -887,15 +887,19 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         e["cost"] += ev.cost_usd or 0.0
                         collect["usage"] = {"tokens": sum(x["tokens"] for x in ubm.values()),
                                             "cost": sum(x["cost"] for x in ubm.values())}
-                    elif isinstance(ev, Progress) and ev.scope == "step_reset":
-                        # 单步重跑：把该步上一次的进度行从**落库副本**里也抖掉。前端的实时
+                    elif isinstance(ev, Progress) and ev.scope in ("step_reset", "purged"):
+                        # 控制事件：照常下发给在途前端（撤按钮/抖记录靠它们），但不入 progress 列
+                        # ——它们不是给用户看的过程记录，留着纯属脏数据。
+                        # step_reset 还要顺手把该步上一次的行从**落库副本**里抖掉：前端的实时
                         # 处理器只管内存态，progress 列是这里另攒的——只清实时不清落库，刷新
                         # 后 ChatView 从 progress 列重新取，重复的工具调用又冒出来。
-                        # 控制事件本身不入列：它不是给用户看的过程记录。
-                        _sid = ev.text or ""
-                        collect["progress"][:] = [
-                            p for p in collect["progress"]
-                            if p.get("scope") != f"subagent:executor:{_sid}"]
+                        # 必须切片就地改：落库读的是外层那个 progress 变量（见 gen() 末尾），
+                        # 重新绑定 collect["progress"] 只换了 dict 里的引用，落库的那份纹丝不动。
+                        if ev.scope == "step_reset":
+                            _sid = ev.text or ""
+                            collect["progress"][:] = [
+                                p for p in collect["progress"]
+                                if p.get("scope") != f"subagent:executor:{_sid}"]
                     elif isinstance(ev, Progress):
                         collect["progress"].append({"scope": ev.scope, "text": ev.text,
                                                     "status": ev.status, "key": ev.key,
