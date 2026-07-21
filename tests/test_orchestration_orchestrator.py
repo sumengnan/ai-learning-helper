@@ -1641,13 +1641,37 @@ async def test_retry_prompt_carries_previous_side_effects():
     assert "不要再调用一次" in prompts[1], "语气要是「别再做」，中性陈述模型会照样再调"
 
 
-async def test_side_effects_accumulate_across_retries():
-    """第 2 次没再调，不代表第 1 次的产物消失了——第 3 次仍须被告知。"""
-    from app.orchestration.executor import _build_prompt
-    step = _s("s1")
-    # 累进逻辑本身（executor.execute 末尾同款）：done_effects 与本次 effects 求并
-    got = _build_prompt(step, {}, "改进一下", "g", ["save_download"])
-    assert "save_download" in got and "不要再调用一次" in got
+async def test_side_effects_survive_a_retry_that_calls_nothing():
+    """第 2 次没再调，不代表第 1 次的产物消失了——第 3 次仍须被告知。
+
+    真跑三次尝试（max_step_retry 调到 3），中间那次不调任何工具，看第三次的 prompt。
+    """
+    prompts = []
+
+    class ReExecutor:
+        def __init__(self, order):
+            self._n = 0
+
+        async def execute(self, step, deps, hint="", *, registry=None, goal="",
+                          done_effects=None):
+            from app.orchestration.executor import StepArtifact, _build_prompt
+            prompts.append(_build_prompt(step, deps, hint, goal, done_effects))
+            self._n += 1
+            eff = ["save_download"] if self._n == 1 else []   # 只有第一次调了
+            merged = list(done_effects or [])
+            merged += [e for e in eff if e not in merged]
+            yield StepArtifact(Artifact(summary=f"稿子v{self._n}"), effects=merged)
+
+    orch = _mk(FakePlanner([_plan(_s("s1"))]),
+               FakeCritic(validate_ok=False, reviews=(True,)), [], max_replan=0)
+    orch._executor = ReExecutor([])
+    orch._max_step_retry = 3
+    async for _ in orch._schedule_rounds(_plan(_s("s1")), {}, None, None, goal="g"):
+        pass
+    assert len(prompts) == 3, f"该跑三次，实际 {len(prompts)}"
+    assert "save_download" not in prompts[0]
+    assert "save_download" in prompts[1], "第二次须知道第一次存过"
+    assert "save_download" in prompts[2], "第二次没再调，但第一次的产物还在，第三次仍须知道"
 
 
 def test_effects_note_absent_without_effects():
@@ -1656,3 +1680,45 @@ def test_effects_note_absent_without_effects():
     for eff in (None, []):
         got = _build_prompt(_s("s1"), {}, "改进一下", "g", eff)
         assert "不要再调用一次" not in got
+
+
+# ---- 按步下发的两道安全性质：误判只许退化，不许堵死交付 ----
+
+def _p(*rows):
+    return Plan(goal="g", steps=[PlanStep(id=i, description=d, expected=e, depends_on=list(dep))
+                                 for i, d, e, dep in rows])
+
+
+def test_terminal_steps_kept_when_no_terminal_looks_like_a_saver():
+    """命中的全是中间步时，把终端步一并放行——交付物必然出自终端步。
+
+    没有这道闸，假阳性会**反向放大**：某个非交付步被误判成产文件 → savers 非空 → 就此
+    打开了对其他步的限制 → 不该存的拿到工具、该存的反被堵死，方向正好搞反。
+    有了它，误判最坏只是「多给一个用不上的工具」。
+    反之只要已有终端步认领了交付就不放行别人，否则「三个互不依赖的步全是终端步」会让限制失效
+    （见 test_multiple_file_steps_all_get_the_tool）。
+    """
+    from app.orchestration.plan import file_saving_step_ids
+    # s1 被正则误判（讲的是文件格式，并不产出文件），s2 才是真交付
+    plan = _p(("s1", "讲解如何生成配置文件", "讲解文本", ()),
+              ("s2", "把讲解整理后交给用户", "最终答复", ("s1",)))
+    assert "s2" in file_saving_step_ids(plan)
+
+
+def test_bare_extension_no_longer_triggers_restriction():
+    """裸扩展名是最弱的信号：「解析上传的 .csv 数据」只是提到文件，并不产出文件，
+    却足以把整个计划翻进限制模式。真要存文件的说法本就被「存…文件」匹配到，不缺这条。"""
+    from app.orchestration.plan import file_saving_step_ids
+    plan = _p(("s1", "解析上传的 .csv 数据并提取关键指标", "关键指标列表", ()),
+              ("s2", "生成一份分析报告", "分析报告", ("s1",)))
+    assert file_saving_step_ids(plan) is None, "不该因为提到 .csv 就开启限制"
+
+
+def test_reported_bug_still_fixed_with_the_new_guards():
+    """回归：两道安全闸都加上后，原 bug 仍须修住——
+    s1 有后继、非终端、描述不像产文件 → 拿不到 save_download。"""
+    from app.orchestration.plan import file_saving_step_ids
+    plan = _p(("s1", "撰写一份关于AI的学习笔记内容", "完整的笔记正文", ()),
+              ("s2", "将笔记保存为可下载的文件", "可下载的文件", ("s1",)))
+    savers = file_saving_step_ids(plan)
+    assert savers == {"s2"}
