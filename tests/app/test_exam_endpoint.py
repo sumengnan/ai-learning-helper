@@ -77,7 +77,7 @@ def _app_recording(es, qs, ws):
 
 
 def _register(client):
-    r = client.post("/api/auth/register", json={"username": "u", "password": "pw1234"})
+    r = client.post("/api/auth/register", json={"username": "u", "full_name": "测试用户", "password": "pw1234"})
     h = {"Authorization": f"Bearer {r.json()['token']}"}
     cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
     return r.json()["user"]["id"], h, cid
@@ -112,7 +112,7 @@ def test_save_wrong_answer_tool_hidden_during_active_exam():
 def test_active_exam_wrong_answer_saved_via_endpoint(make_mock):
     qs = QuestionStore(":memory:"); ws = WrongAnswerStore(":memory:"); es = ExamSessionStore(":memory:")
     client = _app(make_mock, es, qs, ws)
-    r = client.post("/api/auth/register", json={"username": "u", "password": "pw1234"})
+    r = client.post("/api/auth/register", json={"username": "u", "full_name": "测试用户", "password": "pw1234"})
     uid = r.json()["user"]["id"]
     h = {"Authorization": f"Bearer {r.json()['token']}"}
     cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
@@ -139,7 +139,7 @@ def test_stale_client_save_wrong_false_is_ignored(make_mock):
     """save_wrong 开关已移除：老前端仍发 save_wrong=false 时该字段被忽略，答错照样入库。"""
     qs = QuestionStore(":memory:"); ws = WrongAnswerStore(":memory:"); es = ExamSessionStore(":memory:")
     client = _app(make_mock, es, qs, ws)
-    r = client.post("/api/auth/register", json={"username": "u", "password": "pw1234"})
+    r = client.post("/api/auth/register", json={"username": "u", "full_name": "测试用户", "password": "pw1234"})
     uid = r.json()["user"]["id"]
     h = {"Authorization": f"Bearer {r.json()['token']}"}
     cid = client.post("/api/conversations", json={}, headers=h).json()["id"]

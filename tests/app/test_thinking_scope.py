@@ -66,7 +66,7 @@ def _client(probe, verifier=None, **cfg_kw):
 
 
 def _chat(client, *, think: bool):
-    r = client.post("/api/auth/register", json={"username": "u", "password": "pw1234"})
+    r = client.post("/api/auth/register", json={"username": "u", "full_name": "测试用户", "password": "pw1234"})
     h = {"Authorization": f"Bearer {r.json()['token']}"}
     cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
     with client.stream("POST", "/api/chat",

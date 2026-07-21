@@ -11,7 +11,7 @@ type AuthState = {
   user: User | null;
   login: (username: string, password: string,
           captchaToken?: string, captchaText?: string) => Promise<void>;
-  register: (username: string, password: string,
+  register: (username: string, password: string, fullName: string,
              captchaToken?: string, captchaText?: string) => Promise<void>;
   logout: () => void;
 };
@@ -67,8 +67,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { token, user: u } = await authApi.login(username, password, captchaToken, captchaText);
       persist(token, u);
     },
-    register: async (username, password, captchaToken, captchaText) => {
-      const { token, user: u } = await authApi.register(username, password, captchaToken, captchaText);
+    register: async (username, password, fullName, captchaToken, captchaText) => {
+      const { token, user: u } = await authApi.register(
+        username, password, fullName, captchaToken, captchaText);
       persist(token, u);
     },
     logout,

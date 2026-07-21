@@ -27,6 +27,15 @@ def _hash_password(password: str, salt: str) -> str:
     return dk.hex()
 
 
+def _norm_name(name: str) -> str:
+    """姓名比对前的归一化：去首尾空白、折叠内部空白、大小写无关。
+
+    「张三 」和「张三」、「Li Ming」和「li  ming」是同一个人；让这种差异判失败，
+    只会把用户挡在自己账号外面，并不会挡住任何攻击者。
+    """
+    return " ".join((name or "").split()).casefold()
+
+
 class UsernameTaken(Exception):
     """注册用户名已存在。"""
 
@@ -40,16 +49,59 @@ class UserStore:
             self._db = open_db(db_path)
             migrate(self._db)
 
-    def create(self, username: str, password: str) -> str:
+    def create(self, username: str, password: str, full_name: str = "") -> str:
         if self.exists_username(username):
             raise UsernameTaken(username)
         uid = uuid4().hex
         salt = _bytes_to_hex_salt()
         self._db.execute(
-            "INSERT INTO users(id, username, password_hash, salt, created_at) VALUES (?,?,?,?,?)",
-            (uid, username, _hash_password(password, salt), salt, _now_iso()))
+            "INSERT INTO users(id, username, password_hash, salt, created_at, full_name)"
+            " VALUES (?,?,?,?,?,?)",
+            (uid, username, _hash_password(password, salt), salt, _now_iso(),
+             _norm_name(full_name) or None))
         self._db.commit()
         return uid
+
+    def verify_name(self, username: str, full_name: str) -> str | None:
+        """账号 + 姓名是否对得上；对得上返回 uid，否则 None（供「忘记密码」核身）。
+
+        姓名是个弱得多的凭据（可能公开、可猜），故此处只做身份核对，真正拦住暴力猜测的是
+        验证码 + 上层的失败次数节流（见 api/auth.py）。这里三件事必须做到：
+        - 归一化后再比：用户重填时的大小写与前后空格差异不该判失败；
+        - 常数时间比较：别把「姓名前几个字对了」变成一条可测的旁路。注意要比字节——
+          compare_digest 对非 ASCII 的 str 直接抛 TypeError，中文姓名一律走不通；
+        - 库里没姓名（老账号，full_name 为 NULL）一律失败——不能让空输入配上空姓名。
+          两个空判缺一不可，但只去掉 `not stored` 行为不变（非空输入本就配不上空姓名），
+          留着是为了在「日后有人放宽空姓名限制」时仍有一道拦得住的闸。
+        """
+        row = self._db.execute(
+            "SELECT id, full_name FROM users WHERE username=?", (username,)).fetchone()
+        if row is None:
+            return None
+        uid, stored = row
+        given = _norm_name(full_name)
+        if not stored or not given:
+            return None
+        return uid if hmac.compare_digest(
+            _norm_name(stored).encode("utf-8"), given.encode("utf-8")) else None
+
+    def set_password(self, user_id: str, password: str) -> bool:
+        """重置密码。顺带换一枚新 salt：旧 salt 可能已随旧库泄露，重置正是换掉它的时机。"""
+        salt = _bytes_to_hex_salt()
+        cur = self._db.execute(
+            "UPDATE users SET password_hash=?, salt=? WHERE id=?",
+            (_hash_password(password, salt), salt, user_id))
+        self._db.commit()
+        return cur.rowcount > 0
+
+    def set_full_name(self, user_id: str, full_name: str) -> bool:
+        """补填/修改姓名。老账号（full_name 为 NULL）靠这个才能用上「忘记密码」。"""
+        name = _norm_name(full_name)
+        if not name:
+            return False
+        cur = self._db.execute("UPDATE users SET full_name=? WHERE id=?", (name, user_id))
+        self._db.commit()
+        return cur.rowcount > 0
 
     def exists_username(self, username: str) -> bool:
         return self._db.execute(
@@ -67,8 +119,8 @@ class UserStore:
 
     def get(self, user_id: str) -> dict | None:
         row = self._db.execute(
-            "SELECT id, username FROM users WHERE id=?", (user_id,)).fetchone()
-        return {"id": row[0], "username": row[1]} if row else None
+            "SELECT id, username, full_name FROM users WHERE id=?", (user_id,)).fetchone()
+        return {"id": row[0], "username": row[1], "full_name": row[2] or ""} if row else None
 
 
 def _bytes_to_hex_salt() -> str:

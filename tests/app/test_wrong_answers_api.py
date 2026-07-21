@@ -41,7 +41,7 @@ def _app():
 
 
 def _auth(client, username="u"):
-    r = client.post("/api/auth/register", json={"username": username, "password": "pw1234"})
+    r = client.post("/api/auth/register", json={"username": username, "full_name": "测试用户", "password": "pw1234"})
     return {"Authorization": f"Bearer {r.json()['token']}"}
 
 

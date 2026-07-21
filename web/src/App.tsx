@@ -7,6 +7,7 @@ import { AppShell } from "./components/AppShell";
 import { ProfileDrawerProvider } from "./pages/ProfileDrawer";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
+import { ForgotPasswordPage } from "./pages/ForgotPasswordPage";
 import { ChatPage } from "./pages/ChatPage";
 import HomeView from "./pages/HomeView";
 import { KnowledgeView } from "./pages/KnowledgeView";
@@ -53,6 +54,7 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          <Route path="/forgot" element={<ForgotPasswordPage />} />
           <Route path="/*" element={<RequireAuth><ShellRoutes /></RequireAuth>} />
         </Routes>
       </AuthProvider>
