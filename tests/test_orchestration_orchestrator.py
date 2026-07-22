@@ -24,11 +24,13 @@ class FakePlanner:
 
 
 class FakeCritic:
-    def __init__(self, validate_ok=True, reviews=(True,)):
+    def __init__(self, validate_ok=True, reviews=(True,), validate_impossible=False):
         self._validate_ok = validate_ok
+        self._validate_impossible = validate_impossible
         self._reviews = list(reviews); self._ri = 0
     async def validate(self, step, artifact):
-        return Verdict(ok=self._validate_ok, reason="")
+        return Verdict(ok=self._validate_ok, reason="",
+                       impossible=(not self._validate_ok) and self._validate_impossible)
     async def review(self, goal, plan, artifacts):
         r = self._reviews[min(self._ri, len(self._reviews) - 1)]; self._ri += 1
         return Review(accept=r, feedback="补一下X")
@@ -184,6 +186,31 @@ async def test_validate_fail_retries_bounded_then_failed():
     events = await _run(orch)
     assert isinstance(events[-1], RunFinished)   # 不因单步失败崩溃
     assert order.count("s1") == 2                # 初次 + 1 次重试（max_step_retry=2）
+
+
+async def test_impossible_step_gives_up_immediately_no_retry():
+    """结构性障碍（Critic 判 impossible）→ 终态放弃，只跑一次，不走满 max_step_retry。
+
+    「做不到」与「没做好」是两回事：前者重试只会把同一句「我做不到」再说一遍，纯浪费。
+    对照上面的普通失败（跑 2 次），此处 impossible 只跑 1 次。
+    """
+    order = []
+    orch = _mk(FakePlanner([_plan(_s("s1"))]),
+               FakeCritic(validate_ok=False, validate_impossible=True, reviews=(True,)), order)
+    events = await _run(orch)
+    assert isinstance(events[-1], RunFinished)   # 仍带残缺成果收尾，不崩溃
+    assert order.count("s1") == 1, "impossible 步不该重试"
+
+
+async def test_downstream_of_impossible_step_is_skipped():
+    """impossible 步终态失败后，依赖它的下游步进不了就绪集 → skipped，整轮不卡死。"""
+    order = []
+    plan = _plan(_s("s1"), _s("s2", deps=["s1"]))
+    orch = _mk(FakePlanner([plan]),
+               FakeCritic(validate_ok=False, validate_impossible=True, reviews=(True,)), order)
+    await _run(orch)
+    assert order.count("s1") == 1 and "s2" not in order   # s1 一次放弃，s2 从不执行
+    assert plan.steps[0].status == "failed" and plan.steps[1].status == "skipped"
 
 
 class _CountingCritic:
@@ -768,9 +795,11 @@ async def test_run_emits_per_model_usage():
     for u in usages:
         e = agg.setdefault(u.model, {"tok": 0, "cost": 0.0})
         e["tok"] += u.usage.total_tokens; e["cost"] += u.cost_usd or 0.0
+    # 注：这里的 "fast-model"/"main-model" 是各 mock 自己塞进 record_usage 的**任意标签**，
+    # 只为验证「用量按模型名分桶聚合」这一逻辑，不代表真实分档（真实里 validate/review 走 judge）。
     assert set(agg) == {"fast-model", "main-model"}
-    assert agg["fast-model"]["tok"] == 110      # exec 100 + validate 10
-    assert agg["main-model"]["tok"] == 100      # plan 30 + review 20 + synth 50
+    assert agg["fast-model"]["tok"] == 110      # 本 mock 把 exec(100) 与 validate(10) 都标了 fast-model
+    assert agg["main-model"]["tok"] == 100      # 本 mock 把 plan(30)+review(20)+synth(50) 标了 main-model
     assert abs(agg["fast-model"]["cost"] - 0.011) < 1e-9
     assert abs(agg["main-model"]["cost"] - 0.010) < 1e-9
 
@@ -2158,3 +2187,33 @@ async def test_non_saver_step_keeps_working_file_tools():
     assert {"write_file", "read_file", "run_shell", "web_search"} <= seen["s1"], \
         "创作步仍须能写工作文件、跑沙箱、检索——被摘的只有 save_download 这一个"
     assert "save_download" in seen["s2"]
+
+
+async def test_impossible_step_suppresses_replan():
+    """结构性无法完成的步 → 不重规划。缺的工具/权限/能力本系统根本没有，重新拆一版计划
+    还是撞同一堵墙。对照 test_reject_then_replan_then_accept：那里 review 拒→重规划→跑新步 s2；
+    此处即便 review 拒，只要有 impossible 步，就不该重规划、新步 s2 从不执行。"""
+    order = []
+    planner = FakePlanner([_plan(_s("s1")), _plan(_s("s2"))])
+    # s1 校验判 impossible；review 恒拒（若无 impossible 守卫，这会触发重规划跑到 s2）
+    orch = _mk(planner,
+               FakeCritic(validate_ok=False, validate_impossible=True, reviews=(False, False)),
+               order)
+    events = await _run(orch)
+    assert isinstance(events[-1], RunFinished)          # 仍带残缺成果收尾
+    assert order.count("s1") == 1                        # 不重试
+    assert "s2" not in order, "impossible 步不该触发重规划"
+    assert planner._i == 0, "replan 一次都不该发生"
+    # 用户能看到「为什么没继续」：发了 verify 说明
+    assert any(isinstance(e, Progress) and e.scope == "verify"
+               and "无法完成" in e.text for e in events)
+
+
+async def test_plain_reject_still_replans_when_not_impossible():
+    """反向守卫：只是没做好（非 impossible）时，review 拒仍照常重规划——别误伤正常闭环。"""
+    order = []
+    planner = FakePlanner([_plan(_s("s1")), _plan(_s("s2"))])
+    # validate 通过（产出没问题），但 review 先拒后受 → 正常重规划
+    orch = _mk(planner, FakeCritic(validate_ok=True, reviews=(False, True)), order)
+    await _run(orch)
+    assert "s2" in order and planner._i == 1   # 重规划照常发生

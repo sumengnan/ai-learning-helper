@@ -496,10 +496,15 @@ class Orchestrator:
             # 跨轮累积 done 产物：replan 返回全新 Plan（旧 done 步不在其中），必须在换 plan 前收走，
             # 否则终局 synthesize/review 只剩最后一轮的产物 —— 违反 spec §4「保留成果」并使闭环残废。
             all_artifacts: dict[str, Artifact] = {}
+            # 本轮出现过「结构性无法完成」（Critic 判 impossible）的步：缺的工具/权限/能力
+            # 在本系统根本不存在，重规划也变不出来——和单步重试一样徒劳。据此跳过重规划，
+            # 直接带现有成果收尾。run 级累积：一旦有过就不再重规划。
+            impossible_seen: set[str] = set()
             while True:
                 async for ev in self._schedule_rounds(plan, retry_hints, budget, exec_reg,
                                                           goal=user_message,
-                                                          purge_side_effects=purge_side_effects):
+                                                          purge_side_effects=purge_side_effects,
+                                                          impossible_steps=impossible_seen):
                     yield ev
                 for s in plan.steps:      # 收走本轮 done 产物（replan 换 plan 也不丢）
                     if s.status == "done" and s.result:
@@ -530,6 +535,16 @@ class Orchestrator:
                                     else (review.feedback or "存在缺口，重新规划"),
                                status="ok" if review.accept else "error")
                 if review.accept or replan_count >= self._max_replan:
+                    break
+                # 有步骤结构性无法完成 → 不重规划。缺的工具/权限/能力本系统根本没有，
+                # 重新拆一版计划还是撞同一堵墙，只会空转 max_replan 轮。与单步不重试同理
+                # （见 _on_step_fail 的 impossible），带现有成果如实收尾。review 仍已跑过一次，
+                # 用于决定最终措辞；这里只拦住其后的重规划。
+                if impossible_seen:
+                    yield Progress(scope="verify",
+                                   text="存在无法完成的步骤（缺必要工具/权限/能力），"
+                                        "重新规划也无法解决，带现有成果收尾",
+                                   status="error")
                     break
                 # 命中技能 → 不重规划。技能剧本就是这类任务的既定流程，重新拆解等于把它推翻，
                 # 用户会看到步骤中途凭空变样。重规划本是用来纠正「计划拆错了」的，而剧本恰恰
@@ -584,7 +599,8 @@ class Orchestrator:
 
     # ---- 调度：一轮轮跑就绪集，直到无 pending、预算超限或无法推进（后两者带现有成果收尾）----
     async def _schedule_rounds(self, plan: Plan, retry_hints: dict[str, str], budget=None,
-                               exec_reg=None, goal: str = "", purge_side_effects=None):
+                               exec_reg=None, goal: str = "", purge_side_effects=None,
+                               impossible_steps: set | None = None):
         # 产出文件的步骤才拿得到 save_download。计划常拆成「1.生成内容 → 2.存成文件」，
         # 而工具表原先是按轮算的，两步都看得见它：第 1 步校验没过、被要求重试时就会抓它用上，
         # 第 2 步再存一次，下载区两份重复文件（实测症状）。此处按步收紧到该给的那步。
@@ -686,10 +702,15 @@ class Orchestrator:
                         step.elapsed_ms = _elapsed(step)   # 定格耗时
                         retry_hints.pop(step.id, None)
                     else:
-                        # 用户拒绝了本步里的危险操作 → 终态失败，不重试：
-                        # 重跑只会把同一个弹窗再怼给用户一次，答案不会变。
+                        # 终态失败（不重试）的两种确定性情形，重跑都只会得到同样结果：
+                        #   terminal —— 用户拒绝了本步里的危险操作（重跑=再怼一次弹窗）；
+                        #   verdict.impossible —— 缺工具/权限/能力的结构性障碍（重跑=再说一遍做不到）。
+                        # 其余的不通过是「没做好」，仍走重试兜底。
+                        if verdict.impossible and impossible_steps is not None:
+                            # 记给外层：这类失败重规划也解决不了，不该再拆一遍计划撞同一堵墙。
+                            impossible_steps.add(step.id)
                         self._on_step_fail(step, retry_hints, verdict.reason,
-                                           terminal=terminal)
+                                           terminal=terminal or verdict.impossible)
                         for _ev in self._settle_failed_attempt(
                                 step, fx, purge_side_effects, step_effects):
                             yield _ev

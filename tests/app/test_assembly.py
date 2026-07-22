@@ -219,10 +219,11 @@ def test_terminal_review_honors_judge_model():
                            judge_api_key="jk"))
     # completer 是闭包，从绑定的 client/模型上取证：judge 配了独立端点则该 client 不是主 client
     critic = h.orchestrator._critic
-    assert critic._complete is not critic._validate, "终局 review 与单步 validate 不该是同一个"
     assert "judge-x" in _closure_values(critic._complete), "终局 review 没走 judge 模型"
-    # 反证：单步 validate 走快速档，不该被这条改动带偏
-    assert "judge-x" not in _closure_values(critic._validate)
+    # validate 现已上调到 judge、与 review 同一个 completer（此前走快速档、故意用 is not/不含
+    # judge-x 反证；现改成同走 judge，两条断言随之反转）。
+    assert critic._complete is critic._validate, "单步 validate 现应与 review 同走 judge"
+    assert "judge-x" in _closure_values(critic._validate), "单步 validate 没走 judge 模型"
 
 
 def _closure_values(fn, depth=6) -> set:

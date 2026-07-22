@@ -45,7 +45,7 @@ flowchart TD
 
 每个步骤跑完，把「子任务描述 + 预期产出 + 实际产出」交给它判「达成了吗」。
 判据刻意**宽松务实**：方向对、内容基本可用就算通过，只有明显答非所问、空洞、南辕北辙才判不通过。
-走快速档模型（调用频繁，用 `HARNESS_FAST_MODEL`，未配则回退主模型）。
+走 judge 档（`HARNESS_JUDGE_MODEL`，未配则回退主模型）：validate 能判 impossible（终结该步并抑制重规划），一次误判代价放大到整条任务分支，故与终局 review 同级由裁判模型判——代价是它每子步都跑，走 judge 会加每轮延迟。
 
 不通过 → 该步回到就绪集重试，把不通过的理由作为提示带给下一次尝试（`retry_hints`）；
 重试到 `orchestrator_max_step_retry`（默认 2，含首次）仍不行就判 `failed`，依赖它的后续步骤
@@ -173,7 +173,7 @@ grounding 只核查**关于主题的客观事实**：问候语、建议、对资
 | `HARNESS_ORCHESTRATOR_PLANNER_MAX_RETRIES` | `2` | Planner 出无效 DAG 的重试上限 |
 | `HARNESS_ORCHESTRATOR_STEP_MAX_STEPS` | `10` | 每个执行子步内部 AgentLoop 的步数上限 |
 | `HARNESS_ORCHESTRATOR_STEP_DISABLE_THINKING` | `true` | 执行子步强制关思考链（机械执行提速） |
-| `HARNESS_FAST_MODEL` / `_BASE_URL` / `_API_KEY` | 空 | 快速档模型（triage、单步 validate、执行子步、简单直答）；空则回退主模型 |
+| `HARNESS_FAST_MODEL` / `_BASE_URL` / `_API_KEY` | 空 | 快速档模型（triage、执行子步、简单直答）；空则回退主模型 |
 
 **每步校验**
 

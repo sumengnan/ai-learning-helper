@@ -40,9 +40,16 @@ class Plan:
 
 @dataclass
 class Verdict:
-    """单步校验结论（Reflect 的单步层）：ok 表示该步产出是否达成预期。"""
+    """单步校验结论（Reflect 的单步层）：ok 表示该步产出是否达成预期。
+
+    impossible：该步存在结构性障碍（缺必要工具/权限/信息且无法自行获取），重试也一样。
+    此时应终态放弃、不再重试——「做不到」与「没做好」是两回事，后者重试有价值、前者纯浪费
+    （和「用户拒绝危险操作」同属确定性失败，复用同一条 terminal 快速通道）。默认 False：
+    绝大多数不通过只是没做好，误判成 impossible 会把该救回的步直接判死。
+    """
     ok: bool
     reason: str
+    impossible: bool = False
 
 
 @dataclass

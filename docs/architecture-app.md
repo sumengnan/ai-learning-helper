@@ -67,7 +67,7 @@ flowchart TD
 ```
 Orchestrator(
   planner  = Planner(主模型)          # 规划质量要求高
-  critic   = Critic(judge 档, validate_complete=快速档) # 终局 review 用裁判档，单步 validate 用快速档
+  critic   = Critic(judge 档)                  # 终局 review 与单步 validate 同走裁判档
   executor = Executor(快速档 client/model)               # 执行子步占往返大头，走快速档提速
   fast_complete / fast_client = 快速档                    # triage 与简单直答
   budget_factory = lambda: BudgetTracker(...)             # 每次 run 新建，单例并发安全
@@ -162,7 +162,7 @@ flowchart TD
 取「自身 pending 且依赖全 done」的步骤，给每步起一个 `asyncio.Task`，事件经队列汇流；
 某步崩溃被单独隔离，客户端断连时 `finally` 里统一 cancel，不留悬挂任务。
 
-**反思分两层。** 单步层是 `Critic.validate()`（快速档，宽松务实）；整体层是
+**反思分两层。** 单步层是 `Critic.validate()`（judge 档，宽松务实；能判 impossible 终结该步）；整体层是
 `Critic.review()`（judge 档，可触发 `Planner.replan`，上限 `orchestrator_max_replan`）。
 两者调用失败一律 **fail-open 放行**——判官抖动绝不该拦下一份好答案。
 
