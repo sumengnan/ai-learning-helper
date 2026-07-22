@@ -68,6 +68,9 @@ def _mk(planner, critic, order, triage_simple=False, synth="最终答复", max_r
     orch._is_simple = fake_triage
     orch._synthesize = fake_synth
     orch._simple_answer = fake_simple
+    # 不桩 _simple_answer_verified：用真实方法。它内部委托 self._simple_answer（已桩 fake_simple）
+    # 出草稿、再走 self._critic.review（FakeCritic 默认 accept）——1 步回退/规划降级在 verify=True
+    # 时经它交付「简单答复」，链路天然成立，无需另桩。
     orch._max_replan = max_replan
     orch._max_step_retry = 2
     orch._budget = None
@@ -131,7 +134,7 @@ async def test_skill_match_emits_skill_progress():
 
 async def test_reject_then_replan_then_accept():
     order = []
-    orch = _mk(FakePlanner([_plan(_s("s1")), _plan(_s("s2"))]),
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s1b")), _plan(_s("s2"))]),
                FakeCritic(validate_ok=True, reviews=(False, True)), order)
     events = await _run(orch)
     assert isinstance(events[-1], RunFinished)
@@ -170,7 +173,7 @@ async def test_replan_preserves_prior_done_artifacts():
         got.update(artifacts)
         yield TextDelta(text="定稿")
     # round1 计划 {s1}→done；review 先拒后受；replan → {s2}→done。终局须同时拿到 s1、s2。
-    orch = _mk(FakePlanner([_plan(_s("s1")), _plan(_s("s2"))]),
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s1b")), _plan(_s("s2"))]),
                FakeCritic(validate_ok=True, reviews=(False, True)), order)
     orch._synthesize = capture_synth
     events = await _run(orch)
@@ -181,7 +184,7 @@ async def test_replan_preserves_prior_done_artifacts():
 async def test_validate_fail_retries_bounded_then_failed():
     order = []
     # validate 恒失败：s1 会重试到 max_step_retry 后置 failed；review 放行 → 带残缺定稿
-    orch = _mk(FakePlanner([_plan(_s("s1"))]),
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2"))]),
                FakeCritic(validate_ok=False, reviews=(True,)), order)
     events = await _run(orch)
     assert isinstance(events[-1], RunFinished)   # 不因单步失败崩溃
@@ -195,7 +198,7 @@ async def test_impossible_step_gives_up_immediately_no_retry():
     对照上面的普通失败（跑 2 次），此处 impossible 只跑 1 次。
     """
     order = []
-    orch = _mk(FakePlanner([_plan(_s("s1"))]),
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2"))]),
                FakeCritic(validate_ok=False, validate_impossible=True, reviews=(True,)), order)
     events = await _run(orch)
     assert isinstance(events[-1], RunFinished)   # 仍带残缺成果收尾，不崩溃
@@ -234,7 +237,7 @@ async def test_verify_false_skips_terminal_review():
 async def test_verify_true_runs_terminal_review():
     """结果校验开：终局 Critic review 照常运行。"""
     critic = _CountingCritic()
-    orch = _mk(FakePlanner([_plan(_s("s1"))]), critic, [])
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2"))]), critic, [])
     events = [ev async for ev in orch.run("做点复杂的事", verify=True)]
     assert critic.reviews == 1, "verify=True 应运行终局 review"
     assert isinstance(events[-1], RunFinished)
@@ -248,7 +251,7 @@ async def test_planner_reasoning_emitted_before_plan():
     class RPlanner:
         async def plan(self, goal, recent_dialogue="", skill_hint="", *, tools_desc=""):
             record_reasoning("先分析怎么拆")
-            return _plan(_s("s1"))
+            return _plan(_s("s1"), _s("s2"))
         async def replan(self, g, p, f, skill_hint="", *, tools_desc=""):
             return _plan(_s("s1"))
 
@@ -317,7 +320,7 @@ async def test_run_aggregates_all_usage_incl_planner_critic():
 async def test_review_emits_verify_progress():
     """开结果校验：终局 Critic 的把关过程走 scope=verify（校验中…→通过），供前端 VerifyBadge 显示。"""
     order = []
-    orch = _mk(FakePlanner([_plan(_s("s1"))]),
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2"))]),
                FakeCritic(validate_ok=True, reviews=(True,)), order)
     events = await _run(orch)
     verify = [e for e in events if isinstance(e, Progress) and e.scope == "verify"]
@@ -328,7 +331,7 @@ async def test_review_emits_verify_progress():
 async def test_review_fail_emits_verify_error_then_retries():
     """校验不通过：先发 scope=verify(error) 带缺口说明，再重规划、最终通过再发一条 ok，形成校验历史。"""
     order = []
-    orch = _mk(FakePlanner([_plan(_s("s1")), _plan(_s("s1"))]),
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s1b")), _plan(_s("s1"))]),
                FakeCritic(validate_ok=True, reviews=(False, True)), order)
     events = await _run(orch)
     verify = [e for e in events if isinstance(e, Progress) and e.scope == "verify"]
@@ -582,7 +585,7 @@ async def test_run_wraps_registry_as_hiding_view_for_executor():
             from app.orchestration.executor import StepArtifact
             seen["reg"] = registry
             yield StepArtifact(Artifact(summary="x"))
-    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(reviews=(True,)), [])
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2"))]), FakeCritic(reviews=(True,)), [])
     orch._executor = CapExec()
     reg = ToolRegistry()
     _ = [ev async for ev in orch.run("复杂", registry=reg)]
@@ -596,7 +599,7 @@ async def test_run_passes_recent_dialogue_to_planner_and_synth():
     class CapPlanner:
         async def plan(self, goal, recent_dialogue="", skill_hint="", *, tools_desc=""):
             seen["plan_rd"] = recent_dialogue
-            return _plan(_s("s1"))
+            return _plan(_s("s1"), _s("s2"))
         async def replan(self, g, p, f, skill_hint="", *, tools_desc=""):
             return _plan(_s("s1"))
     async def cap_synth(goal, artifacts, recent_dialogue=""):
@@ -774,7 +777,7 @@ async def test_run_emits_per_model_usage():
 
     class MPlanner:
         async def plan(self, goal, recent_dialogue="", skill_hint="", *, tools_desc=""):
-            record_usage(Usage(0, 0, 30), 0.003, "main-model"); return _plan(_s("s1"))
+            record_usage(Usage(0, 0, 30), 0.003, "main-model"); return _plan(_s("s1"), _s("s2"))
         async def replan(self, g, p, f, skill_hint="", *, tools_desc=""):
             return _plan(_s("s1"))
 
@@ -798,9 +801,9 @@ async def test_run_emits_per_model_usage():
     # 注：这里的 "fast-model"/"main-model" 是各 mock 自己塞进 record_usage 的**任意标签**，
     # 只为验证「用量按模型名分桶聚合」这一逻辑，不代表真实分档（真实里 validate/review 走 judge）。
     assert set(agg) == {"fast-model", "main-model"}
-    assert agg["fast-model"]["tok"] == 110      # 本 mock 把 exec(100) 与 validate(10) 都标了 fast-model
+    assert agg["fast-model"]["tok"] == 220      # 两步：exec(100)×2 + validate(10)×2 都标了 fast-model
     assert agg["main-model"]["tok"] == 100      # 本 mock 把 plan(30)+review(20)+synth(50) 标了 main-model
-    assert abs(agg["fast-model"]["cost"] - 0.011) < 1e-9
+    assert abs(agg["fast-model"]["cost"] - 0.022) < 1e-9
     assert abs(agg["main-model"]["cost"] - 0.010) < 1e-9
 
 
@@ -850,7 +853,7 @@ class _FakeMatcher:
 async def test_skill_hit_does_not_replan_on_review_reject():
     """命中技能时，终局校验不通过也不重新拆解——技能剧本就是既定流程，重拆等于推翻它，
     用户会看到步骤中途凭空变样。单步做砸由 max_step_retry 在原步骤内兜住，与此无关。"""
-    planner = FakePlanner([_plan(_s("s1")), _plan(_s("s2"))])
+    planner = FakePlanner([_plan(_s("s1"), _s("s1b")), _plan(_s("s2"))])
     orch = _mk(planner, FakeCritic(validate_ok=True, reviews=(False, True)), [])
     orch._skill_matcher = _FakeMatcher()
     events = await _run(orch)
@@ -866,7 +869,7 @@ async def test_skill_hit_does_not_replan_on_review_reject():
 
 async def test_no_skill_still_replans_on_reject():
     """反向：没命中技能时，重规划照旧——别把这条护栏做成全局禁用重规划。"""
-    planner = FakePlanner([_plan(_s("s1")), _plan(_s("s2"))])
+    planner = FakePlanner([_plan(_s("s1"), _s("s1b")), _plan(_s("s2"))])
     orch = _mk(planner, FakeCritic(validate_ok=True, reviews=(False, True)), [])
     await _run(orch)
     assert planner._i == 1, "无技能时应正常重规划"
@@ -898,7 +901,7 @@ async def test_user_denial_is_terminal_no_retry():
     """回归：拒绝后步骤校验失败 → 编排器按普通失败重试，把同一个弹窗又怼给用户几次。
     重试只对偶发故障有意义；人已经说了不，重跑不会有不同答案。"""
     order = []
-    orch = _mk(FakePlanner([_plan(_s("s1"))]),
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2", deps=["s1"]))]),
                FakeCritic(validate_ok=False, reviews=(True,)), order)
     orch._executor = _DenyingExecutor(order)
     events = await _run(orch)
@@ -910,7 +913,7 @@ async def test_user_denial_is_terminal_no_retry():
 async def test_ordinary_failure_still_retries():
     """反向：普通失败照旧重试——别把这条护栏做成全局禁用重试。"""
     order = []
-    orch = _mk(FakePlanner([_plan(_s("s1"))]),
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2"))]),
                FakeCritic(validate_ok=False, reviews=(True,)), order)
     await _run(orch)
     assert order.count("s1") == 2      # 初次 + 1 次重试（max_step_retry=2）
@@ -949,7 +952,8 @@ class _CapturingExecutor:
 
 
 async def _run_with(msg, executor):
-    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [])
+    # 两步：1 步计划会回退简单直答、执行器捕不到 registry，故加独立 s2 让编排真的跑
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2"))]), FakeCritic(), [])
     orch._executor = executor
     reg = _reg_with_kb()
     orch._registry = reg
@@ -982,7 +986,7 @@ async def test_kb_write_tool_available_when_skill_prescribes_it():
                 body = "1. 读料  2. 用 save_to_knowledge 入库"
             return _S()
     ex = _CapturingExecutor()
-    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [])
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2"))]), FakeCritic(), [])
     orch._executor = ex
     orch._skill_matcher = _M()
     reg = _reg_with_kb(); orch._registry = reg
@@ -1007,11 +1011,11 @@ async def test_skill_hit_forces_planning_even_if_triage_says_simple():
     """回归：技能剧本本身就是多步流程，却因 triage 判 simple 而被塞进单循环——
     结果不出计划步，模型还可能自己发一份没有 id 的 ReAct 清单把工具块吞掉。"""
     order = []
-    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), order, triage_simple=True)
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2"))]), FakeCritic(), order, triage_simple=True)
     orch._skill_matcher = _SkillMatcherStub()
     events = await _run(orch, "搜索最新的 AI 资讯，保存到知识库")
 
-    assert order == ["s1"], "命中技能应走规划执行，而非简单直答"
+    assert order == ["s1", "s2"], "命中技能应走规划执行，而非简单直答"
     assert any(isinstance(e, Progress) and e.scope == "plan" for e in events), "应发出计划"
     assert events[-1].message.content == "最终答复"       # 走的是编排汇总，不是简单直答
 
@@ -1552,7 +1556,7 @@ async def test_simple_path_announces_route():
 async def test_planning_path_announces_route_before_planning():
     """徽章须先于规划发出：等计划出来才追认，用户在最慢的那条路上先看到的是空白。"""
     order = []
-    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), order)
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2"))]), FakeCritic(), order)
     events = await _run(orch, "调研 AI 现状并整理成报告")
     rs = _routes(events)
     assert len(rs) == 1
@@ -1562,14 +1566,16 @@ async def test_planning_path_announces_route_before_planning():
     assert plans and events.index(rs[0]) < plans[0], "路由徽章必须早于任何规划事件"
 
 
-async def test_planner_error_fallback_keeps_plan_route():
-    """规划失败降级到单循环，仍报「多步规划」——那轮确实走了编排器，只是没成功。
+async def test_planner_error_fallback_reports_simple_route():
+    """规划失败降级到单循环 → 报「简单直答」。
 
-    改口成「简单直答」会把一次失败伪装成一次正常的快速路由，恰好掩盖了要排查的东西。
+    徽章按用户**实际收到**的呈现：规划失败后他拿到的就是一份简单答复，故报 simple。
+    （这与「1 步计划回退简单直答」同一原则：徽章推迟到确定走向后才发，反映真实交付方式，
+    而非中途一度尝试过的路径。）
     """
     orch = _mk(FakePlanner([_plan(_s("s1"))], raise_on_plan=True), FakeCritic(), [])
     rs = _routes(await _run(orch, "调研 AI 现状并整理成报告"))
-    assert [r.detail["mode"] for r in rs] == ["plan"]
+    assert [r.detail["mode"] for r in rs] == ["simple"]
 
 
 # ---------- 单步重试时清理上一次尝试的副作用 ----------
@@ -1618,7 +1624,10 @@ class _SeqCritic:
 
 
 def _fx_orch(fxs, verdicts):
-    orch = _mk(FakePlanner([_plan(_s("s1"))]), _SeqCritic(verdicts), [])
+    # 两步（s2 依赖 s1）：1 步计划现在会回退简单直答、不进编排器，这些 purge/reset 测试要真的
+    # 走编排器。s1 终态失败时 s2 被 skip（不产生多余 purge）；s1 成功时 s2 在下批跑，序列尾项
+    # 对这些用例均良性（空 fx / 通过），不新增 purge/reset。
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2", deps=["s1"]))]), _SeqCritic(verdicts), [])
     orch._executor = _FxExecutor(fxs)
     return orch
 
@@ -1719,7 +1728,7 @@ async def test_purges_even_when_step_crashes_after_producing():
             raise RuntimeError("连接断了")
 
     purger = _RecordingPurger()
-    orch = _mk(FakePlanner([_plan(_s("s1"))]), _SeqCritic([True]), [])
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2", deps=["s1"]))]), _SeqCritic([True]), [])
     orch._executor = _CrashAfterSave()
     [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
     # 崩了会重试，重试又崩 —— 两次尝试各自的产物都要清，故调用 2 次
@@ -2045,12 +2054,12 @@ async def test_purged_artifact_is_removed_from_done_effects_so_model_redoes_it()
         {"download": ["d1"], "knowledge": [], "questions": []},   # 首次：存了文件
         {"download": ["d2"], "knowledge": [], "questions": []},   # 重跑：重新存了
     ])
-    orch = _mk(FakePlanner([_plan(_s("s1"))]), _SeqCritic([False, True]), [])
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2", deps=["s1"]))]), _SeqCritic([False, True]), [])
     orch._executor = ex
     # 回调按 SideEffectPurger.purge 的真实形状返回分组 dict
     [ev async for ev in orch.run("做点事", purge_side_effects=lambda fx: dict(fx))]
 
-    assert len(ex.seen_done_effects) == 2, "应跑了两次（首次 + 重跑）"
+    assert len(ex.seen_done_effects) == 3, "s1 跑两次（首次+重跑）+ s2 一次；精确计数守住不多跑"
     assert ex.seen_done_effects[0] == []
     assert "save_download" not in ex.seen_done_effects[1], (
         "首次存的文件已被删，重跑时不能再告诉模型「你已经存过了」，否则它不会重存")
@@ -2062,7 +2071,7 @@ async def test_done_effects_kept_when_nothing_was_actually_purged():
         {"download": ["d1"], "knowledge": [], "questions": []},
         {"download": [], "knowledge": [], "questions": []},
     ])
-    orch = _mk(FakePlanner([_plan(_s("s1"))]), _SeqCritic([False, True]), [])
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2", deps=["s1"]))]), _SeqCritic([False, True]), [])
     orch._executor = ex
     # 清理全失败：回传各类均为空
     [ev async for ev in orch.run("做点事", purge_side_effects=lambda fx: empty_fx_for_test())]
@@ -2089,7 +2098,7 @@ async def test_sink_content_survives_an_artifact_that_forgot_side_effects():
             yield StepArtifact(Artifact(summary="稿子"))      # 忘了带 side_effects
 
     purger = _RecordingPurger()
-    orch = _mk(FakePlanner([_plan(_s("s1"))]), _SeqCritic([False, True]), [])
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2", deps=["s1"]))]), _SeqCritic([False, True]), [])
     orch._executor = _SinkOnly()
     [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
     assert purger.calls and purger.calls[0]["download"] == ["d1"]
@@ -2106,7 +2115,7 @@ async def test_no_double_counting_when_sink_and_artifact_are_the_same_object():
             yield StepArtifact(Artifact(summary="稿子"), side_effects=fx)   # 同一对象
 
     purger = _RecordingPurger()
-    orch = _mk(FakePlanner([_plan(_s("s1"))]), _SeqCritic([False, True]), [])
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2", deps=["s1"]))]), _SeqCritic([False, True]), [])
     orch._executor = _Both()
     [ev async for ev in orch.run("做点事", purge_side_effects=purger)]
     assert purger.calls[0]["download"] == ["d1"], "同一对象不该被记两遍"
@@ -2120,7 +2129,7 @@ async def test_seam_also_covers_knowledge_kind():
     ])
     # _RecordingExecutor 只在有 download 时补 save_download，这里手工种一个知识类的账
     ex.seed_effect = "save_to_knowledge"
-    orch = _mk(FakePlanner([_plan(_s("s1"))]), _SeqCritic([False, True]), [])
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2", deps=["s1"]))]), _SeqCritic([False, True]), [])
     orch._executor = ex
     [ev async for ev in orch.run("做点事", purge_side_effects=lambda fx: dict(fx))]
     assert "save_to_knowledge" not in ex.seen_done_effects[1], (
@@ -2194,7 +2203,7 @@ async def test_impossible_step_suppresses_replan():
     还是撞同一堵墙。对照 test_reject_then_replan_then_accept：那里 review 拒→重规划→跑新步 s2；
     此处即便 review 拒，只要有 impossible 步，就不该重规划、新步 s2 从不执行。"""
     order = []
-    planner = FakePlanner([_plan(_s("s1")), _plan(_s("s2"))])
+    planner = FakePlanner([_plan(_s("s1"), _s("s1b")), _plan(_s("s2"))])
     # s1 校验判 impossible；review 恒拒（若无 impossible 守卫，这会触发重规划跑到 s2）
     orch = _mk(planner,
                FakeCritic(validate_ok=False, validate_impossible=True, reviews=(False, False)),
@@ -2212,8 +2221,66 @@ async def test_impossible_step_suppresses_replan():
 async def test_plain_reject_still_replans_when_not_impossible():
     """反向守卫：只是没做好（非 impossible）时，review 拒仍照常重规划——别误伤正常闭环。"""
     order = []
-    planner = FakePlanner([_plan(_s("s1")), _plan(_s("s2"))])
+    planner = FakePlanner([_plan(_s("s1"), _s("s1b")), _plan(_s("s2"))])
     # validate 通过（产出没问题），但 review 先拒后受 → 正常重规划
     orch = _mk(planner, FakeCritic(validate_ok=True, reviews=(False, True)), order)
     await _run(orch)
     assert "s2" in order and planner._i == 1   # 重规划照常发生
+
+
+# ---- 1 步计划回退简单直答 ----
+
+async def test_one_step_plan_falls_back_to_simple_answer():
+    """planner 只拆出 1 步 → 回退简单直答，不进编排器。走完整编排（execute→validate→
+    review→synthesize）纯属把简单直答包一层昂贵仪式（尤其 synthesize 用主模型重述唯一产物）。"""
+    order = []
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), order)
+    events = await _run(orch, "调研 AI 现状")
+    assert order == [], "1 步计划不该进编排器执行"
+    # 不发任务步骤块（scope=plan 快照）——那是编排器路径的标志
+    assert not any(isinstance(e, Progress) and e.scope == "plan" for e in events)
+    # 徽章报「简单直答」，反映用户实际收到的呈现
+    rs = _routes(events)
+    assert [r.detail["mode"] for r in rs] == ["simple"]
+    assert isinstance(events[-1], RunFinished)
+
+
+async def test_two_step_plan_still_orchestrates():
+    """对照：≥2 步仍走编排器——发多步徽章 + 任务步骤块，执行各步。"""
+    order = []
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2"))]), FakeCritic(), order)
+    events = await _run(orch, "调研并整理成报告")
+    assert order == ["s1", "s2"]
+    assert any(isinstance(e, Progress) and e.scope == "plan" for e in events)
+    rs = _routes(events)
+    assert [r.detail["mode"] for r in rs] == ["plan"]
+
+
+async def test_one_step_fallback_route_badge_after_planning_not_before():
+    """回归：徽章必须推迟到规划**之后**发。若规划前就发「多步规划」、这里再回退简单直答，
+    用户会先看到多步徽章再收到简单答复，自相矛盾。故 1 步回退时全程只出现 simple 徽章。"""
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [])
+    rs = _routes(await _run(orch, "调研 AI 现状"))
+    assert [r.detail["mode"] for r in rs] == ["simple"]   # 绝不出现 plan
+
+
+async def test_one_step_fallback_redo_keeps_tools_unlike_exam():
+    """非考试的 1 步回退：校验拒 → 重答**带真实工具表**（与考试轮相反）。
+
+    对照 test_exam_turn_failed_review_redoes_without_exam_tools（考试轮重答空工具、防
+    start_exam 重置）：非考试的「单步但需工具」题，首答调了检索/生成，重答若无工具就只能
+    空转、没法重做，是能力回退。故 in_exam=False 时重答放行工具。
+    """
+    cap = []
+    # 复用 _exam_orch 的记录式 _simple_answer；planner 出 1 步 → run() 回退简单直答。
+    # 不加 force_simple（in_exam=False），review 先拒后受触发一次重答。
+    orch = _exam_orch((False, True), cap)
+    base_reg = ToolRegistry()
+    events = [ev async for ev in orch.run("查一下最新的 X 并总结", verify=True,
+                                          registry=base_reg)]
+    assert len(cap) == 2, "应重答一次"
+    assert cap[0]["registry"] is base_reg              # 首答：真实工具表
+    assert cap[1]["registry"] is base_reg              # 重答：仍是真实工具表（非空！）
+    assert events[-1].message.content == "第2版讲解"    # 交付重答那版
+    # 徽章仍报简单直答（1 步回退）
+    assert [r.detail["mode"] for r in _routes(events)] == ["simple"]
