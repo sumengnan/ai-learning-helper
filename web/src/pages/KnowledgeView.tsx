@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Box, Typography, Button, Card, CardContent, TextField, InputAdornment,
   IconButton, CircularProgress, Alert, Chip, Stack, Pagination,
-  FormControl, InputLabel, Select, MenuItem,
+  FormControl, InputLabel, Select, MenuItem, Tooltip,
 } from "@mui/material";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import DeleteIcon from "@mui/icons-material/Delete";
@@ -25,6 +25,8 @@ const CATEGORIES = ["PDF", "Word", "文本", "Markdown", "其他"];
 type Fragment = {
   id: string; filename: string; uploaded_at: string;
   category: string; excerpt: string; relevance?: number;
+  // "rerank" = 精排绝对相关度；"rank" = 未开精排时的相对排名分（会误导，需在 UI 标明）
+  relevance_kind?: "rerank" | "rank";
 };
 
 export function KnowledgeView() {
@@ -187,13 +189,17 @@ export function KnowledgeView() {
                         </Stack>
                         <Stack direction="row" spacing={0.5} sx={{ alignItems: "center", flexShrink: 0 }}>
                           {searching && d.relevance !== undefined && (
-                            <Chip size="small" variant="outlined"
-                              label={`相关度 ${d.relevance}%`}
-                              sx={(theme) => ({
-                                color: relevanceColor(d.relevance ?? 0, theme.palette.mode),
-                                borderColor: relevanceColor(d.relevance ?? 0, theme.palette.mode),
-                                fontWeight: 600,
-                              })} />
+                            <Tooltip title={d.relevance_kind === "rank"
+                              ? "未开精排，此为相对排名分，非绝对相关度" : ""}>
+                              <Chip size="small" variant="outlined"
+                                label={d.relevance_kind === "rank"
+                                  ? `排名分 ${d.relevance}%` : `相关度 ${d.relevance}%`}
+                                sx={(theme) => ({
+                                  color: relevanceColor(d.relevance ?? 0, theme.palette.mode, d.relevance_kind ?? "rank"),
+                                  borderColor: relevanceColor(d.relevance ?? 0, theme.palette.mode, d.relevance_kind ?? "rank"),
+                                  fontWeight: 600,
+                                })} />
+                            </Tooltip>
                           )}
                           <IconButton size="small" color="error" aria-label="删除片段"
                             onClick={(e) => { e.stopPropagation(); remove(d.id); }}>

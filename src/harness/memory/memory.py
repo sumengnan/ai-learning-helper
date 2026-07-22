@@ -6,7 +6,7 @@ from .backend import MemoryBackend
 from .chunker import chunk
 from .embeddings import EmbeddingClient
 from .record import MemoryFilter, MemoryRecord, MemType
-from .reranker import NoOpReranker
+from .reranker import RERANK_SCORE_KEY, NoOpReranker
 from .retriever import RetrievalConfig, Retriever, ScoredHit
 
 
@@ -54,10 +54,13 @@ class Memory:
         owner_id, kind = collection_to_scope(collection)
         hits = await self._retriever.retrieve(
             query, MemoryFilter(owner_id=owner_id, kind=kind), k)
-        # distance = 1 - 加权融合分（score 可 >1 故 distance 可能为负）；仅保留“越小越相关”的序，非 cosine 距离
+        # distance = 1 - 加权融合分（score 可 >1 故 distance 可能为负）；仅保留“越小越相关”的序，非 cosine 距离。
+        # rerank_score 单独带出：精排的绝对相关性分是整条链上唯一没被 minmax 抹掉的信号，消费方（如
+        # knowledge.search 的相关度%）要用它，不能只靠 distance（那已是候选集内归一化的相对排名分）。
         return [MemoryHit(text=h.record.text, collection=collection,
                           metadata=h.record.metadata, distance=1.0 - h.score,
-                          id=h.record.id, created_at=h.record.created_at)
+                          id=h.record.id, created_at=h.record.created_at,
+                          rerank_score=h.components.get(RERANK_SCORE_KEY))
                 for h in hits]
 
     async def retrieve(self, query: str, collection: str, k: int,

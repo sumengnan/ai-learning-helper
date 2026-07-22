@@ -3,12 +3,40 @@ from app.knowledge import KnowledgeService, EmptyDocument
 from app.documents import DocumentStore
 from harness.memory.memory import Memory
 from harness.memory.sqlite_backend import SqliteVecBackend
+from harness.memory.retriever import Retriever, RetrievalConfig
+from harness.memory.reranker import RERANK_SCORE_KEY
 import pytest
 
 
 def _service(mock_embedder):
     store = SqliteVecBackend(":memory:", dimension=64)
     mem = Memory(store, mock_embedder(dimension=64), chunk_size=1000, overlap=0)
+    return KnowledgeService(mem, store, DocumentStore(":memory:")), mem
+
+
+class _StubReranker:
+    """把绝对精排分写进 candidate.components[RERANK_SCORE_KEY]，模拟真实 qwen3-rerank。
+
+    scores: {正文子串: 分数}——命中子串就打对应绝对分（[0,1] 量纲）。
+    """
+
+    def __init__(self, scores: dict[str, float]):
+        self._scores = scores
+
+    async def rerank(self, query, candidates):
+        for c in candidates:
+            for key, s in self._scores.items():
+                if key in c.record.text:
+                    c.components[RERANK_SCORE_KEY] = s
+        return candidates
+
+
+def _service_with_rerank(mock_embedder, scores: dict[str, float]):
+    """带精排的 KnowledgeService：注入按正文打绝对分的 stub reranker。"""
+    store = SqliteVecBackend(":memory:", dimension=64)
+    emb = mock_embedder(dimension=64)
+    retriever = Retriever(store, emb, _StubReranker(scores), RetrievalConfig())
+    mem = Memory(store, emb, chunk_size=1000, overlap=0, retriever=retriever)
     return KnowledgeService(mem, store, DocumentStore(":memory:")), mem
 
 
@@ -238,3 +266,41 @@ async def test_embedding_client_splits_oversized_batches():
     out = await c.embed(list(range(45)))
     assert sizes == [20, 20, 5], "应按上限切片"
     assert out == [[float(i)] for i in range(45)], "必须按原顺序拼回"
+
+
+# ---------- 相关度% = 精排绝对分（而非 minmax 相对排名分） ----------
+
+async def test_search_relevance_uses_rerank_absolute_score(mock_embedder):
+    """开精排时，相关度%取精排绝对分：0.26 → 26%，且标 relevance_kind='rerank'。
+
+    变异钩子：若把显示改回 (1-distance)*100 的 minmax 逻辑，单条命中会被归一化成
+    满分（distance<=0 → 裁到 100%），此断言（==26）必然失败。
+    """
+    svc, _mem = _service_with_rerank(mock_embedder, {"厨具": 0.26})
+    await svc.ingest_text("u1", "无关.txt", "不锈钢厨具清洗保养指南")
+    hits = await svc.search("u1", "厨具", k=5)
+    assert len(hits) == 1
+    assert hits[0]["relevance"] == 26          # 绝对分，不是被 minmax 抹成的 100
+    assert hits[0]["relevance_kind"] == "rerank"
+
+
+async def test_search_related_vs_unrelated_separated_by_rerank(mock_embedder):
+    """相关与无关文档的相关度%应拉开：related≈43% 明显高于 unrelated≈26%。"""
+    svc, _mem = _service_with_rerank(mock_embedder, {"相关正文": 0.43, "无关正文": 0.26})
+    await svc.ingest_text("u1", "a.txt", "相关正文一段")
+    await svc.ingest_text("u1", "b.txt", "无关正文一段")
+    hits = await svc.search("u1", "查询", k=5)
+    by_rel = {h["excerpt"][:4] if h.get("excerpt") else h["relevance"]: h for h in hits}
+    rels = sorted(h["relevance"] for h in hits)
+    assert rels == [26, 43]
+    assert all(h["relevance_kind"] == "rerank" for h in hits)
+
+
+async def test_search_falls_back_to_rank_score_without_rerank(mock_embedder):
+    """精排关闭（无精排分）时回退到相对排名分，并标 relevance_kind='rank'，供前端提示。"""
+    svc, _mem = _service(mock_embedder)          # 默认 NoOpReranker，无精排分
+    await svc.ingest_text("u1", "a.txt", "一段可检索的内容")
+    hits = await svc.search("u1", "内容", k=5)
+    assert len(hits) >= 1
+    assert all(h["relevance_kind"] == "rank" for h in hits)
+    assert all(0 <= h["relevance"] <= 100 for h in hits)

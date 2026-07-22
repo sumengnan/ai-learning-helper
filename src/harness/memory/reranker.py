@@ -71,7 +71,10 @@ class HttpReranker:
         return data.get("results", [])
 
     async def rerank(self, query: str, candidates: list) -> list:
-        if len(candidates) <= 1 or not query or not query.strip():
+        # 空候选或空 query 没东西可打分，短路返回。注意 len==1 不在此列：单条虽无法
+        # 重排序（那是 no-op），但它的精排分在 Retriever 下限过滤和 knowledge.search
+        # 绝对相关度显示里都要用，必须照常调端点打分，不能跳过。
+        if not candidates or not query or not query.strip():
             return candidates
         documents = [_doc_text(c) for c in candidates]
         url, payload = self._build_request(query, documents)

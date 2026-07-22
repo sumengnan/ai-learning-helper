@@ -102,11 +102,49 @@ async def test_empty_results_keeps_order(fake_httpx):
     assert _texts(out) == ["a", "b"]
 
 
-async def test_single_candidate_skips_endpoint(fake_httpx):
+async def test_single_candidate_still_scored(fake_httpx):
+    # len==1 无法重排序（no-op），但仍须调端点给这唯一候选打分：这条分数在
+    # Retriever 下限过滤和 knowledge.search 绝对相关度显示里都要用，不能跳过。
+    # 变异证伪：把 rerank 短路退回 `len(candidates) <= 1 or ...`（≤1 直接 return
+    # 不打分），本测试的 calls 断言与 components 断言都会失败。
+    from harness.memory.reranker import RERANK_SCORE_KEY
+    fake_httpx.data = {"results": [{"index": 0, "relevance_score": 0.07}]}
     r = HttpReranker("https://api.x.cn/v1", "sk-1", "bge-reranker")
-    out = await r.rerank("q", [_cand("a")])
+    cand = _cand("a")
+    cand.components = {}
+    out = await r.rerank("q", [cand])
+    assert _texts(out) == ["a"]                       # 1 条重排序是 no-op
+    assert len(fake_httpx.calls) == 1                 # 但确实发起了打分请求
+    assert fake_httpx.calls[-1]["json"]["documents"] == ["a"]   # 单文档入参合法
+    assert cand.components[RERANK_SCORE_KEY] == 0.07  # 分数写进了 components
+
+
+async def test_single_candidate_endpoint_failure_no_score(fake_httpx):
+    # 端点故障降级语义对单候选同样成立：原序返回、不写分、不崩。
+    from harness.memory.reranker import RERANK_SCORE_KEY
+    fake_httpx.exc = httpx.ConnectError("boom")
+    r = HttpReranker("https://api.x.cn/v1", "sk-1", "bge-reranker")
+    cand = _cand("a")
+    cand.components = {}
+    out = await r.rerank("q", [cand])
     assert _texts(out) == ["a"]
-    assert fake_httpx.calls == []          # 未发起请求
+    assert RERANK_SCORE_KEY not in cand.components
+
+
+async def test_empty_query_skips_endpoint(fake_httpx):
+    # 空 query 没东西可打分，短路返回原候选、不发请求、不崩（保留原语义）。
+    r = HttpReranker("https://api.x.cn/v1", "sk-1", "bge-reranker")
+    out = await r.rerank("   ", [_cand("a"), _cand("b")])
+    assert _texts(out) == ["a", "b"]
+    assert fake_httpx.calls == []
+
+
+async def test_empty_candidates_skips_endpoint(fake_httpx):
+    # 空候选也无东西可打分，短路返回、不发请求。
+    r = HttpReranker("https://api.x.cn/v1", "sk-1", "bge-reranker")
+    out = await r.rerank("q", [])
+    assert out == []
+    assert fake_httpx.calls == []
 
 
 async def test_request_payload_and_url(fake_httpx):
