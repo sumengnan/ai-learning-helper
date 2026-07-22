@@ -2185,3 +2185,33 @@ async def test_non_saver_step_keeps_working_file_tools():
     assert {"write_file", "read_file", "run_shell", "web_search"} <= seen["s1"], \
         "创作步仍须能写工作文件、跑沙箱、检索——被摘的只有 save_download 这一个"
     assert "save_download" in seen["s2"]
+
+
+async def test_impossible_step_suppresses_replan():
+    """结构性无法完成的步 → 不重规划。缺的工具/权限/能力本系统根本没有，重新拆一版计划
+    还是撞同一堵墙。对照 test_reject_then_replan_then_accept：那里 review 拒→重规划→跑新步 s2；
+    此处即便 review 拒，只要有 impossible 步，就不该重规划、新步 s2 从不执行。"""
+    order = []
+    planner = FakePlanner([_plan(_s("s1")), _plan(_s("s2"))])
+    # s1 校验判 impossible；review 恒拒（若无 impossible 守卫，这会触发重规划跑到 s2）
+    orch = _mk(planner,
+               FakeCritic(validate_ok=False, validate_impossible=True, reviews=(False, False)),
+               order)
+    events = await _run(orch)
+    assert isinstance(events[-1], RunFinished)          # 仍带残缺成果收尾
+    assert order.count("s1") == 1                        # 不重试
+    assert "s2" not in order, "impossible 步不该触发重规划"
+    assert planner._i == 0, "replan 一次都不该发生"
+    # 用户能看到「为什么没继续」：发了 verify 说明
+    assert any(isinstance(e, Progress) and e.scope == "verify"
+               and "无法完成" in e.text for e in events)
+
+
+async def test_plain_reject_still_replans_when_not_impossible():
+    """反向守卫：只是没做好（非 impossible）时，review 拒仍照常重规划——别误伤正常闭环。"""
+    order = []
+    planner = FakePlanner([_plan(_s("s1")), _plan(_s("s2"))])
+    # validate 通过（产出没问题），但 review 先拒后受 → 正常重规划
+    orch = _mk(planner, FakeCritic(validate_ok=True, reviews=(False, True)), order)
+    await _run(orch)
+    assert "s2" in order and planner._i == 1   # 重规划照常发生
