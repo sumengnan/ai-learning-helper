@@ -20,6 +20,8 @@ import { KnowledgeDetailDrawer } from "./KnowledgeDetailDrawer";
 
 const PAGE_SIZE = 8;
 const CATEGORIES = ["PDF", "Word", "文本", "Markdown", "其他"];
+// 搜索输入防抖：停止输入满 1 秒才发检索请求，避免一边打字一边搜（每个字一次请求）
+export const SEARCH_DEBOUNCE_MS = 1000;
 
 // 一张卡片 = 一个切分后的片段（chunk），filename 是其来源文件名
 type Fragment = {
@@ -66,7 +68,7 @@ export function KnowledgeView() {
       } else {
         setResults(null);
       }
-    }, 300);
+    }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [query]);
 
@@ -195,8 +197,8 @@ export function KnowledgeView() {
                                 label={d.relevance_kind === "rank"
                                   ? `排名分 ${d.relevance}%` : `相关度 ${d.relevance}%`}
                                 sx={(theme) => ({
-                                  color: relevanceColor(d.relevance ?? 0, theme.palette.mode, d.relevance_kind ?? "rank"),
-                                  borderColor: relevanceColor(d.relevance ?? 0, theme.palette.mode, d.relevance_kind ?? "rank"),
+                                  color: relevanceColor(d.relevance ?? 0, theme.palette.mode),
+                                  borderColor: relevanceColor(d.relevance ?? 0, theme.palette.mode),
                                   fontWeight: 600,
                                 })} />
                             </Tooltip>

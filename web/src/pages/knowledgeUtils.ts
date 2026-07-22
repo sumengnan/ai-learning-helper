@@ -15,32 +15,21 @@ export function fmtDate(iso: string): string {
   return iso ? iso.slice(0, 10) : "";
 }
 
-// 检索相关度配色：越相关颜色越突出。区间下含上不含（如 [95,100) 浅绿）。
-// 暗色模式下把各档提亮、并把「黑」翻成近白，保证深色背景上清晰可读，
-// 同时维持「越相关越突出」的明度层次。
-//
-// kind 决定量纲与阈值：
-//  - "rank"（默认，向后兼容）：老的 minmax 相对排名分，量纲集中在 80-100 高位。
-//  - "rerank"：精排（qwen3-rerank）绝对分转成的百分比，量纲 [0,100] 但相关性
-//    集中在 ~25-55；min_score=0.35（即 35%）是「相关/无关」分界，故阈值围绕它展开，
-//    保证 35-50 这段有明显区分而不是一片灰。
+// 检索相关度配色：只看展示的百分数（不再区分 rerank/rank 量纲）。
+//  - <50%：视为不够相关，一律灰。
+//  - 50%–100%：连续过渡，越相关越绿越突出。色相从琥珀黄（50%，及格线）平滑推到
+//    鲜绿（100%，最相关）；明色模式越相关越深越饱和（白底可读），暗色模式越相关越亮
+//    （黑底可读）。用 HSL 连续插值而非分档，"过渡"更顺、且改配色只需动这几个数。
+// 分界含 50：恰好 50% 上色，49% 及以下灰。
 export function relevanceColor(
   relevance: number,
   mode: "light" | "dark" = "light",
-  kind: "rerank" | "rank" = "rank",
 ): string {
   const dark = mode === "dark";
-  if (kind === "rerank") {
-    if (relevance >= 50) return dark ? "#a5d6a7" : "#1b5e20";  // 深绿：很相关
-    if (relevance >= 40) return dark ? "#66bb6a" : "#2e7d32";  // 绿：相关
-    if (relevance >= 35) return dark ? "#64b5f6" : "#1976d2";  // 蓝：勉强过线
-    if (relevance >= 25) return dark ? "#ffb74d" : "#c77700";  // 灰黄：弱相关
-    return dark ? "#bdbdbd" : "#9e9e9e";                       // 灰：基本无关
-  }
-  if (relevance >= 100) return dark ? "#a5d6a7" : "#1b5e20";  // 深绿
-  if (relevance >= 95) return dark ? "#66bb6a" : "#66bb6a";   // 浅绿
-  if (relevance >= 90) return dark ? "#ce93d8" : "#9c27b0";   // 紫色
-  if (relevance >= 85) return dark ? "#64b5f6" : "#1976d2";   // 蓝色
-  if (relevance >= 80) return dark ? "#f5f5f5" : "#212121";   // 黑 ↔ 近白
-  return dark ? "#bdbdbd" : "#9e9e9e";                        // 灰色
+  if (relevance < 50) return dark ? "#bdbdbd" : "#9e9e9e";     // 灰：不够相关
+  const t = Math.min(1, (relevance - 50) / 50);               // 0(50%)→1(100%)，>100% 封顶
+  const hue = Math.round(45 + t * 95);                        // 45°琥珀黄 → 140°鲜绿
+  const sat = dark ? Math.round(60 + t * 8) : Math.round(72 + t * 8);
+  const light = dark ? Math.round(56 + t * 10) : Math.round(46 - t * 9);
+  return `hsl(${hue}, ${sat}%, ${light}%)`;
 }

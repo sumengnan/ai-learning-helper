@@ -2,8 +2,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
-import { KnowledgeView } from "./KnowledgeView";
+import { KnowledgeView, SEARCH_DEBOUNCE_MS } from "./KnowledgeView";
 import { api } from "../api/client";
+
+// 搜索走 SEARCH_DEBOUNCE_MS(1s) 防抖，waitFor 默认超时 1s 会卡边界，统一给足余量
+const SEARCH_WAIT = { timeout: SEARCH_DEBOUNCE_MS + 1500 };
 
 vi.mock("../api/client", () => ({
   api: { documents: { list: vi.fn(), search: vi.fn(), upload: vi.fn(), remove: vi.fn(), get: vi.fn() } },
@@ -79,7 +82,7 @@ describe("KnowledgeView", () => {
     renderView();
     const box = await screen.findByPlaceholderText("搜索文档…");
     fireEvent.change(box, { target: { value: "光合作用" } });
-    await waitFor(() => expect(screen.getByText(/相关度 87%/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/相关度 87%/)).toBeTruthy(), SEARCH_WAIT);
     expect(api.documents.search).toHaveBeenCalledWith("光合作用");
     expect(screen.getByText(/hit\.txt/)).toBeTruthy();
   });
@@ -93,7 +96,35 @@ describe("KnowledgeView", () => {
     renderView();
     const box = await screen.findByPlaceholderText("搜索文档…");
     fireEvent.change(box, { target: { value: "光合作用" } });
-    await waitFor(() => expect(screen.getByText(/排名分 87%/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/排名分 87%/)).toBeTruthy(), SEARCH_WAIT);
     expect(screen.queryByText(/相关度 87%/)).toBeNull();
   });
+
+  it("防抖间隔就是 1 秒", () => {
+    expect(SEARCH_DEBOUNCE_MS).toBe(1000);
+  });
+
+  it("输入后不立即搜索（有防抖，不是逐字搜）", async () => {
+    (api.documents.list as any).mockResolvedValue({ items: [], total: 0 });
+    (api.documents.search as any).mockResolvedValue([]);
+    renderView();
+    const box = await screen.findByPlaceholderText("搜索文档…");
+    fireEvent.change(box, { target: { value: "光" } });
+    // 输入的当下防抖窗口还没到，绝不能已经发出请求
+    expect(api.documents.search).not.toHaveBeenCalled();
+  });
+
+  it("连续输入只在停下后搜一次，且用最后的值", async () => {
+    (api.documents.list as any).mockResolvedValue({ items: [], total: 0 });
+    (api.documents.search as any).mockResolvedValue([]);
+    renderView();
+    const box = await screen.findByPlaceholderText("搜索文档…");
+    // 快速逐字输入：每个字都重置防抖，最终只该发一次、且是完整词
+    fireEvent.change(box, { target: { value: "光" } });
+    fireEvent.change(box, { target: { value: "光合" } });
+    fireEvent.change(box, { target: { value: "光合作用" } });
+    await waitFor(() => expect(api.documents.search).toHaveBeenCalledTimes(1), SEARCH_WAIT);
+    expect(api.documents.search).toHaveBeenCalledWith("光合作用");
+  });
+
 });
