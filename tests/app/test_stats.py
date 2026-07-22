@@ -109,7 +109,14 @@ def test_percentile_basic():
 
 
 def test_step_bucket():
-    assert [_step_bucket(n) for n in (1, 2, 4, 5, 6, 7, 20)] == ["1", "2", "4", "5-6", "5-6", "7+", "7+"]
+    # 分辨率放在高步数端（识别「绕圈跑飞」）：低端合并、高端展开。逐个钉住每段边界。
+    assert _step_bucket(1) == "1"
+    assert [_step_bucket(n) for n in (2, 3)] == ["2-3", "2-3"]
+    assert [_step_bucket(n) for n in (4, 6)] == ["4-6", "4-6"]
+    assert [_step_bucket(n) for n in (7, 10)] == ["7-10", "7-10"]
+    assert [_step_bucket(n) for n in (11, 20)] == ["11-20", "11-20"]
+    # 顶桶吃到上限：主聊天 max_steps=100，21+ 一路兜底
+    assert [_step_bucket(n) for n in (21, 50, 100)] == ["21+", "21+", "21+"]
 
 
 # ---------- ops 聚合 ----------
@@ -156,8 +163,11 @@ def test_ops_tools_with_error_correlation():
 
 def test_ops_steps_histogram():
     hist = {b["bucket"]: b["count"] for b in _svc().overview("u")["ops"]["steps_histogram"]}
-    # run1=2 步 → 桶"2"，run2=1 步 → 桶"1"
-    assert hist["1"] == 1 and hist["2"] == 1 and hist["7+"] == 0
+    # run1=2 步 → 桶"2-3"，run2=1 步 → 桶"1"；空桶保留、计数为 0
+    assert hist["1"] == 1 and hist["2-3"] == 1 and hist["21+"] == 0
+    # 六个桶按 _STEP_ORDER 齐全，前端直方图不会随数据忽长忽短
+    assert [b["bucket"] for b in _svc().overview("u")["ops"]["steps_histogram"]] == \
+        ["1", "2-3", "4-6", "7-10", "11-20", "21+"]
 
 
 # ---------- learn 组装 ----------

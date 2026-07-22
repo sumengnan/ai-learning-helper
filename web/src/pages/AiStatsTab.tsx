@@ -106,9 +106,9 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
         </Card>
         <Card sx={cardSx}>
           <CardContent>
-            <Typography sx={{ fontSize: 14, fontWeight: 650 }}>每 run 步数分布</Typography>
+            <Typography sx={{ fontSize: 14, fontWeight: 650 }}>整轮总步数分布</Typography>
             <Typography sx={{ fontSize: 12, color: "text.secondary" }}>
-              识别"绕圈跑飞"的运行
+              一步 = 模型一轮「思考 → 调工具 → 读结果」；步数越多，这次任务越费周折
             </Typography>
             <StepsHistogram data={ops.steps_histogram} />
             <Stack direction="row" sx={{ justifyContent: "space-between", fontSize: 12, color: "text.secondary", mt: 1.5 }}>
