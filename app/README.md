@@ -70,8 +70,8 @@ cd web && npm install && npm run dev
 | triage | 判简单/复杂；纯寒暄由正则零成本短路 | 快速档 |
 | `Planner` | 拆成 2-10 步 DAG，落地即校验，无效重试 2 次 | 主模型 |
 | `Executor` | 并行跑就绪步，每步一个独立上下文的 `AgentLoop` | 快速档 |
-| `Critic.validate` | 单步质检，不过则重试（上限 2 次） | 快速档 |
-| `Critic.review` | 终局把关，有缺口则重规划（上限 2 轮） | 主模型 |
+| `Critic.validate` | 单步质检，不过则重试（上限 2 次）；能判 impossible 终结该步 | judge 档 |
+| `Critic.review` | 终局把关，有缺口则重规划（上限 2 轮） | judge 档 |
 | synthesize | 流式汇总最终答复 | 主模型 |
 
 要点：

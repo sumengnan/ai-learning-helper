@@ -267,7 +267,7 @@ def build_harness(config) -> Harness:
     from app.sandbox_manager import sandbox_guide
     from harness.reliability.budget import BudgetTracker
     _plan_complete = build_completer(client, config.model)     # 规划用主模型（判断质量要求高）
-    _fast_complete = build_fast_completer(client, config)      # triage + 单步 validate 用快速档（频繁，提速）
+    _fast_complete = build_fast_completer(client, config)      # triage 用快速档（卡首字关键路径，提速）
     # 终局 review 就是「裁判」这个角色，理应吃 judge 配置。此前它写死主模型，而 judge 只接在
     # 交付门 AnswerVerifier 上——编排器成为唯一主流程后那条分支永不进入（chat.py 里
     # `if orchestrator is not None` 在前短路），于是 HARNESS_JUDGE_MODEL 对用户看到的
@@ -280,7 +280,11 @@ def build_harness(config) -> Harness:
     orchestrator = Orchestrator(
         client=client, registry=reg, model=config.model,
         planner=Planner(_plan_complete, max_retries=config.orchestrator_planner_max_retries),
-        critic=Critic(_review_complete, validate_complete=_fast_complete),
+        # 单步 validate 与终局 review 都吃 judge 档：validate 现在能判 impossible（终结该步、
+        # 并抑制重规划），一次误判代价放大到整条任务分支，故不再图快用便宜档，与 review 同级
+        # 由裁判模型来判。未配 judge_model 时 build_judge_completer 回退主模型，对没配的人零变更。
+        # 代价：validate 是每子步都跑的高频调用，走 judge 会加每轮延迟——这是刻意用速度换判准。
+        critic=Critic(_review_complete),
         executor=Executor(_exec_client, _exec_reg, config.app_system_prompt, _exec_model,
                           max_steps=config.orchestrator_step_max_steps,
                           loop_detect_window=config.loop_detect_window,

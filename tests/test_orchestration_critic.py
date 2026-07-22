@@ -33,7 +33,11 @@ async def test_validate_fail():
 
 
 async def test_validate_uses_separate_completer_review_uses_main():
-    """validate 走 validate_complete（快速档），review 走主 complete；各自命中不串。"""
+    """Critic 类支持 validate 与 review 分开路由：传了 validate_complete 就用它、不串到 review。
+
+    这是类的**能力**（装配层可据此按需分档）；至于装配层实际把 validate 接哪个档，是另一件事
+    （见 test_validate_complete_defaults_to_main / assembly：现两者同走 judge）。
+    """
     calls = []
     def _tagged(tag, payload):
         async def complete(system, user):
