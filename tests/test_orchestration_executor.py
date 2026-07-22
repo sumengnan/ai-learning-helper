@@ -579,3 +579,23 @@ def test_orchestrator_only_passes_kwargs_that_executor_accepts():
 
     unknown = passed - accepted
     assert not unknown, f"编排器传了 Executor 不认的参数：{unknown}"
+
+
+async def test_executor_carries_reasoning_invisibility_guard():
+    """回归：用户问「上一步思维链为什么是英文」，执行子步白调 search/recall/read_file
+    全落空。根因是模型不知道思考内容不可检索。该指令放在 app_system_prompt（装配层把它
+    作 Executor 基底，见 assembly.py:284），须确认它随基底流进子步发给模型的系统消息。"""
+    from app.config import AppConfig
+    seen = {}
+    class ProbeClient:
+        async def stream(self, messages, schemas):
+            parts = [c for m in messages
+                     if isinstance(c := (getattr(m, "content", None)
+                                         or (m.get("content") if isinstance(m, dict) else None)), str)]
+            seen["sys"] = "\n".join(parts)
+            yield StreamChunk(type="text", text="ok"); yield StreamChunk(type="done")
+    base = AppConfig(api_key="k", _env_file=None).app_system_prompt
+    ex = Executor(client=ProbeClient(), registry=ToolRegistry(), system_prompt=base,
+                  model="m", max_steps=1)
+    await _collect(ex.execute(_step(), {}))
+    assert "无法查看" in seen["sys"] and "思考过程" in seen["sys"]

@@ -15,3 +15,19 @@ def test_app2_config_defaults():
     cfg = AppConfig(api_key="k")
     assert cfg.app_max_upload_mb == 20
     assert cfg.downloads_dir == "downloads"
+
+
+def test_system_prompt_has_reasoning_invisibility_guard():
+    """元问题兜底：用户问「你上一步的思维链是什么/为什么是英文」时，模型并不掌握——
+    思考内容只用于界面展示，不回灌进上下文，任何检索/记忆/文件工具里都没有它。
+    实测过一次：模型为回答这类问题白调了 search_knowledge/recall_episodes/read_file
+    全落空。系统提示须让它直接如实说明「无法查看自己的思考过程」，而非徒劳查找。
+
+    放在 app_system_prompt（主聊天、执行子步、规划器三条路共用，见 assembly.py），
+    一处覆盖三处。
+    """
+    sp = AppConfig(api_key="k", _env_file=None).app_system_prompt
+    assert "思考过程" in sp and "思维链" in sp
+    assert "界面" in sp                     # 说清它去了哪：只在界面展示
+    assert "无法查看" in sp                 # 给出明确的答复口径
+    assert "不要调用工具徒劳查找" in sp     # 拦住白调 search/recall/read_file
