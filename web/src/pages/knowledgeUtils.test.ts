@@ -1,73 +1,51 @@
 import { describe, it, expect } from "vitest";
 import { relevanceColor } from "./knowledgeUtils";
 
-describe("relevanceColor", () => {
-  it("100% 深绿", () => expect(relevanceColor(100)).toBe("#1b5e20"));
-  it("[95,100) 浅绿", () => {
-    expect(relevanceColor(99)).toBe("#66bb6a");
-    expect(relevanceColor(95)).toBe("#66bb6a");
-  });
-  it("[90,95) 紫色", () => {
-    expect(relevanceColor(94)).toBe("#9c27b0");
-    expect(relevanceColor(90)).toBe("#9c27b0");
-  });
-  it("[85,90) 蓝色", () => {
-    expect(relevanceColor(89)).toBe("#1976d2");
-    expect(relevanceColor(85)).toBe("#1976d2");
-  });
-  it("[80,85) 黑色", () => {
-    expect(relevanceColor(84)).toBe("#212121");
-    expect(relevanceColor(80)).toBe("#212121");
-  });
-  it("<80 灰色", () => {
-    expect(relevanceColor(79)).toBe("#9e9e9e");
-    expect(relevanceColor(0)).toBe("#9e9e9e");
+// 从 hsl(H, S%, L%) 取色相，用于断言「越相关越绿」而不锁死每一档的具体数值
+const hueOf = (c: string) => Number(/hsl\(\s*([\d.]+)/.exec(c)?.[1]);
+
+const GREY_LIGHT = "#9e9e9e";
+const GREY_DARK = "#bdbdbd";
+
+describe("relevanceColor —— 按展示百分数：<50% 灰，≥50% 越相关越绿", () => {
+  it("<50% 一律灰（不管量纲、不管明暗）", () => {
+    expect(relevanceColor(49)).toBe(GREY_LIGHT);
+    expect(relevanceColor(35)).toBe(GREY_LIGHT);
+    expect(relevanceColor(0)).toBe(GREY_LIGHT);
+    expect(relevanceColor(49, "dark")).toBe(GREY_DARK);
+    expect(relevanceColor(0, "dark")).toBe(GREY_DARK);
   });
 
-  it("暗色模式：黑档翻成近白、各档提亮", () => {
-    expect(relevanceColor(82, "dark")).toBe("#f5f5f5");   // 黑 → 近白
-    expect(relevanceColor(100, "dark")).toBe("#a5d6a7");  // 深绿提亮
-    expect(relevanceColor(92, "dark")).toBe("#ce93d8");   // 紫提亮
-    expect(relevanceColor(87, "dark")).toBe("#64b5f6");   // 蓝提亮
-    expect(relevanceColor(50, "dark")).toBe("#bdbdbd");   // 灰提亮
+  it("分界含 50%：恰好 50% 就脱离灰、上色", () => {
+    expect(relevanceColor(50)).not.toBe(GREY_LIGHT);
+    expect(relevanceColor(49)).toBe(GREY_LIGHT);
+    expect(relevanceColor(50, "dark")).not.toBe(GREY_DARK);
   });
 
-  // 精排量纲：相关性集中在 ~25-55，min_score=0.35（35%）是相关/无关分界
-  describe("rerank 量纲", () => {
-    it(">=50 很相关：深绿", () => {
-      expect(relevanceColor(55, "light", "rerank")).toBe("#1b5e20");
-      expect(relevanceColor(50, "light", "rerank")).toBe("#1b5e20");
-    });
-    it("[40,50) 相关：绿", () => {
-      // 实测相关文档 ≈0.43 → 43%，必须是「相关」色而非灰
-      expect(relevanceColor(43, "light", "rerank")).toBe("#2e7d32");
-      expect(relevanceColor(40, "light", "rerank")).toBe("#2e7d32");
-    });
-    it("[35,40) 勉强过线：蓝", () => {
-      expect(relevanceColor(35, "light", "rerank")).toBe("#1976d2");
-    });
-    it("[25,35) 弱相关：灰黄", () => {
-      // 实测无关文档 ≈0.26 → 26%，应落在弱/无关档而非明显相关色
-      expect(relevanceColor(26, "light", "rerank")).toBe("#c77700");
-      expect(relevanceColor(34, "light", "rerank")).toBe("#c77700");
-    });
-    it("<25 基本无关：灰", () => {
-      expect(relevanceColor(24, "light", "rerank")).toBe("#9e9e9e");
-      expect(relevanceColor(0, "light", "rerank")).toBe("#9e9e9e");
-    });
-    it("暗色模式各档提亮", () => {
-      expect(relevanceColor(55, "dark", "rerank")).toBe("#a5d6a7");
-      expect(relevanceColor(43, "dark", "rerank")).toBe("#66bb6a");
-      expect(relevanceColor(35, "dark", "rerank")).toBe("#64b5f6");
-      expect(relevanceColor(26, "dark", "rerank")).toBe("#ffb74d");
-      expect(relevanceColor(24, "dark", "rerank")).toBe("#bdbdbd");
-    });
+  it("越相关越绿：色相从暖（50%）单调过渡到绿（100%）", () => {
+    const h50 = hueOf(relevanceColor(50));
+    const h75 = hueOf(relevanceColor(75));
+    const h100 = hueOf(relevanceColor(100));
+    expect(h50).toBeLessThan(h75);
+    expect(h75).toBeLessThan(h100);
+    expect(h50).toBeLessThan(90);              // 50% 落在暖色端
+    expect(h100).toBeGreaterThanOrEqual(120);  // 100% 落在绿色端
+  });
 
-    // 变异证伪：若 rerank 也走旧 rank 阈值，43% 会落进 <80 灰色档。
-    // 断言 rerank 下 43% 明确不是灰、且是相关绿，锁死量纲分流。
-    it("证伪：rerank 43% 不能是旧阈值的灰色", () => {
-      expect(relevanceColor(43, "light", "rerank")).not.toBe("#9e9e9e");
-      expect(relevanceColor(43, "light", "rank")).toBe("#9e9e9e"); // 旧量纲对照：确实是灰
-    });
+  it("超过 100% 按 100% 封顶，不产生越界色", () => {
+    expect(relevanceColor(150)).toBe(relevanceColor(100));
+    expect(relevanceColor(101, "dark")).toBe(relevanceColor(100, "dark"));
+  });
+
+  it("明暗各自为背景优化，同一分数取色不同", () => {
+    expect(relevanceColor(75, "dark")).not.toBe(relevanceColor(75, "light"));
+    expect(relevanceColor(100, "dark")).not.toBe(relevanceColor(100, "light"));
+  });
+
+  it("只看展示的百分数，不再区分 rerank/rank 量纲", () => {
+    // 旧实现里 rerank 的 43% 是绿色、rank 的 43% 是灰色；新规则下 43% 一律灰（<50）
+    expect(relevanceColor(43)).toBe(GREY_LIGHT);
+    // 60% 一律上色，与它来自哪种量纲无关
+    expect(relevanceColor(60)).not.toBe(GREY_LIGHT);
   });
 });
