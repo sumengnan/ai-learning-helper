@@ -350,6 +350,22 @@ class Orchestrator:
         if final and not streamed:
             yield TextDelta(text=final)
 
+    # ---- 简单直答交付（三处共用：simple 分流 / 规划失败降级 / 1 步计划回退）----
+    async def _simple_deliver(self, message, budget, *, context, registry, skill_hint,
+                              verify, force_simple=False):
+        """走单循环直答。verify 决定是否补一道终局校验（与 simple 分流同口径），三处共用
+        以免逻辑漂移。force_simple 仅考试轮为真；1 步回退与规划降级都传 False。"""
+        if verify and (force_simple or not _obvious_simple(message)):
+            async for ev in self._simple_answer_verified(
+                    message, budget, context=context, registry=registry,
+                    skill_hint=skill_hint, in_exam=force_simple):
+                yield ev
+        else:
+            async for ev in self._simple_answer(message, budget, context=context,
+                                                registry=registry, prefer_main=force_simple,
+                                                skill_hint=skill_hint):
+                yield ev
+
     # ---- 主入口 ----
     async def run(self, user_message: str, verify: bool = True, *,
                   context=None, registry=None, recent_dialogue: str = "",
@@ -452,24 +468,15 @@ class Orchestrator:
                 # （翻译/总结/改写这一段：原料已在消息里，不需拆步骤，triage 判 simple），
                 # 那些是真交付物，开了开关却完全不校验，等于开关在这条路上形同虚设。
                 # 仍放过 _obvious_simple（纯寒暄/致谢）：校验「你好」纯属白烧一次往返。
-                if verify and (force_simple or not _obvious_simple(user_message)):
-                    async for ev in self._simple_answer_verified(
-                            user_message, budget, context=context, registry=registry,
-                            skill_hint=skill_hint, in_exam=force_simple):
-                        yield ev
-                else:
-                    async for ev in self._simple_answer(user_message, budget, context=context,
-                                                        registry=registry,
-                                                        prefer_main=force_simple,
-                                                        skill_hint=skill_hint):
-                        yield ev
+                async for ev in self._simple_deliver(
+                        user_message, budget, context=context, registry=registry,
+                        skill_hint=skill_hint, verify=verify, force_simple=force_simple):
+                    yield ev
                 return
 
-            # 与简单路径成对：在规划开始前发，让徽章与「任务计划思考」同时出现，而不是
-            # 等计划出来才追认。后面规划失败降级到 _simple_answer 时不改口——那轮确实
-            # 走了编排器，只是没成功，改成「简单直答」反而掩盖了失败。
-            yield Progress(scope="route", text="多步规划", key="route",
-                           detail={"mode": "plan"}, status="ok")
+            # 路由徽章推迟到规划**之后**发：只有拿到计划、数清步数，才知道真实走向。
+            # 曾在规划前就发「多步规划」，但现在 1 步计划要回退简单直答——若提前发多步徽章、
+            # 这里再回退，用户会先看到「多步规划」再收到简单答复，自相矛盾。故规划前不表态。
 
             # 规划器必须看到执行子步真正拿得到的那份工具视图（exec_reg，非裸 registry）：
             # 否则它会凭常识编出系统做不到的步骤（如「保存到 Notion/Obsidian」），执行子步
@@ -481,12 +488,30 @@ class Orchestrator:
                                        tools_desc=tools_desc), out):
                 yield ev
             if "error" in out:
-                async for ev in self._simple_answer(user_message, budget,   # 降级
-                                                    context=context, registry=registry,
-                                                    skill_hint=skill_hint):
+                # 规划失败 → 降级简单直答。徽章按用户实际收到的呈现：他拿到的是一份简单答复。
+                yield Progress(scope="route", text="简单直答", key="route",
+                               detail={"mode": "simple"}, status="ok")
+                async for ev in self._simple_deliver(
+                        user_message, budget, context=context, registry=registry,
+                        skill_hint=skill_hint, verify=verify):
                     yield ev
                 return
             plan = out["plan"]
+            if len(plan.steps) <= 1:
+                # planner 只拆出一步 = 这题本可直答（triage 判复杂多半是误判，或确是「单步但需
+                # 工具」）。走完整编排（execute→validate→review→synthesize）纯属把简单直答包一层
+                # 昂贵仪式——尤其 synthesize 会用主模型把唯一产物重述一遍。回退简单直答，只在此刻
+                # 才发「简单直答」徽章、且不发 _plan_progress（不出任务步骤块），避免自相矛盾。
+                yield Progress(scope="route", text="简单直答", key="route",
+                               detail={"mode": "simple"}, status="ok")
+                async for ev in self._simple_deliver(
+                        user_message, budget, context=context, registry=registry,
+                        skill_hint=skill_hint, verify=verify):
+                    yield ev
+                return
+            # 确是多步 → 此刻才确认走编排器，发徽章 + 任务步骤块。
+            yield Progress(scope="route", text="多步规划", key="route",
+                           detail={"mode": "plan"}, status="ok")
             yield _plan_progress(plan)
 
             replan_count = 0
