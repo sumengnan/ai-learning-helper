@@ -282,8 +282,15 @@ def build_harness(config) -> Harness:
         planner=Planner(_plan_complete, max_retries=config.orchestrator_planner_max_retries),
         # 单步 validate 与终局 review 都吃 judge 档：validate 现在能判 impossible（终结该步、
         # 并抑制重规划），一次误判代价放大到整条任务分支，故不再图快用便宜档，与 review 同级
-        # 由裁判模型来判。未配 judge_model 时 build_judge_completer 回退主模型，对没配的人零变更。
-        # 代价：validate 是每子步都跑的高频调用，走 judge 会加每轮延迟——这是刻意用速度换判准。
+        # 由裁判模型来判。做法是不再传 validate_complete，让它回退到基座（_review_complete）。
+        #
+        # 未配 judge_model 时 build_judge_completer 回退主模型，故 validate 实际走的档随配置：
+        #   都没配        → 主模型（与改前相同，无变化）
+        #   只配 fast     → 主模型（改前走用户配的 fast 档！validate 从快速档升到主模型，每子步
+        #                    都跑，成本/延迟上调——想省成本的人务必知道这条，或干脆配上 judge_model）
+        #   配了 judge    → judge 档
+        # 即：只有「配了 fast、没配 judge」的部署有意外变化，别的配置行为不变。
+        # 代价：validate 是每子步都跑的高频调用，走 judge/主模型都比原快速档慢——刻意用速度换判准。
         critic=Critic(_review_complete),
         executor=Executor(_exec_client, _exec_reg, config.app_system_prompt, _exec_model,
                           max_steps=config.orchestrator_step_max_steps,

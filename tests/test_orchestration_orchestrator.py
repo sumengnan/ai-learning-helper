@@ -795,9 +795,11 @@ async def test_run_emits_per_model_usage():
     for u in usages:
         e = agg.setdefault(u.model, {"tok": 0, "cost": 0.0})
         e["tok"] += u.usage.total_tokens; e["cost"] += u.cost_usd or 0.0
+    # 注：这里的 "fast-model"/"main-model" 是各 mock 自己塞进 record_usage 的**任意标签**，
+    # 只为验证「用量按模型名分桶聚合」这一逻辑，不代表真实分档（真实里 validate/review 走 judge）。
     assert set(agg) == {"fast-model", "main-model"}
-    assert agg["fast-model"]["tok"] == 110      # exec 100 + validate 10
-    assert agg["main-model"]["tok"] == 100      # plan 30 + review 20 + synth 50
+    assert agg["fast-model"]["tok"] == 110      # 本 mock 把 exec(100) 与 validate(10) 都标了 fast-model
+    assert agg["main-model"]["tok"] == 100      # 本 mock 把 plan(30)+review(20)+synth(50) 标了 main-model
     assert abs(agg["fast-model"]["cost"] - 0.011) < 1e-9
     assert abs(agg["main-model"]["cost"] - 0.010) < 1e-9
 

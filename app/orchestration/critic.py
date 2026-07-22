@@ -101,8 +101,10 @@ def _review_user(goal: str, plan: Plan, artifacts: dict) -> str:
 
 class Critic:
     def __init__(self, complete, *, validate_complete=None) -> None:
-        self._complete = complete                        # 终局 review 用（质量要求高，走主模型）
-        self._validate = validate_complete or complete   # 单步 validate 用（频繁，可走快速档提速）
+        # 类支持 validate 与 review 分档：传了 validate_complete 就用它，否则回退基座 complete。
+        # 装配层当前两者同走 judge 档（validate 能判 impossible、误判代价大，见 assembly.py）。
+        self._complete = complete                        # 终局 review 用
+        self._validate = validate_complete or complete   # 单步 validate 用；缺省回退 review 同档
 
     async def validate(self, step: PlanStep, artifact: Artifact) -> Verdict:
         try:
