@@ -16,6 +16,11 @@ class MemoryHit:
     distance: float
     id: str = ""            # 命中记录的 id（facade 回填；旧 MemoryStore 路径留空）
     created_at: str = ""    # 命中记录的创建时间（同上）
+    rerank_score: float | None = None
+    # 精排（qwen3-rerank）算出的绝对相关性分，量纲 [0,1]（实测 unrelated≈0.26、related≈0.43）。
+    # 这是整条检索链上唯一没被 RRF/minmax 抹掉的绝对信号：distance 源自候选集内 minmax 归一化的
+    # 融合分，最高的那条恒为 1.0，只反映相对排名、不反映「到底有多相关」。
+    # 为 None 表示本次没有精排分（精排关闭，或精排端点降级为原序返回）。
 
 
 def _now() -> str:

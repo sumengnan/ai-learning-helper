@@ -83,4 +83,17 @@ describe("KnowledgeView", () => {
     expect(api.documents.search).toHaveBeenCalledWith("光合作用");
     expect(screen.getByText(/hit\.txt/)).toBeTruthy();
   });
+
+  it("无精排分（relevance_kind=rank）时标签改为『排名分』以区分绝对相关度", async () => {
+    (api.documents.list as any).mockResolvedValue({ items: [], total: 0 });
+    (api.documents.search as any).mockResolvedValue([
+      { id: "9", filename: "hit.txt", uploaded_at: "2026-07-11T00:00:00Z",
+        category: "文本", excerpt: "命中片段", relevance: 87, relevance_kind: "rank" },
+    ]);
+    renderView();
+    const box = await screen.findByPlaceholderText("搜索文档…");
+    fireEvent.change(box, { target: { value: "光合作用" } });
+    await waitFor(() => expect(screen.getByText(/排名分 87%/)).toBeTruthy());
+    expect(screen.queryByText(/相关度 87%/)).toBeNull();
+  });
 });

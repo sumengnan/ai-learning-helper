@@ -137,11 +137,23 @@ class KnowledgeService:
         hits = await self._memory.search(query, self._collection_for(user_id), k)
         results = []
         for h in hits:
-            # distance = 1 - 融合分（越小越相关，可能为负）；相关度 = 融合分裁剪到 0–100%
-            relevance = max(0, min(100, round((1 - h.distance) * 100)))
+            # 「相关度%」优先用精排（qwen3-rerank）的绝对分。
+            # 根因：distance = 1 - 融合分，而融合分经候选集内 minmax 归一化——最高的那条恒为 1.0，
+            # 于是 (1-distance)*100 让无关文档也显示「相关度 100%」，只反映相对排名、非绝对相关性。
+            # rerank_score 是整条检索链上唯一的绝对相关性信号（[0,1] 量纲），有它就用它。
+            if h.rerank_score is not None:
+                relevance = max(0, min(100, round(h.rerank_score * 100)))
+                relevance_kind = "rerank"          # 绝对相关度
+            else:
+                # 精排关闭或端点降级：无绝对分，回退到旧的相对排名分，并标明其性质，
+                # 让前端能提示「这是排名分、不是绝对相关度」，不再误导用户。
+                relevance = max(0, min(100, round((1 - h.distance) * 100)))
+                relevance_kind = "rank"            # 相对排名分
             item = self._fragment(h.id, h.text, h.metadata, h.created_at)
             item["relevance"] = relevance
+            item["relevance_kind"] = relevance_kind
             results.append(item)
+        # 精排已按绝对分排好序，这里按 relevance 降序与之一致（无精排时按排名分降序）。
         results.sort(key=lambda r: r["relevance"], reverse=True)
         return results
 
