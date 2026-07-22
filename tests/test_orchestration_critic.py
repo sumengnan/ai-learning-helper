@@ -133,3 +133,34 @@ def test_synth_system_surfaces_the_question_to_user():
     from app.orchestration.orchestrator import SYNTH_SYSTEM
     assert "明确提给用户" in SYNTH_SYSTEM
     assert "不要自行假设填补" in SYNTH_SYSTEM or "不要自行假设" in SYNTH_SYSTEM
+
+
+async def test_validate_impossible_marks_terminal_signal():
+    """结构性障碍（缺工具/权限/能力，问也没用）→ impossible=true，供编排器终态放弃、不白重试。"""
+    critic = Critic(_complete_json(
+        {"ok": False, "impossible": True, "reason": "需调用不存在的内部系统工具"}))
+    v = await critic.validate(_step(), Artifact(summary="我无法完成：系统里没有该工具"))
+    assert v.ok is False and v.impossible is True
+
+
+async def test_impossible_only_meaningful_when_not_ok():
+    """impossible 只在判不通过时有意义：模型若矛盾地同时给 ok=true+impossible=true，
+    不能把一个通过的步误终结。"""
+    critic = Critic(_complete_json({"ok": True, "impossible": True, "reason": "矛盾输出"}))
+    v = await critic.validate(_step(), Artifact(summary="其实做好了"))
+    assert v.ok is True and v.impossible is False
+
+
+async def test_plain_fail_is_not_impossible():
+    """只是没做好（方向偏/内容浅）默认不是 impossible——该留给重试，不能判死。"""
+    critic = Critic(_complete_json({"ok": False, "reason": "内容太浅"}))
+    v = await critic.validate(_step(), Artifact(summary="敷衍两句"))
+    assert v.ok is False and v.impossible is False
+
+
+async def test_validate_failopen_is_never_impossible():
+    """校验器抖动 fail-open 放行时，绝不能顺手标 impossible——那会把「校验挂了」误判成
+    「任务做不到」，反而把本可重试/交付的步终结掉。"""
+    critic = Critic(_raising_complete())
+    v = await critic.validate(_step(), Artifact(summary="x"))
+    assert v.ok is True and v.impossible is False

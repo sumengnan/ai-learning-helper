@@ -24,11 +24,13 @@ class FakePlanner:
 
 
 class FakeCritic:
-    def __init__(self, validate_ok=True, reviews=(True,)):
+    def __init__(self, validate_ok=True, reviews=(True,), validate_impossible=False):
         self._validate_ok = validate_ok
+        self._validate_impossible = validate_impossible
         self._reviews = list(reviews); self._ri = 0
     async def validate(self, step, artifact):
-        return Verdict(ok=self._validate_ok, reason="")
+        return Verdict(ok=self._validate_ok, reason="",
+                       impossible=(not self._validate_ok) and self._validate_impossible)
     async def review(self, goal, plan, artifacts):
         r = self._reviews[min(self._ri, len(self._reviews) - 1)]; self._ri += 1
         return Review(accept=r, feedback="补一下X")
@@ -184,6 +186,31 @@ async def test_validate_fail_retries_bounded_then_failed():
     events = await _run(orch)
     assert isinstance(events[-1], RunFinished)   # 不因单步失败崩溃
     assert order.count("s1") == 2                # 初次 + 1 次重试（max_step_retry=2）
+
+
+async def test_impossible_step_gives_up_immediately_no_retry():
+    """结构性障碍（Critic 判 impossible）→ 终态放弃，只跑一次，不走满 max_step_retry。
+
+    「做不到」与「没做好」是两回事：前者重试只会把同一句「我做不到」再说一遍，纯浪费。
+    对照上面的普通失败（跑 2 次），此处 impossible 只跑 1 次。
+    """
+    order = []
+    orch = _mk(FakePlanner([_plan(_s("s1"))]),
+               FakeCritic(validate_ok=False, validate_impossible=True, reviews=(True,)), order)
+    events = await _run(orch)
+    assert isinstance(events[-1], RunFinished)   # 仍带残缺成果收尾，不崩溃
+    assert order.count("s1") == 1, "impossible 步不该重试"
+
+
+async def test_downstream_of_impossible_step_is_skipped():
+    """impossible 步终态失败后，依赖它的下游步进不了就绪集 → skipped，整轮不卡死。"""
+    order = []
+    plan = _plan(_s("s1"), _s("s2", deps=["s1"]))
+    orch = _mk(FakePlanner([plan]),
+               FakeCritic(validate_ok=False, validate_impossible=True, reviews=(True,)), order)
+    await _run(orch)
+    assert order.count("s1") == 1 and "s2" not in order   # s1 一次放弃，s2 从不执行
+    assert plan.steps[0].status == "failed" and plan.steps[1].status == "skipped"
 
 
 class _CountingCritic:

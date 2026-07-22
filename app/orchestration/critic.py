@@ -26,12 +26,28 @@ _CLARIFY_EXEMPTION = (
     "可按合理默认推进的细节，仍判不通过。"
 )
 
+# impossible 与 clarify 豁免的分界：能靠「问用户」解决的缺信息，走 clarify 判 ok=true
+# （系统会把问题交付给用户）；而 impossible 是**问也没用**的结构性障碍——所需工具/权限/
+# 能力在本系统里根本不存在（如「调用某内部系统」而工具表里没有、「访问需要登录的站点」而
+# 无凭据）。这类步重试只是把同一句「我做不到」再说一遍，纯浪费，故直接终态放弃。
+# 判据要严：只有产出**明确点出**缺的是哪项系统性能力、且非重试能补时才算；单纯没写好、
+# 方向偏、内容浅，一律走普通 ok=false 让它重试——把「没做好」误判成「做不到」会把该救回
+# 的步直接判死。
+_IMPOSSIBLE_RULE = (
+    "【无法完成】另有一种不通过：产出明确表明该步存在**结构性障碍**——完成它所必需的工具、"
+    "权限或数据在本系统里根本不具备（例如需要调用某个并不存在的工具、访问需登录而无凭据的系统），"
+    "且这不是重试或补充信息能解决的。此时置 impossible=true（同时 ok=false）：再试一遍只会"
+    "得到同样的「做不到」，应终态放弃、交由整体收尾如实向用户说明。"
+    "务必与上面的澄清豁免区分：缺的信息若能由用户提供，那是澄清（ok=true），不是无法完成。"
+    "也务必与「只是没做好」区分：方向偏、内容浅、遗漏细节都仍是普通 ok=false，要留给重试。"
+)
+
 VALIDATE_SYSTEM = (
     "你是单步质检员。给你一个子任务的描述、预期产出、以及实际产出。"
     "判断实际产出是否达成了预期产出。宽松务实：只要方向对、内容基本可用即算通过；"
     "只有明显答非所问、空洞、或与预期南辕北辙才判不通过。"
-    + _CLARIFY_EXEMPTION +
-    '只输出 JSON：{"ok": true/false, "reason": "一句话理由"}。'
+    + _CLARIFY_EXEMPTION + _IMPOSSIBLE_RULE +
+    '只输出 JSON：{"ok": true/false, "impossible": true/false, "reason": "一句话理由"}。'
 )
 
 REVIEW_SYSTEM = (
@@ -91,7 +107,11 @@ class Critic:
     async def validate(self, step: PlanStep, artifact: Artifact) -> Verdict:
         try:
             v = await call_json(self._validate, VALIDATE_SYSTEM, _validate_user(step, artifact))
-            return Verdict(ok=_coerce_bool(v.get("ok"), True), reason=str(v.get("reason", "")))
+            ok = _coerce_bool(v.get("ok"), True)
+            # impossible 只在「判不通过」时才有意义：通过的步无所谓可否重试。这样即便模型
+            # 把 ok=true 和 impossible=true 一起返回（矛盾输出），也不会误终结一个通过的步。
+            impossible = (not ok) and _coerce_bool(v.get("impossible"), False)
+            return Verdict(ok=ok, reason=str(v.get("reason", "")), impossible=impossible)
         except Exception as e:  # fail-open：抖动放行
             _log.warning("Critic.validate 调用失败，fail-open 放行：%s", e)
             return Verdict(ok=True, reason=f"校验调用失败，放行：{str(e)[:120]}")

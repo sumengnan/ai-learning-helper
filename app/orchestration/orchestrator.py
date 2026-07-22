@@ -686,10 +686,12 @@ class Orchestrator:
                         step.elapsed_ms = _elapsed(step)   # 定格耗时
                         retry_hints.pop(step.id, None)
                     else:
-                        # 用户拒绝了本步里的危险操作 → 终态失败，不重试：
-                        # 重跑只会把同一个弹窗再怼给用户一次，答案不会变。
+                        # 终态失败（不重试）的两种确定性情形，重跑都只会得到同样结果：
+                        #   terminal —— 用户拒绝了本步里的危险操作（重跑=再怼一次弹窗）；
+                        #   verdict.impossible —— 缺工具/权限/能力的结构性障碍（重跑=再说一遍做不到）。
+                        # 其余的不通过是「没做好」，仍走重试兜底。
                         self._on_step_fail(step, retry_hints, verdict.reason,
-                                           terminal=terminal)
+                                           terminal=terminal or verdict.impossible)
                         for _ev in self._settle_failed_attempt(
                                 step, fx, purge_side_effects, step_effects):
                             yield _ev
