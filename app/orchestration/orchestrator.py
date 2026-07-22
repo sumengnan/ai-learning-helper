@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 import uuid
+
+log = logging.getLogger("app.orchestration")
 
 
 def _now_ms() -> int:
@@ -273,12 +276,15 @@ class Orchestrator:
     async def _simple_answer_verified(self, message: str, budget=None, *, context=None,
                                       registry=None, skill_hint: str = "",
                                       in_exam: bool = True):
-        """带终局校验的简单直答。用于考试轮（force_simple + 前端结果校验开）。
+        """带终局校验的简单直答。用于考试轮（force_simple）与「1 步计划回退」（非考试）。
 
         与多步路径的区别是**不重规划**：考试是有状态流程，重新拆解会打乱逐题推进。
-        校验不过就地重答一次，且重答给空工具表——考试轮的原料（判定结论、正确答案、
-        解析、下一题题面）已由服务端在「[考试系统判定]…」提示里给全，模型只需重新
-        组织文字；留着工具反而可能让它再调一次 start_exam，把考试进度整个重置。
+        校验不过就地重答一次。**重答的工具表按 in_exam 分叉**：
+        - 考试轮（in_exam=True）给空工具表——原料（判定结论、正确答案、解析、下一题题面）
+          已由服务端在「[考试系统判定]…」提示里给全，模型只需重新组织文字；留着工具反而
+          可能让它再调一次 start_exam，把考试进度整个重置。
+        - 非考试的 1 步回退（in_exam=False）给真实工具表——这类题恰恰可能「单步但需工具」，
+          首答调了检索/生成，若重答无工具就只能空转文字、没法重做，是能力回退。故放行工具。
 
         第一版的 RunFinished 必须压住不发：它是终结信号，先发出去前端立刻标「已完成」，
         而这一版随时可能被重答顶掉（与交付门 passthrough=False 的处理同理）。
@@ -317,9 +323,12 @@ class Orchestrator:
         # 清屏：第一版已逐字流给用户，重答前清空，让新版从头打字机输出。
         # chat 路由据此同步清掉落库缓冲，否则最终落库的是「被否那版 + 新版」的拼接。
         yield Progress(scope="reset", text="")
+        # 重答工具表：考试轮空表（防 start_exam 重置进度），非考试的 1 步回退给真实工具表
+        # （否则「单步但需工具」的题重答只能空转、没法重做检索/生成）。
+        redo_registry = ToolRegistry() if in_exam else registry
         async for ev in self._simple_answer(_redo_message(message, review.feedback),
                                             budget, context=context,
-                                            registry=ToolRegistry(), prefer_main=True):
+                                            registry=redo_registry, prefer_main=True):
             yield ev
 
     # ---- synthesize ----
@@ -489,6 +498,10 @@ class Orchestrator:
                 yield ev
             if "error" in out:
                 # 规划失败 → 降级简单直答。徽章按用户实际收到的呈现：他拿到的是一份简单答复。
+                # 但徽章报 simple 会让这轮在事件/trajectory 上与真正的简单查询无从区分——用户
+                # 体验该一致（simple），可诊断性不能一起丢。故这里显式记一条 warning：把「给用户看
+                # 的呈现」与「给运维查的信号」解耦，规划失败仍留痕可查。
+                log.warning("规划失败，降级简单直答：%s", out["error"])
                 yield Progress(scope="route", text="简单直答", key="route",
                                detail={"mode": "simple"}, status="ok")
                 async for ev in self._simple_deliver(
@@ -500,8 +513,14 @@ class Orchestrator:
             if len(plan.steps) <= 1:
                 # planner 只拆出一步 = 这题本可直答（triage 判复杂多半是误判，或确是「单步但需
                 # 工具」）。走完整编排（execute→validate→review→synthesize）纯属把简单直答包一层
-                # 昂贵仪式——尤其 synthesize 会用主模型把唯一产物重述一遍。回退简单直答，只在此刻
-                # 才发「简单直答」徽章、且不发 _plan_progress（不出任务步骤块），避免自相矛盾。
+                # 仪式——尤其 synthesize 会用主模型把唯一产物重述一遍。回退简单直答，只在此刻才发
+                # 「简单直答」徽章、且不发 _plan_progress（不出任务步骤块），避免自相矛盾。
+                #
+                # 「省」要说实话：省的是往返数（4→2：去掉 validate 一次 judge、去掉 synthesize
+                # 那次主模型重述）与延迟。但回退走 _simple_answer_verified 是主模型带工具执行，
+                # 而编排器的执行子步走快速档——对工具 I/O 吃 token 大的单步，主模型执行未必比
+                # 「快速档执行 + 主模型汇总一小段产物」的原始 token 更省。净省的是往返/重述，不是
+                # 无条件省 token。
                 yield Progress(scope="route", text="简单直答", key="route",
                                detail={"mode": "simple"}, status="ok")
                 async for ev in self._simple_deliver(

@@ -2059,7 +2059,7 @@ async def test_purged_artifact_is_removed_from_done_effects_so_model_redoes_it()
     # 回调按 SideEffectPurger.purge 的真实形状返回分组 dict
     [ev async for ev in orch.run("做点事", purge_side_effects=lambda fx: dict(fx))]
 
-    assert len(ex.seen_done_effects) >= 2, "s1 应跑两次（首次+重跑）；s2 追加第 3 条"
+    assert len(ex.seen_done_effects) == 3, "s1 跑两次（首次+重跑）+ s2 一次；精确计数守住不多跑"
     assert ex.seen_done_effects[0] == []
     assert "save_download" not in ex.seen_done_effects[1], (
         "首次存的文件已被删，重跑时不能再告诉模型「你已经存过了」，否则它不会重存")
@@ -2262,3 +2262,25 @@ async def test_one_step_fallback_route_badge_after_planning_not_before():
     orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [])
     rs = _routes(await _run(orch, "调研 AI 现状"))
     assert [r.detail["mode"] for r in rs] == ["simple"]   # 绝不出现 plan
+
+
+async def test_one_step_fallback_redo_keeps_tools_unlike_exam():
+    """非考试的 1 步回退：校验拒 → 重答**带真实工具表**（与考试轮相反）。
+
+    对照 test_exam_turn_failed_review_redoes_without_exam_tools（考试轮重答空工具、防
+    start_exam 重置）：非考试的「单步但需工具」题，首答调了检索/生成，重答若无工具就只能
+    空转、没法重做，是能力回退。故 in_exam=False 时重答放行工具。
+    """
+    cap = []
+    # 复用 _exam_orch 的记录式 _simple_answer；planner 出 1 步 → run() 回退简单直答。
+    # 不加 force_simple（in_exam=False），review 先拒后受触发一次重答。
+    orch = _exam_orch((False, True), cap)
+    base_reg = ToolRegistry()
+    events = [ev async for ev in orch.run("查一下最新的 X 并总结", verify=True,
+                                          registry=base_reg)]
+    assert len(cap) == 2, "应重答一次"
+    assert cap[0]["registry"] is base_reg              # 首答：真实工具表
+    assert cap[1]["registry"] is base_reg              # 重答：仍是真实工具表（非空！）
+    assert events[-1].message.content == "第2版讲解"    # 交付重答那版
+    # 徽章仍报简单直答（1 步回退）
+    assert [r.detail["mode"] for r in _routes(events)] == ["simple"]
