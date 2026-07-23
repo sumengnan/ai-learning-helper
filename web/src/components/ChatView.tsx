@@ -777,11 +777,15 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
             onChange={(e) => toggleThink(e.target.checked)} />}
           label={<Typography variant="caption">思考模式</Typography>}
         />
-        <FormControlLabel
-          control={<Switch size="small" checked={effectiveVerify} disabled={busy || examActive}
-            onChange={(e) => toggleVerify(e.target.checked)} />}
-          label={<Typography variant="caption">结果校验{examActive ? "（考试中禁用）" : ""}</Typography>}
-        />
+        <Tooltip placement="top" enterDelay={0} title={examActive
+          ? (<>考试由系统按标准答案判分，<br />AI 只主持讲解、不代你作答，无需结果校验。<br />考试结束后自动恢复。</>)
+          : ""}>
+          <FormControlLabel
+            control={<Switch size="small" checked={effectiveVerify} disabled={busy || examActive}
+              onChange={(e) => toggleVerify(e.target.checked)} />}
+            label={<Typography variant="caption">结果校验{examActive ? "（考试中禁用）" : ""}</Typography>}
+          />
+        </Tooltip>
         <FormControlLabel
           control={<Switch size="small" checked={showTools} disabled={busy}
             onChange={(e) => toggleShowTools(e.target.checked)} />}

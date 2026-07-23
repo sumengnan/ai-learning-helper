@@ -191,7 +191,7 @@ describe("ChatView", () => {
       .mockResolvedValue({ active: false } as any);
     render(<ChatView conversationId="c1" initial={[]} />);
 
-    const sw = () => screen.getByLabelText(/结果校验/) as HTMLInputElement;
+    const sw = () => screen.getByText(/结果校验/).closest("label")!.querySelector("input") as HTMLInputElement;
     // 进入考试 → 关且禁用
     await waitFor(() => expect(sw().disabled).toBe(true));
     expect(sw().checked).toBe(false);
@@ -204,6 +204,17 @@ describe("ChatView", () => {
     // 考试结束 → 开关恢复用户原设置（开且可用）
     await waitFor(() => expect(sw().disabled).toBe(false));
     expect(sw().checked).toBe(true);
+  });
+
+  it("考试进行中：悬停结果校验开关，tooltip 解释为什么禁用", async () => {
+    vi.mocked(api.exam.status).mockResolvedValueOnce(
+      { active: true, cursor: 0, total: 2, mode: "instant" } as any);
+    render(<ChatView conversationId="c1" initial={[]} />);
+    const sw = () => screen.getByText(/结果校验/).closest("label")!.querySelector("input") as HTMLInputElement;
+    await waitFor(() => expect(sw().disabled).toBe(true));
+    // 悬停到开关标签 → 出现说明（考试由系统判分、AI 不代答，故校验关闭）
+    fireEvent.mouseOver(screen.getByText(/结果校验/));
+    expect(await screen.findByText(/考试由系统按标准答案判分/)).toBeTruthy();
   });
 
   it("拿到 run 句柄前「停止」禁用；句柄到达后启用并调 stopRun", async () => {
