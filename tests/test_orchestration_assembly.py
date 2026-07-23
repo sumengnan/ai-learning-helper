@@ -92,6 +92,8 @@ def test_single_step_validate_wired_to_judge_completer(monkeypatch):
     monkeypatch.setattr(critic_mod, "Critic", _spy)
 
     build_harness(AppConfig())
-    assert captured["validate"] is judge_sentinel, "单步 validate 必须走 judge 档"
-    assert captured["review"] is judge_sentinel      # review 本就是 judge
+    from app.completion import unwrap_completer
+    # 外面包了一层 with_role（critic 恒 0 温），穿透后再比身份
+    assert unwrap_completer(captured["validate"]) is judge_sentinel, "单步 validate 必须走 judge 档"
+    assert unwrap_completer(captured["review"]) is judge_sentinel   # review 本就是 judge
     assert captured["validate"] is not fast_sentinel  # 明确：不再是快速档

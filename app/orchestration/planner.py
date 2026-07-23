@@ -2,6 +2,7 @@
 """Planner：把用户目标拆成 DAG 计划。结构化 JSON 输出 + 落地即校验 + 有界重试。"""
 from __future__ import annotations
 
+import contextlib
 import re
 
 from pydantic import BaseModel, ValidationError
@@ -175,10 +176,26 @@ def _scrub(steps: list[PlanStep], tools_desc: str) -> list[PlanStep]:
     return steps
 
 
+@contextlib.contextmanager
+def _retry_temperature(enabled: bool, attempt: int):
+    """规划重试的降温档；未开启或首次尝试时是空操作（零开销、行为不变）。"""
+    if not enabled or attempt <= 0:
+        yield
+        return
+    from app.sampling_policy import parse_fail_delta
+    from harness.llm.sampling import temperature_delta
+    with temperature_delta(parse_fail_delta(attempt)):
+        yield
+
+
 class Planner:
-    def __init__(self, complete, *, max_retries: int = 2) -> None:
+    def __init__(self, complete, *, max_retries: int = 2,
+                 dynamic_temperature: bool = False) -> None:
+        """dynamic_temperature：重试时逐档**降**温（见 _generate）。与「打转升温」方向相反——
+        规划失败的表现是吐出非法 JSON/悬挂依赖，那是采样太散，不是陷在一条路上。"""
         self._complete = complete
         self._max_retries = max_retries
+        self._dynamic_temperature = dynamic_temperature
 
     async def plan(self, goal: str, recent_dialogue: str = "", skill_hint: str = "", *,
                    tools_desc: str = "") -> Plan:
@@ -198,10 +215,13 @@ class Planner:
 
     async def _generate(self, system: str, user: str, goal: str = "") -> list[PlanStep]:
         last_err = ""
-        for _ in range(self._max_retries + 1):
+        for attempt in range(self._max_retries + 1):
             u = user if not last_err else f"{user}\n\n上次输出无效：{last_err}。请修正后重新输出。"
             try:
-                raw = await call_json(self._complete, system, u)
+                # 每重试一次降一档（地板见 sampling_policy.DELTA_PARSE_FAIL_MAX）：拿同一个
+                # 温度把非法 DAG 再吐一遍没有意义，收紧采样才更可能出合法结构。
+                with _retry_temperature(self._dynamic_temperature, attempt):
+                    raw = await call_json(self._complete, system, u)
                 steps = _parse_steps(raw)
             except Exception as e:  # 解析/schema/网络任一失败 → 记错重试
                 last_err = str(e)[:200]

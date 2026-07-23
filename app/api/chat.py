@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -20,6 +21,9 @@ from harness.events import (
     ToolFinished, ToolStarted)
 from harness.llm.openai_compat import (
     json_output, reset_extra_body_override, set_extra_body_override)
+from harness.llm.sampling import reset_nudge_delta, set_nudge_delta
+
+from ..sampling_policy import DELTA_LOOP_NUDGE
 from harness.loop.agent_loop import AgentLoop
 from harness.persistence.serialize import event_to_dict
 from harness.progress import reset_emitter, set_emitter
@@ -259,6 +263,19 @@ def _side_effect_ids(steps: list[dict]) -> dict[str, list[str]]:
     return out
 
 
+@contextlib.contextmanager
+def _redo_temperature(config, attempt: int):
+    """整轮重答的升温档；关闭动态温度或首次尝试时是空操作（零开销、行为不变）。"""
+    if not getattr(config, "enable_dynamic_temperature", True) or attempt <= 0:
+        yield
+        return
+    from harness.llm.sampling import temperature_delta
+
+    from ..sampling_policy import retry_delta
+    with temperature_delta(retry_delta(attempt)):
+        yield
+
+
 # 副作用工具 → 产物的说法（供重答提示点名，让模型知道要重做什么）
 _FX_KIND = {
     "save_download": "文件",
@@ -481,11 +498,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                      url_block_store=None, user_store=None) -> APIRouter:
     router = APIRouter()
     # 简答题判分用 judge completer（考试判分中间件用；客观题不需要模型）
-    from ..completion import build_judge_completer
-    _exam_judge = build_judge_completer(harness.client, config)
+    from ..completion import build_judge_completer, with_role
+    _exam_judge = with_role(build_judge_completer(harness.client, config), config, "exam_grade")
     # 清单收尾用 judge completer：活很简单（照工具摘要把 4 条填终态），但每次都要在
     # 交付前串行跑一次，所以用便宜/快的那个端点；未配 judge_model 时自动回退主模型。
-    _plan_finalizer = build_judge_completer(harness.client, config)
+    _plan_finalizer = with_role(
+        build_judge_completer(harness.client, config), config, "plan_finalize")
     # 断点续传：一轮生成跑成脱离请求的后台任务，事件走 RunManager 内存总线（见 app/run_manager.py）。
     # 未注入时退化为每路由独立实例（测试/无续传场景），行为仍正确、只是跨请求接不上。
     if run_manager is None:
@@ -499,7 +517,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         if getattr(config, "context_enable_summary", True):
             _summarizer = RollingSummarizer(
                 SummaryStore(conn=store._conn),           # 复用 app.db 连接
-                build_fast_completer(harness.client, config),
+                with_role(build_fast_completer(harness.client, config), config, "summary"),
                 # 计数模型须跟着摘要模型走：它决定 max_summary_tokens 按谁的分词器量
                 model=config.fast_model or config.model,
                 max_summary_tokens=config.context_summary_max_tokens)
@@ -793,6 +811,10 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 # 想那么久」，管的是回答用户的那些调用，而不是交付门校验、记忆调和、记忆整合
                 # 这些旁路。此前它设在 gen() 里且从不 reset，那些旁路全都悄悄继承了它。
                 btoken = set_extra_body_override({"enable_thinking": req.think})
+                # 打转纠偏该升多少温：设在这里而非层层传参——本轮派生的所有 AgentLoop
+                # （主循环、执行子步、子代理）都在这个上下文里，各自读同一个值。
+                ntoken = set_nudge_delta(
+                    DELTA_LOOP_NUDGE if config.enable_dynamic_temperature else 0.0)
                 # 按模型计价上下文：扁平价表 price_map + 默认分层表 + 按模型分层表，主循环与其派生的所有
                 # 子任务（编排器 executor/synthesize/planner/critic 走各自模型）都据各自 model 名精确计价。
                 cttoken = set_pricing(
@@ -818,6 +840,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     queue.put_nowait(RunError(error=str(e)))
                 finally:
                     reset_pricing(cttoken)
+                    reset_nudge_delta(ntoken)
                     reset_extra_body_override(btoken)
                     reset_plan_clock(ptoken)
                     reset_sandbox_conv(stoken)
@@ -1202,8 +1225,13 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         store.add_run(req.conversation_id, run_id_a)
                         source_sink.reset()   # 每次尝试重置，交付时快照该次来源
                         # 门内 TextDelta 现在实时流式：经 _acc 累积进 parts（供刷新还原本轮已见文本）
-                        async for s in _drain(_new_loop(run_id_a), run_id_a, msg, False, collect):
-                            yield _acc(s)
+                        # 重答升温（attempt>0 才生效）：上一版被门拦下后，纠正指令 + 同一个温度
+                        # 很容易把同样的毛病再写一遍；换条采样路径才有「重答」的意义。校验/判分
+                        # 不受影响——它们各自钉死了温度，见 app/sampling_policy.py。
+                        with _redo_temperature(config, attempt):
+                            async for s in _drain(_new_loop(run_id_a), run_id_a, msg,
+                                                  False, collect):
+                                yield _acc(s)
                         steps.extend(collect["steps"])
                         draft = (collect["final"] or "").strip()
                         cur_fx = _side_effect_ids(collect["steps"])   # 本轮生成的副作用产物

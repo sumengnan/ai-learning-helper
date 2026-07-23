@@ -45,6 +45,14 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
+# 瘦身：babel 的 locale-data（CLDR 各国区域数据）约 31MB，是全镜像单个最肥的依赖。
+# babel 由 trafilatura→courlan 顺带引入，courlan 仅用它做 URL 语言启发式，且 Locale.parse
+# 全程包在 try/except UnknownLocaleError 里——缺失的 locale 会被静默跳过。我们只抽中英文正文，
+# 故只保留 root/en*/zh*，删掉其余 ~940 个 locale（省 ~29MB）。抽取回归见 tests/test_browser_extract.py。
+RUN LD="$(echo /app/.venv/lib/python3.*/site-packages/babel/locale-data)" \
+ && find "$LD" -name '*.dat' ! -name 'root.dat' ! -name 'en*.dat' ! -name 'zh*.dat' -delete \
+ && echo "babel locale-data 瘦身后：$(du -sh "$LD" | cut -f1)"
+
 # 源码与运行期需要的目录
 COPY src ./src
 COPY app ./app

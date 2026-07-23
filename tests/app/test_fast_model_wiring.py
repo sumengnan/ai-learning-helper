@@ -111,4 +111,6 @@ def test_question_importer_wired_to_fast_completer(monkeypatch):
     monkeypatch.setattr(M, "QuestionImporter", _spy)
 
     _app(_ThinkingSpy())          # create_app 内部装配 question_importer
-    assert captured.get("complete") is sentinel
+    from app.completion import unwrap_completer
+    # 外面还包了一层 with_role（抽取恒 0 温），穿透后再比身份
+    assert unwrap_completer(captured.get("complete")) is sentinel

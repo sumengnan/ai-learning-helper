@@ -15,10 +15,38 @@ ARTICLE_HTML = """
 """
 
 
+EN_ARTICLE_HTML = """
+<html><head><title>Photosynthesis</title></head><body>
+<nav>Home About Contact Login Sign up</nav>
+<article>
+<h1>How Photosynthesis Works</h1>
+<p>Photosynthesis is the process by which green plants use light energy to convert
+carbon dioxide and water into energy-rich organic compounds, releasing oxygen. It
+takes place mainly in the chloroplasts and is the ultimate source of energy for
+almost all life on Earth.</p>
+<p>It proceeds in two stages. The light reactions on the thylakoid membranes turn
+light energy into chemical energy and release oxygen, while the dark reactions in
+the stroma fix carbon dioxide to build sugars such as glucose.</p>
+</article>
+<footer>Copyright © 2026 All rights reserved Privacy Policy Sitemap</footer>
+</body></html>
+"""
+
+
 def test_extract_returns_main_text():
     text = extract_main_text(ARTICLE_HTML)
     assert "光合作用是绿色植物" in text
     assert "光反应和暗反应" in text
+
+
+def test_extract_returns_english_main_text():
+    # 我们只抽中英文正文；英文路径同样要去样板、留正文（也守住剥离 babel 非中英 locale 后不炸）
+    title, text = extract_title_and_text(EN_ARTICLE_HTML)
+    assert "Photosynthesis" in title
+    assert "green plants use light energy" in text
+    assert "light reactions" in text
+    assert "Login Sign up" not in text
+    assert "All rights reserved" not in text
 
 
 def test_extract_strips_boilerplate():

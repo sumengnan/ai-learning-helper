@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -24,10 +25,12 @@ def _elapsed(step) -> int:
     """本步耗时（毫秒）；无起点则算 0。"""
     return _now_ms() - step.started_at_ms if step.started_at_ms else 0
 
+from app.sampling_policy import INTENT_FALLBACK, INTENT_TEMPERATURES
 from harness.context.manager import ContextManager
 from harness.events import (
     ModelUsage, Progress, ReasoningDelta, RunFinished, RunStarted, TextDelta,
 )
+from harness.llm.sampling import reset_sampling_override, set_sampling_override
 from harness.loop.agent_loop import AgentLoop
 from harness.reliability.budget import BudgetExceeded
 from harness.tools.base import ToolRegistry
@@ -61,7 +64,36 @@ TRIAGE_SYSTEM = (
     "**用户已把要处理的原文/代码/数据贴在消息里、只需就地加工的**（翻译这段、总结这段、"
     "润色一下、解释这段代码、这段报错是什么意思），一律算简单——哪怕贴的内容很长。"
     "长度不是复杂度：要不要检索、要不要多步才是。\n"
-    "只回一个词：simple 或 complex。"
+    # 顺带产出意图类别：它决定本轮回答用多高的采样温度（查资料要稳、写故事要发散），
+    # 见 app/sampling_policy.INTENT_TEMPERATURES。搭在 triage 上是刻意的——这是每轮都跑的
+    # 那次调用，多要一个词零成本；单开一次分类调用要在最卡首字的路径上再加一个往返。
+    "输出两段，用冒号分隔：第一段是 simple 或 complex；第二段是本次消息的类别，"
+    "从这些里选一个：\n"
+    "factual（查事实、问知识、要资料）｜code（写代码、看报错、聊技术实现）｜"
+    "rewrite（翻译、总结、润色、改写已给的原文）｜exam（考试、刷题、错题相关）｜"
+    "creative（写故事/文案/取名/头脑风暴等要发挥的）｜chat（寒暄闲聊，以上都不像）\n"
+    "例：simple:chat、complex:code、simple:rewrite。只回这一串，不要解释。"
+)
+
+# triage 认得的意图词；模型给了表外的词一律回退 chat（=项目原本的温度），不赌。
+_INTENT_WORDS = frozenset(INTENT_TEMPERATURES)
+
+# 学习相关性判定。只对「已判复杂、要进编排器拆解」的请求做——编排器会把请求拆成中性子任务
+# （「搜索股票板块」）分发执行，app_system_prompt 的「只帮学习」边界只在单循环整体判断时生效、
+# 拦不住拆解后的子步（F-CHAT-1：荐股请求被拆成 4 步联网搜索、真的推荐了个股）。
+# **极度保守，宁可漏判不可误判**：判错成 off_topic 会把正当的学习请求婉拒掉，比放过个别无关严重得多。
+OFF_TOPIC_SYSTEM = (
+    "判断用户本次请求是否**明显与学习无关、且属于本助手不应执行的类型**。"
+    "只有这几类实质请求才算无关(off_topic)：荐股/炒股/投资理财具体建议、购物/带货/商品推荐、"
+    "情感陪伴/心理疏导/算命、纯娱乐(推荐游戏影视、明星八卦、闲聊消遣)、违法违规内容。\n"
+    "**极度保守，拿不准一律判 on_topic**——判错会把正当学习请求拒之门外，代价远大于放过个别无关：\n"
+    "- 只要请求有任何学习/知识/技能/研究角度，一律 on_topic。例：「用 Python 分析股票数据」是学"
+    "编程、「解释什么是通货膨胀」是学经济、「写一首关于秋天的诗」是学文学写作、「翻译这段话」是"
+    "语言学习、「讲讲某历史事件」是学历史——全部 on_topic。\n"
+    "- 打招呼、致谢、对上文的追问、要求换个说法/再详细点，一律 on_topic。\n"
+    "- 只有「直接索取无关的具体结果」(告诉我买哪只股、推荐几款游戏、帮我挑件衣服、陪我聊聊天)"
+    "才算 off_topic；只要沾了「怎么学、原理是什么、帮我理解」就不是。\n"
+    "只回一个词：on_topic 或 off_topic。"
 )
 
 # 喂给 triage 的最近对话上限。够判断「是不是在延续某个任务」即可，不必给全文——
@@ -79,6 +111,18 @@ _GREETING_RE = re.compile(
     r"辛苦了?|不错|棒|赞|再见|拜拜|bye|goodbye)"
     r"[\s，。,.!！?？~、]*$",
     re.IGNORECASE)
+
+
+@contextlib.contextmanager
+def _step_retry_temperature(enabled: bool, attempts: int):
+    """单步重试的升温档；未开启或首次尝试时是空操作（零开销、行为不变）。"""
+    if not enabled or attempts <= 0:
+        yield
+        return
+    from app.sampling_policy import retry_delta
+    from harness.llm.sampling import temperature_delta
+    with temperature_delta(retry_delta(attempts)):
+        yield
 
 
 def _obvious_simple(message: str) -> bool:
@@ -169,7 +213,8 @@ class Orchestrator:
                  fast_complete, fast_client=None, fast_model: str | None = None,
                  fast_max_prompt_tokens: int = 0,
                  budget=None, budget_factory=None,
-                 max_step_retry: int = 2, max_replan: int = 2, skill_matcher=None) -> None:
+                 max_step_retry: int = 2, max_replan: int = 2, skill_matcher=None,
+                 dynamic_temperature: bool = False, intent_temperature=None) -> None:
         self._client = client
         self._registry = registry
         self._model = model
@@ -192,6 +237,10 @@ class Orchestrator:
         self._max_replan = max_replan
         # 技能路由器：按触发词把用户消息确定性匹配到技能，命中剧本注入 planner/直答（None=不启用）
         self._skill_matcher = skill_matcher
+        # 单步重试时逐档升温（模型在这一步陷住了，换条采样路径）。关则重试保持同温。
+        self._dynamic_temperature = dynamic_temperature
+        # 意图 → 温度的查表函数（由装配层绑定 config）。None=不做意图路由，全用基准温度。
+        self._intent_temperature = intent_temperature
 
     @staticmethod
     async def _plan_streaming(coro, out: dict):
@@ -234,21 +283,64 @@ class Orchestrator:
 
     # ---- triage ----
     async def _is_simple(self, message: str, recent_dialogue: str = "") -> bool:
-        """本轮该不该短路成简单直答。
+        """本轮该不该短路成简单直答（意图类别一并解析出来，见 _triage）。"""
+        simple, _ = await self._triage(message, recent_dialogue)
+        return simple
+
+    async def _triage(self, message: str, recent_dialogue: str = "") -> tuple[bool, str]:
+        """一次调用同时判「简单/复杂」与「意图类别」，返回 (is_simple, intent)。
 
         必须带上最近对话：只看孤立的一句，多步任务的追问（「再详细点」「继续」）会被判成
         简单，于是跳过规划退化成一轮 ReAct——该拆的步骤没拆，前端也从「计划树」变成
         「计划块 + 独立工具块」，同一个会话里忽合忽分。
+
+        意图只影响采样温度，判错的代价有界（顶多这轮回答稍散或稍板），故解析一律从宽：
+        拿不到/不认识的类别都回退 chat，即项目原本的 0.7。
         """
         user = message
         if recent_dialogue:
             tail = recent_dialogue[-_TRIAGE_DIALOGUE_MAX:]   # 保尾：越近的轮次越能说明当前意图
             user = f"【最近对话】\n{tail}\n\n【本次消息】\n{message}"
         try:
-            raw = await self._fast_complete(TRIAGE_SYSTEM, user)
-            return raw.strip().lower().startswith("simple")
+            raw = (await self._fast_complete(TRIAGE_SYSTEM, user)).strip().lower()
         except Exception:
-            return False   # 判不了就走完整编排（宁可多做不可少做）
+            return False, INTENT_FALLBACK   # 判不了就走完整编排（宁可多做不可少做）
+        simple = raw.startswith("simple")
+        intent = INTENT_FALLBACK
+        if ":" in raw or "：" in raw:
+            word = re.split(r"[:：]", raw, maxsplit=1)[1].strip().split()[:1]
+            if word and word[0] in _INTENT_WORDS:
+                intent = word[0]
+        return simple, intent
+
+    async def _is_off_topic(self, message: str, recent_dialogue: str = "") -> bool:
+        """本轮请求是否明显与学习无关、应婉拒。仅对「已判复杂」的请求调用（见 run 分流）。
+
+        极度保守：**任何异常、任何非 off_topic 的回答都返回 False**（放过、按正常流程走）——
+        误判成 off_topic 会把正当学习请求婉拒掉，是最不该犯的错。
+        """
+        user = message
+        if recent_dialogue:
+            tail = recent_dialogue[-_TRIAGE_DIALOGUE_MAX:]
+            user = f"【最近对话】\n{tail}\n\n【本次消息】\n{message}"
+        try:
+            raw = await self._fast_complete(OFF_TOPIC_SYSTEM, user)
+            return raw.strip().lower().startswith("off_topic")
+        except Exception:
+            return False   # 判不了就放过，绝不误伤
+
+    async def _decline_off_topic(self, message: str, budget=None, *, context=None):
+        """婉拒学习无关的请求：走单循环，但**空工具表**（不联网/不检索/不拆解）+ 强婉拒指令，
+        让模型礼貌说明只帮学习、并邀请学习相关的需求。context 仍传（带 app_system_prompt 与
+        会话历史），使婉拒能自然承接上下文。"""
+        decline = (
+            f"{message}\n\n"
+            "[系统提示] 上面这条请求与学习无关，不在本助手的服务范围内。请**礼貌、简短**地说明"
+            "你是学习助手、只能帮助学习相关的问题，并邀请用户提出学习相关的需求。"
+            "不要执行该请求，不要给出任何相关的具体建议或结果，也不要调用任何工具。")
+        async for ev in self._simple_answer(decline, budget, context=context,
+                                            registry=ToolRegistry(), prefer_main=False):
+            yield ev
 
     async def _simple_answer(self, message: str, budget=None, *, context=None, registry=None,
                              prefer_main: bool = False, skill_hint: str = ""):
@@ -426,6 +518,9 @@ class Orchestrator:
         # 末尾发一条总的，前端才显示得出总 tokens。
         acc = UsageAcc()
         acc_token = set_acc(acc)
+        # 本轮的意图温度在下面分流处才设得出（要先知道意图），而 run() 出口有十几个 return——
+        # 用 ExitStack 统一还原，避免漏掉某条出口把温度漏给调用方的上下文。
+        cleanup = contextlib.ExitStack()
         try:
             # 强制单循环（考试等有状态交互）优先，其次零成本短路（纯寒暄），最后才让 LLM 判简单/复杂。
             # force_simple 的场景（考试）走主模型（prefer_main）：需可靠逐题推进，快速档易漏「呈现下一题」。
@@ -469,9 +564,26 @@ class Orchestrator:
             # 该命中错题精讲技能。这类轮次走单循环 + 剧本作参考前缀（_simple_answer 收 skill_hint），
             # 既不拆成多步打乱逐题推进，也不丢技能。
             # 顺带省掉一次 triage 调用：命中技能时结论已定，不必再问模型。
-            if force_simple or (not skill_hint
-                                and (_obvious_simple(user_message)
-                                     or await self._is_simple(user_message, recent_dialogue))):
+            # 分流 + 意图一次算清。意图决定本轮面向用户那几处调用的采样温度（查资料要稳、
+            # 写故事要发散），由 triage 顺带产出，不额外多一次调用。命中技能时按原样跳过
+            # triage，此时意图未知 → 回退 chat，即项目原本的温度，不猜。
+            if force_simple:
+                route_simple, intent = True, "exam"
+            elif skill_hint:
+                route_simple, intent = False, INTENT_FALLBACK
+            elif _obvious_simple(user_message):
+                route_simple, intent = True, "chat"
+            else:
+                route_simple, intent = await self._triage(user_message, recent_dialogue)
+            # getattr：测试里有用 __new__ 绕过 __init__ 造的实例（同 _skill_matcher 那处）
+            _intent_temp = getattr(self, "_intent_temperature", None)
+            if _intent_temp is not None:
+                temp = _intent_temp(intent)
+                cleanup.callback(reset_sampling_override,
+                                 set_sampling_override(temperature=temp))
+                log.info("本轮意图 intent=%s 温度=%s", intent, temp)
+
+            if route_simple:
                 # 分流结论先于执行发出：这条路不出「任务步骤」块，用户此前只能靠「没有块」
                 # 反推走了单循环，triage 误判（该拆步却判了 simple）也就无从察觉。
                 yield Progress(scope="route", text="简单直答", key="route",
@@ -489,6 +601,18 @@ class Orchestrator:
                 async for ev in self._simple_deliver(
                         user_message, budget, context=context, registry=registry,
                         skill_hint=skill_hint, verify=verify, force_simple=force_simple):
+                    yield ev
+                return
+
+            # 走到这里 = 要进编排器拆解（非考试、非寒暄、非技能，且 triage 判复杂）。
+            # 拆解前先做一道保守的学习相关性把关：编排器会把请求拆成中性子任务分发执行，
+            # app_system_prompt 的学习边界拦不住拆解后的子步（F-CHAT-1）。仅在此处判，
+            # 不碰简单/寒暄/考试/技能路径——既省调用、又不误伤那些本就有明确学习语境的路径。
+            # off_topic → 走单循环空工具表婉拒；判不出/异常一律放过（_is_off_topic 内部兜底）。
+            if await self._is_off_topic(user_message, recent_dialogue):
+                yield Progress(scope="route", text="简单直答", key="route",
+                               detail={"mode": "simple"}, status="ok")
+                async for ev in self._decline_off_topic(user_message, budget, context=context):
                     yield ev
                 return
 
@@ -648,6 +772,7 @@ class Orchestrator:
                             "gate_error": False, "history": _review_history})
             yield RunFinished(message=Message(role=Role.ASSISTANT, content=final))
         finally:
+            cleanup.close()          # 还原本轮意图温度（若设过）
             reset_acc(acc_token)
 
     # ---- 调度：一轮轮跑就绪集，直到无 pending、预算超限或无法推进（后两者带现有成果收尾）----
@@ -707,22 +832,26 @@ class Orchestrator:
                 effects = list(step_effects.get(step.id, ()))
                 fx = empty_fx()
                 try:
-                    async for ev in self._executor.execute(
-                            step, deps, retry_hints.get(step.id, ""),
-                            registry=_reg_for(step), goal=goal,
-                            done_effects=effects, fx_sink=fx):
-                        if isinstance(ev, StepArtifact):
-                            art, err, terminal = ev.artifact, ev.error, ev.terminal
-                            effects = list(ev.effects)
-                            # 真实 executor 里这与 fx_sink 是同一个对象，取哪个都一样。
-                            # 判"有没有内容"而非用 or：empty_fx() 是含三个键的 dict、恒为真，
-                            # 用 or 会让返回值无条件压过 sink——只填 sink、忘了设 side_effects
-                            # 的实现，产物会被默认空值整个抹掉，既不清理也不摘工具名。
-                            # 也不能 merge：两者常是同一对象，合并会把 id 记两遍。
-                            if has_any(ev.side_effects):
-                                fx = ev.side_effects
-                        else:
-                            await queue.put(("ev", ev))
+                    # 重试升温：step.attempts 是本步此前失败的次数（首次为 0=不加）。叠加在
+                    # executor 自身的固定温度之上——同一份提示同一个温度重跑，多半复现同一个坑。
+                    with _step_retry_temperature(
+                            getattr(self, "_dynamic_temperature", False), step.attempts):
+                        async for ev in self._executor.execute(
+                                step, deps, retry_hints.get(step.id, ""),
+                                registry=_reg_for(step), goal=goal,
+                                done_effects=effects, fx_sink=fx):
+                            if isinstance(ev, StepArtifact):
+                                art, err, terminal = ev.artifact, ev.error, ev.terminal
+                                effects = list(ev.effects)
+                                # 真实 executor 里这与 fx_sink 是同一个对象，取哪个都一样。
+                                # 判"有没有内容"而非用 or：empty_fx() 是含三个键的 dict、恒为真，
+                                # 用 or 会让返回值无条件压过 sink——只填 sink、忘了设 side_effects
+                                # 的实现，产物会被默认空值整个抹掉，既不清理也不摘工具名。
+                                # 也不能 merge：两者常是同一对象，合并会把 id 记两遍。
+                                if has_any(ev.side_effects):
+                                    fx = ev.side_effects
+                            else:
+                                await queue.put(("ev", ev))
                 except Exception as e:  # 单步崩溃隔离
                     # 崩在工具调用之后也要记账：产物已经落库了，重试时照样不能重做
                     step_effects[step.id] = effects

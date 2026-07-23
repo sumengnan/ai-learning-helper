@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -20,6 +22,18 @@ class HarnessConfig(BaseSettings):
             return None
         return v
 
+    # 温度入口统一夹到 [0,1]（见 llm/sampling.py 为何上限不是协议的 2）。写超了就地纠正
+    # 并告警，而不是留到发请求时被端点拒——那时报错信息只会是一句「invalid parameter」。
+    @field_validator("temperature")
+    @classmethod
+    def _clamp_temperature(cls, v):
+        from .llm.sampling import TEMP_MAX, TEMP_MIN, clamp_temperature
+        c = clamp_temperature(v)
+        if c != float(v):
+            logging.getLogger(__name__).warning(
+                "HARNESS_TEMPERATURE=%s 超出 [%s, %s]，已夹到 %s", v, TEMP_MIN, TEMP_MAX, c)
+        return c
+
     api_key: str = ""
     base_url: str = "https://api.openai.com/v1"
     model: str = "gpt-4o-mini"
@@ -28,7 +42,19 @@ class HarnessConfig(BaseSettings):
     # 循环/停滞检测：连续多少步发起完全相同的工具调用（同名+同参）判为原地打转——先注入一次
     # 纠偏提示让模型换思路，纠偏后仍重复才中止；<2 关闭。防模型卡在重复动作上白跑到 max_steps。
     loop_detect_window: int = 3
+    # 采样基准温度。未被角色档/意图路由覆盖时用它（如聊天闲聊轮）。恒被夹在 [0,1]：
+    # 上限取 1 而非协议的 2，因为 Anthropic 只到 1、百炼不收 2，且 >1 只会让输出退化。
     temperature: float = 0.7
+    # 角色温度覆盖 {角色名: 温度}，合并进 app/sampling_policy.py 的内置默认表（该表列了
+    # 全部 18 处机械/判断类调用点的建议值）。例：{"judge":0.0,"quiz_generate":0.9}
+    role_temperatures: dict = {}
+    # 意图温度覆盖 {意图名: 温度}，同上，作用于面向用户生成的那几处（主循环/直答/汇总）。
+    intent_temperatures: dict = {}
+    # 运行期动态增减温度（打转纠偏升温、重答升温、结构解析失败降温）。关掉则只保留静态分档。
+    enable_dynamic_temperature: bool = True
+    # 不接受 temperature/top_p 的模型（子串匹配模型名）：命中则一个采样参数都不发。
+    # 部分推理模型（o1 系、思考模式下的一些 Qwen）会因「不支持的参数」直接报错。
+    sampling_unsupported_models: list = []
     request_timeout: float = 60.0
     # 透传给 chat.completions.create 的额外请求体（默认空=不改变行为）。用于开关厂商私有参数，
     # 例如 Qwen3 关闭「思考模式」提速：HARNESS_LLM_EXTRA_BODY={"enable_thinking": false}

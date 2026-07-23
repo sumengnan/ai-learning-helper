@@ -83,10 +83,14 @@ def _parse_questions(raw: str) -> list:
 
 class QuizService:
     def __init__(self, memory, question_store, complete, collection="knowledge",
-                 retrieve_k=6, short_pass_score=60) -> None:
+                 retrieve_k=6, short_pass_score=60, generate_complete=None) -> None:
+        """complete 判分、generate_complete 出题。分开是为了各走各的采样温度：判分要
+        确定性（同一份答卷两次判分必须同结论），出题恰恰要发散（否则同一知识点每次出一样
+        的题，刷题就没意义了）。generate_complete 省略时二者同源，行为与旧版一致。"""
         self._memory = memory
         self._store = question_store
         self._complete = complete
+        self._generate_complete = generate_complete or complete
         self._collection = collection
         self._retrieve_k = retrieve_k
         self._short_pass_score = short_pass_score
@@ -123,7 +127,8 @@ class QuizService:
             raise NoKnowledge(topic)
         context = "\n\n".join(h.text for h in hits)
         with json_output():
-            raw = await self._complete(GEN_SYSTEM, _gen_user(topic, count, types, context))
+            raw = await self._generate_complete(
+                GEN_SYSTEM, _gen_user(topic, count, types, context))
         valid = [q for q in _parse_questions(raw) if _valid(q, types)]
         if not valid:
             raise QuizError("生成结果无有效题目")

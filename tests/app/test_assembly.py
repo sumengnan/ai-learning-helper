@@ -30,8 +30,16 @@ def test_core_tools_registered_heavy_gated_off():
     assert h.registry.get("dispatch") is None               # 未启用派发
 
 
+def test_browser_needs_sandbox():
+    """浏览器统一走沙箱：只 enable_browser 但没配沙箱 → browse 不注册（宿主不再本地抓）。"""
+    h = build_harness(_cfg(enable_browser=True, enable_sandbox=False))
+    assert h.registry.get("browse") is None
+
+
 def test_browser_gated_on():
-    h = build_harness(_cfg(enable_browser=True))
+    # 有沙箱才注册 browse（浏览器在沙箱容器内跑）
+    h = build_harness(_cfg(enable_browser=True, enable_sandbox=True,
+                           sandbox_backend="docker", sandbox_docker_host="tcp://stub:2376"))
     assert h.registry.get("browse") is not None
 
 
@@ -175,8 +183,10 @@ def test_maintainer_and_hyde_wired_to_fast_completer(monkeypatch):
     sentinel = object()
     monkeypatch.setattr(C, "build_fast_completer", lambda client, cfg: sentinel)
     h = build_harness(_cfg(enable_browser=False, enable_sandbox=False))
-    assert h.memory_maintainer._complete is sentinel, "整合蒸馏应接快速档"
-    assert h.memory._retriever._complete is sentinel, "HyDE/多查询改写应接快速档"
+    # 两处都被 with_role 包了一层固定采样温度（整合 0.2 / 查询改写 0.5），故穿透包装再比身份
+    from app.completion import unwrap_completer
+    assert unwrap_completer(h.memory_maintainer._complete) is sentinel, "整合蒸馏应接快速档"
+    assert unwrap_completer(h.memory._retriever._complete) is sentinel, "HyDE/多查询改写应接快速档"
 
 
 @pytest.mark.asyncio

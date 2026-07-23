@@ -120,6 +120,39 @@ def _with_thinking(base, enabled: bool):
     return complete
 
 
+def with_role(base, config, role: str):
+    """按角色给 completer 钉死采样温度（判分/抽取恒低、出题恒高，见 app/sampling_policy.py）。
+
+    包在最外层、调用期设、调用后还原：这些都是旁路调用，够不着聊天页那轮的意图温度，
+    不自己表态就会继承基准值——正是「判分跟着闲聊跑在 0.7」的成因。
+    role 不在表里则原样返回（零开销、行为不变）。
+    """
+    from .sampling_policy import role_temperature
+    temp = role_temperature(config, role)
+    if temp is None:
+        return base
+
+    async def complete(system_prompt: str, user_prompt: str) -> str:
+        from harness.llm.sampling import sampling
+        with sampling(temperature=temp):
+            return await base(system_prompt, user_prompt)
+
+    # 装配层的接线测试靠对象身份断言「这个位置接的是快速档/judge 档」，包一层会打断身份链。
+    # 留个指针让它们能穿透（unwrap_completer），比让那些测试改断行为要稳。
+    complete.__wrapped__ = base          # type: ignore[attr-defined]
+    complete.__role__ = role             # type: ignore[attr-defined]
+    return complete
+
+
+def unwrap_completer(c):
+    """剥掉 with_role 等包装，取回最内层的 completer。供接线测试与排障用。"""
+    seen = 0
+    while hasattr(c, "__wrapped__") and seen < 10:   # 防环，正常最多两三层
+        c = c.__wrapped__
+        seen += 1
+    return c
+
+
 def build_judge_completer(client, config):
     """构造 judge 专用 completer：配了 judge_model 则起独立 client（可指向独立端点/key），
     否则回退传入的主 client/主模型。用独立/更强模型当裁判可降低「自己给自己打高分」的偏差。

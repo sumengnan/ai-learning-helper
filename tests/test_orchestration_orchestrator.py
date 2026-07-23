@@ -55,6 +55,12 @@ class FakeExecutor:
 def _mk(planner, critic, order, triage_simple=False, synth="最终答复", max_replan=2):
     async def fake_triage(msg, recent_dialogue=""):
         return triage_simple
+
+    # run() 走的是 _triage（分流 + 意图一次算清）。两个都桩：只桩 _is_simple 的话
+    # run() 会落到真实 _triage 上，而它在 __new__ 实例上够不着 _fast_complete，
+    # 异常被兜底成「complex」——测试照样绿，却根本没在测 triage_simple 这个入参。
+    async def fake_triage2(msg, recent_dialogue=""):
+        return triage_simple, "chat"
     async def fake_synth(goal, artifacts, recent_dialogue=""):
         from harness.events import TextDelta
         yield TextDelta(text=synth)
@@ -66,6 +72,7 @@ def _mk(planner, critic, order, triage_simple=False, synth="最终答复", max_r
     orch._critic = critic
     orch._executor = FakeExecutor(order)
     orch._is_simple = fake_triage
+    orch._triage = fake_triage2
     orch._synthesize = fake_synth
     orch._simple_answer = fake_simple
     # 不桩 _simple_answer_verified：用真实方法。它内部委托 self._simple_answer（已桩 fake_simple）
@@ -75,6 +82,11 @@ def _mk(planner, critic, order, triage_simple=False, synth="最终答复", max_r
     orch._max_step_retry = 2
     orch._budget = None
     orch._budget_factory = None
+    # off_topic 判定用 _fast_complete；默认判「学习相关」(on_topic)，使现有测试行为不变、
+    # 不被新增的无关拦截误伤。要测无关拦截的用例自行覆盖 _fast_complete 或 _is_off_topic。
+    async def _fast_on_topic(system, user):
+        return "on_topic"
+    orch._fast_complete = _fast_on_topic
     return orch
 
 
@@ -658,15 +670,15 @@ async def test_greeting_short_circuits_without_llm_triage():
 
 
 async def test_non_greeting_still_uses_llm_triage():
-    """非寒暄消息仍交 LLM triage 判简单/复杂。"""
+    """非寒暄消息仍交 LLM triage 判简单/复杂（同一次调用顺带产出意图类别）。"""
     calls = {"triage": 0}
     async def counting_triage(msg, recent_dialogue=""):
         calls["triage"] += 1
-        return True
+        return True, "code"
     orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [])
-    orch._is_simple = counting_triage
+    orch._triage = counting_triage
     _ = [ev async for ev in orch.run("帮我分析这段代码的时间复杂度")]
-    assert calls["triage"] == 1
+    assert calls["triage"] == 1, "非寒暄仍须走 LLM triage，且只走一次（意图搭车、不额外调用）"
 
 
 async def test_force_simple_bypasses_triage_and_planning():
@@ -2299,3 +2311,80 @@ async def test_one_step_fallback_redo_keeps_tools_unlike_exam():
     assert events[-1].message.content == "第2版讲解"    # 交付重答那版
     # 徽章仍报简单直答（1 步回退）
     assert [r.detail["mode"] for r in _routes(events)] == ["simple"]
+
+
+# ---------- F-CHAT-1: 学习无关的复杂请求应婉拒，不进编排器拆解 ----------
+
+def _acoro(v):
+    async def _f(*a, **k):
+        return v
+    return _f
+
+
+async def test_off_topic_complex_request_is_declined_not_planned():
+    """明显无关(荐股)且被判复杂 → 直接婉拒，不调 Planner、不给工具。
+
+    修 F-CHAT-1：编排器路径会把无关请求拆成中性子任务(「搜索股票板块」)分发执行，
+    app_system_prompt 的学习边界只在单循环整体判断时生效、拦不住拆解后的子步。
+    """
+    planner = FakePlanner([_plan(_s("s1"))])
+    orch = _mk(planner, FakeCritic(), [])
+    orch._is_simple = _acoro(False)          # triage 判复杂
+    orch._is_off_topic = _acoro(True)        # 判为学习无关
+
+    captured = {}
+    async def _fake_simple(message, budget=None, *, context=None, registry=None,
+                           prefer_main=False, skill_hint=""):
+        captured["message"] = message
+        captured["no_tools"] = registry is not None and len(registry.tools()) == 0
+        from harness.events import TextDelta
+        yield TextDelta(text="我是学习助手，只能帮助学习相关的问题。")
+    orch._simple_answer = _fake_simple
+
+    evs = [e async for e in orch.run("帮我推荐几只能赚钱的股票")]
+    assert len(planner.seen_tools) == 0, "无关请求绝不能进 Planner 拆解"
+    assert captured.get("no_tools") is True, "婉拒不给工具，避免联网荐股/检索"
+    assert "无关" in captured.get("message", ""), "应注入婉拒指令"
+
+
+async def test_on_topic_complex_request_not_misjudged():
+    """别误伤：学习相关的复杂请求(off_topic=False)照常走编排器，行为不变。"""
+    planner = FakePlanner([_plan(_s("s1"))])
+    orch = _mk(planner, FakeCritic(reviews=(True,)), [])
+    orch._is_simple = _acoro(False)          # 复杂
+    orch._is_off_topic = _acoro(False)       # 相关
+    evs = [e async for e in orch.run("系统梳理一下 Java 类加载机制")]
+    assert len(planner.seen_tools) == 1, "学习相关的复杂请求仍应正常进 Planner"
+
+
+async def test_simple_request_skips_off_topic_check():
+    """判简单的请求不做无关判定(省调用、且简单直答由 app_system_prompt 兜)：
+    _is_off_topic 若被调用就抛错，用它证明没被调。"""
+    async def _boom(*a, **k):
+        raise AssertionError("简单请求不该触发 off_topic 判定")
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [], triage_simple=True)
+    orch._is_off_topic = _boom
+    # triage_simple=True → _is_simple 返回 True → 走简单直答，不应碰 off_topic
+    evs = [e async for e in orch.run("你好呀")]
+    routes = [e for e in evs if isinstance(e, Progress) and e.scope == "route"]
+    assert routes and routes[0].detail.get("mode") == "simple"
+
+
+async def test_is_off_topic_parses_and_defaults_safe():
+    """_is_off_topic 解析：off_topic → True，其余 → False；异常一律 False(不误伤)。"""
+    orch = _mk(FakePlanner([]), FakeCritic(), [])
+
+    orch._fast_complete = _acoro("off_topic")
+    assert await orch._is_off_topic("推荐股票") is True
+
+    orch._fast_complete = _acoro("on_topic")
+    assert await orch._is_off_topic("讲讲多态") is False
+
+    # 判不出/脏输出 → 不判无关(宁可漏判不可误判)
+    orch._fast_complete = _acoro("不确定")
+    assert await orch._is_off_topic("模糊请求") is False
+
+    async def _raise(*a, **k):
+        raise RuntimeError("端点抖动")
+    orch._fast_complete = _raise
+    assert await orch._is_off_topic("任意") is False, "异常必须放过，绝不误伤"
