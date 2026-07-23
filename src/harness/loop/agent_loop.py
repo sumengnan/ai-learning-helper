@@ -1,6 +1,7 @@
 # src/harness/loop/agent_loop.py
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 import uuid
@@ -133,7 +134,11 @@ class AgentLoop:
 
         recent_sigs: list = []          # 最近各步的工具调用签名，供循环检测
         loop_nudges = 0                 # 已注入纠偏次数；纠偏后仍循环即中止
-        with self._tracer.start_as_current_span("run") as run_span:
+        nudge_tmp_token = None          # 纠偏时的升温 token（见下方注入处），finally 必还原
+        # ExitStack 兜住纠偏升温的还原：run() 有多个 return 出口（正常结束/循环中止/预算超限），
+        # 逐个补 reset 迟早漏一个，而漏了就会把升温漏给调用方的上下文。
+        with contextlib.ExitStack() as cleanup, \
+                self._tracer.start_as_current_span("run") as run_span:
             run_span.set_attribute("harness.run_id", state.run_id)
 
             for step in range(state.step + 1, self._max_steps + 1):
@@ -218,6 +223,15 @@ class AgentLoop:
                             if loop_nudges < 1:      # 首次：注入纠偏，给模型换思路的机会
                                 loop_nudges += 1
                                 recent_sigs.clear()  # 重置窗口，让纠偏后的行为重新计数
+                                # 连同采样一起换：只改措辞不改温度时，模型很容易照着同一条
+                                # 采样路径再走一遍——「请换个思路」这句话本身也是低概率才
+                                # 被听进去的。升温到本轮剩余步骤结束（finally 还原）。
+                                from ..llm.sampling import (
+                                    get_nudge_delta, pop_temperature_delta,
+                                    push_temperature_delta)
+                                if nudge_tmp_token is None and get_nudge_delta():
+                                    nudge_tmp_token = push_temperature_delta(get_nudge_delta())
+                                    cleanup.callback(pop_temperature_delta, nudge_tmp_token)
                                 for tc in tool_calls:  # 回填跳过结果，保持 tool_calls 消息合法
                                     state.append(Message(
                                         role=Role.TOOL, tool_call_id=tc.id,

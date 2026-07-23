@@ -181,7 +181,10 @@ class Executor:
     def __init__(self, client, registry: ToolRegistry, system_prompt: str,
                  model: str, *, max_steps: int = 10, budget=None,
                  loop_detect_window: int = 0, disable_thinking: bool = False,
-                 sandbox_guide_text: str = "") -> None:
+                 sandbox_guide_text: str = "", temperature: float | None = None) -> None:
+        """temperature：执行子步的采样温度（None=不覆盖，用全局基准）。这是机械执行，
+        工具入参不该飘；但也不设 0——带工具的循环温度过低更容易卡在重复调同一个工具上，
+        正是 loop_detect_window 那套防打转逻辑在治的事。"""
         self._client = client
         self._registry = registry
         self._system_prompt = system_prompt
@@ -193,6 +196,7 @@ class Executor:
         self._sandbox_guide_text = sandbox_guide_text
         # 子步是"带工具干活"的机械执行，思考链多为白烧延迟；开则本步强制关思考（与 fast/judge 档一致）
         self._disable_thinking = disable_thinking
+        self._temperature = temperature
 
     async def execute(self, step: PlanStep, deps: dict[str, Artifact], hint: str = "",
                       *, registry: ToolRegistry | None = None, goal: str = "",
@@ -230,6 +234,12 @@ class Executor:
         # prompt 已在上面用这个 list 的初值拼好，后续追加不会回头影响它。
         effects: list[str] = done_effects if done_effects is not None else []
         token = set_current_agent(f"executor:{step.id}")
+        # 子步采样温度：设在这里而非 AgentLoop 参数上，与 disable_thinking 同一形状——
+        # contextvar 在 async for 驱动生成器时可见，finally 还原不影响外层那轮的意图温度。
+        samp_token = None
+        if self._temperature is not None:
+            from harness.llm.sampling import set_sampling_override
+            samp_token = set_sampling_override(temperature=self._temperature)
         think_token = None
         if self._disable_thinking:  # 本步强制关思考：叠加在外层 override 之上，finally 还原
             from harness.llm.openai_compat import (
@@ -288,6 +298,9 @@ class Executor:
                     error = ev.error
         finally:
             reset_current_agent(token)
+            if samp_token is not None:
+                from harness.llm.sampling import reset_sampling_override
+                reset_sampling_override(samp_token)
             if think_token is not None:
                 from harness.llm.openai_compat import reset_extra_body_override
                 reset_extra_body_override(think_token)

@@ -175,8 +175,10 @@ def test_maintainer_and_hyde_wired_to_fast_completer(monkeypatch):
     sentinel = object()
     monkeypatch.setattr(C, "build_fast_completer", lambda client, cfg: sentinel)
     h = build_harness(_cfg(enable_browser=False, enable_sandbox=False))
-    assert h.memory_maintainer._complete is sentinel, "整合蒸馏应接快速档"
-    assert h.memory._retriever._complete is sentinel, "HyDE/多查询改写应接快速档"
+    # 两处都被 with_role 包了一层固定采样温度（整合 0.2 / 查询改写 0.5），故穿透包装再比身份
+    from app.completion import unwrap_completer
+    assert unwrap_completer(h.memory_maintainer._complete) is sentinel, "整合蒸馏应接快速档"
+    assert unwrap_completer(h.memory._retriever._complete) is sentinel, "HyDE/多查询改写应接快速档"
 
 
 @pytest.mark.asyncio

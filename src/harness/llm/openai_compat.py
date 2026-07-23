@@ -11,6 +11,7 @@ from ..config import HarnessConfig
 from ..types import Message
 from ..usage import Usage, estimate_usage
 from .base import StreamChunk, ToolCallDelta
+from .sampling import resolve_sampling, supports_temperature
 
 logger = logging.getLogger(__name__)
 
@@ -101,9 +102,14 @@ class OpenAICompatibleClient:
         kwargs: dict = {
             "model": self._config.model,
             "messages": [m.to_openai() for m in messages],
-            "temperature": self._config.temperature,
             "stream": True,
         }
+        # 采样参数：config.temperature 是基准，可被本轮 override（按角色/意图）与运行期
+        # delta（打转纠偏升温、结构解析失败降温）改写，最终恒被夹在 [0,1]，见 llm/sampling.py。
+        # 命中豁免名单的模型（o1 系等推理模型）一个都不发，避免端点因未知参数报错。
+        if supports_temperature(self._config.model,
+                                getattr(self._config, "sampling_unsupported_models", ())):
+            kwargs.update(resolve_sampling(self._config.temperature))
         if self._config.include_usage:
             kwargs["stream_options"] = {"include_usage": True}
         if tools:

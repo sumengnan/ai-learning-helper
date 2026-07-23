@@ -55,6 +55,12 @@ class FakeExecutor:
 def _mk(planner, critic, order, triage_simple=False, synth="最终答复", max_replan=2):
     async def fake_triage(msg, recent_dialogue=""):
         return triage_simple
+
+    # run() 走的是 _triage（分流 + 意图一次算清）。两个都桩：只桩 _is_simple 的话
+    # run() 会落到真实 _triage 上，而它在 __new__ 实例上够不着 _fast_complete，
+    # 异常被兜底成「complex」——测试照样绿，却根本没在测 triage_simple 这个入参。
+    async def fake_triage2(msg, recent_dialogue=""):
+        return triage_simple, "chat"
     async def fake_synth(goal, artifacts, recent_dialogue=""):
         from harness.events import TextDelta
         yield TextDelta(text=synth)
@@ -66,6 +72,7 @@ def _mk(planner, critic, order, triage_simple=False, synth="最终答复", max_r
     orch._critic = critic
     orch._executor = FakeExecutor(order)
     orch._is_simple = fake_triage
+    orch._triage = fake_triage2
     orch._synthesize = fake_synth
     orch._simple_answer = fake_simple
     # 不桩 _simple_answer_verified：用真实方法。它内部委托 self._simple_answer（已桩 fake_simple）
@@ -658,15 +665,15 @@ async def test_greeting_short_circuits_without_llm_triage():
 
 
 async def test_non_greeting_still_uses_llm_triage():
-    """非寒暄消息仍交 LLM triage 判简单/复杂。"""
+    """非寒暄消息仍交 LLM triage 判简单/复杂（同一次调用顺带产出意图类别）。"""
     calls = {"triage": 0}
     async def counting_triage(msg, recent_dialogue=""):
         calls["triage"] += 1
-        return True
+        return True, "code"
     orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [])
-    orch._is_simple = counting_triage
+    orch._triage = counting_triage
     _ = [ev async for ev in orch.run("帮我分析这段代码的时间复杂度")]
-    assert calls["triage"] == 1
+    assert calls["triage"] == 1, "非寒暄仍须走 LLM triage，且只走一次（意图搭车、不额外调用）"
 
 
 async def test_force_simple_bypasses_triage_and_planning():

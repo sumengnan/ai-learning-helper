@@ -28,7 +28,7 @@ from harness.telemetry.tracer import setup_telemetry
 from .assembly import build_harness
 from .attachments import AttachmentStore
 from .auth import AuthService, UserStore
-from .completion import build_completer, build_fast_completer
+from .completion import build_completer, build_fast_completer, with_role
 from .config import AppConfig, load_env_file
 from .conversations import ConversationStore
 from .db import migrate, open_db
@@ -102,14 +102,20 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
     service = KnowledgeService(harness.memory, harness.memory_store, doc_store) if has_mem else None
     if quiz_service is None and has_mem:
         completer = build_completer(harness.client, config.model)
-        quiz_service = QuizService(harness.memory, question_store, completer,
+        # 判分恒低温（同一份答卷两次判分必须同结论）、出题恒高温（否则同一知识点每次出
+        # 一模一样的题）——同一个 completer，两种采样，见 app/sampling_policy.py。
+        quiz_service = QuizService(harness.memory, question_store,
+                                   with_role(completer, config, "quiz_grade"),
                                    retrieve_k=config.quiz_retrieve_k,
-                                   short_pass_score=config.short_pass_score)
+                                   short_pass_score=config.short_pass_score,
+                                   generate_complete=with_role(
+                                       completer, config, "quiz_generate"))
     if question_importer is None:
         # 走快速档：把粘贴/上传的文本解析成题目，是纯抽取，与记忆写入的 _extract 同形。
         # 它是独立接口、够不着聊天页那个思考开关，不自己表态就一路跟着服务端默认思考。
         question_importer = QuestionImporter(
-            build_fast_completer(harness.client, config), question_store,
+            with_role(build_fast_completer(harness.client, config), config, "question_import"),
+            question_store,
             chunk_chars=config.import_chunk_chars,
             max_concurrency=config.import_max_concurrency)
 
@@ -139,14 +145,17 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
         from .verify import AnswerVerifier
         # grounding 用核对档（主模型 + 关思考）、judge 用独立 completer（可指向独立端点/
         # 模型，降低自评打高分偏差）。两者同为校验动作，都不带思考链。
-        verifier = AnswerVerifier(build_check_completer(harness.client, config), config,
-                                  judge_complete=build_judge_completer(harness.client, config))
+        verifier = AnswerVerifier(
+            with_role(build_check_completer(harness.client, config), config, "grounding"),
+            config,
+            judge_complete=with_role(
+                build_judge_completer(harness.client, config), config, "judge"))
     # 轨迹 judge（交付前一次性回看整轨迹分层打分）：与 answer gate 独立，可单独开
     trajectory_judge = None
     if config.enable_trajectory_judge:
         from .verify import TrajectoryJudge
         trajectory_judge = TrajectoryJudge(
-            build_judge_completer(harness.client, config), config)
+            with_role(build_judge_completer(harness.client, config), config, "judge"), config)
     # 断点续传：进程内运行管理器（后台任务 + 内存事件总线），供 /api/chat 起后台生成、
     # attach 刷新接回。启动时对账残留的 streaming 消息（上次进程重启丢了在途任务）。
     from .run_manager import RunManager

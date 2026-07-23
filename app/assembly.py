@@ -131,13 +131,16 @@ def build_harness(config) -> Harness:
             multi_query_n=config.retrieval_multi_query_n,
             query_plan_timeout_s=config.retrieval_query_plan_timeout_s,
             rerank_min_score=config.rerank_min_score)
-        from app.completion import build_completer, build_fast_completer
+        from app.completion import build_completer, build_fast_completer, with_role
         # 查询期召回增强的 LLM（三路默认关时不会被调用；开启才在检索时用）。
         # 走快速档：它卡在聊天首字的关键路径上、还带 2 秒超时，越快越好，思考链是找死。
         # 且必须自己表态——它既会被 build_manager 调（在 pump 外）、也会被 SearchMemoryTool
         # 调（在 pump 内），不显式声明就会「同一个 completer 两种行为」，取决于谁调它。
+        # 温度取中（query_plan=0.5）：multi-query 的几条改写要够散才扩得到召回，HyDE 的
+        # 假设文档又要贴题——两者是同一次调用的两个字段，只能折中。
         _retriever = Retriever(mem_store, embedder, reranker, _rcfg,
-                               complete=build_fast_completer(client, config))
+                               complete=with_role(build_fast_completer(client, config),
+                                                  config, "query_plan"))
         mem = Memory(mem_store, embedder, config.chunk_size, config.chunk_overlap,
                      retriever=_retriever, chunk_hard_max=config.chunk_hard_max)
         memory = mem
@@ -146,7 +149,8 @@ def build_harness(config) -> Harness:
         # 整合的蒸馏走快速档：「把同主题的 N 条压成一条」与 L2 摘要同形，是机械活。
         # 破坏性的那步（set_superseded 作废原 episodic）由余弦聚类决定，不归模型判。
         memory_maintainer = MemoryMaintainer(
-            mem_store, embedder, build_fast_completer(client, config),
+            mem_store, embedder,
+            with_role(build_fast_completer(client, config), config, "memory_consolidate"),
             ConsolidationConfig(
                 sim_threshold=config.consolidation_sim_threshold,
                 min_cluster=config.consolidation_min_cluster,
@@ -161,10 +165,11 @@ def build_harness(config) -> Harness:
             from app.completion import build_fast_completer
             memory_writer = MemoryWriter(
                 mem_store, embedder, _retriever,
-                # 调和：判断题，判 REPLACE 会永久作废旧记忆 → 留主模型
-                build_completer(client, config.model),
-                # 提炼：机械活 → 快速档
-                extract_complete=build_fast_completer(client, config),
+                # 调和：判断题，判 REPLACE 会永久作废旧记忆 → 留主模型，且温度钉 0
+                with_role(build_completer(client, config.model), config, "memory_reconcile"),
+                # 提炼：机械活 → 快速档 + 低温
+                extract_complete=with_role(build_fast_completer(client, config),
+                                           config, "memory_extract"),
                 candidate_k=config.memory_write_candidate_k,
                 ttl_by_type=_ttl_by_type)
         # 知识库检索包 relevance_check：空命中意味着「本轮没有可引用依据」，要驱动模型自纠正。
@@ -258,28 +263,32 @@ def build_harness(config) -> Harness:
     # 主流程而不丢失多轮对话/附件/考试/引用/个性化。简单问答仍在其内部短路成单个 ReAct 直答，
     # 复杂任务才拆分并行执行，不额外增加简单场景开销。
     from app.completion import (build_completer, build_fast_completer, build_fast_client,
-                                build_judge_completer)
+                                build_judge_completer, with_role)
     from app.orchestration.orchestrator import Orchestrator
     from app.orchestration.planner import Planner
     from app.orchestration.critic import Critic
     from app.orchestration.executor import Executor, HidingRegistry
     from harness.skills.matcher import SkillMatcher
     from app.sandbox_manager import sandbox_guide
+    from app.sampling_policy import intent_temperature, role_temperature
     from harness.reliability.budget import BudgetTracker
-    _plan_complete = build_completer(client, config.model)     # 规划用主模型（判断质量要求高）
-    _fast_complete = build_fast_completer(client, config)      # triage 用快速档（卡首字关键路径，提速）
+    # 规划用主模型（判断质量要求高）；温度 0.2 而非 0——拆 DAG 要一点组合能力
+    _plan_complete = with_role(build_completer(client, config.model), config, "planner")
+    # triage 用快速档（卡首字关键路径，提速）；它是分类题，温度钉 0
+    _fast_complete = with_role(build_fast_completer(client, config), config, "triage")
     # 终局 review 就是「裁判」这个角色，理应吃 judge 配置。此前它写死主模型，而 judge 只接在
     # 交付门 AnswerVerifier 上——编排器成为唯一主流程后那条分支永不进入（chat.py 里
     # `if orchestrator is not None` 在前短路），于是 HARNESS_JUDGE_MODEL 对用户看到的
     # 「结果校验」完全不起作用，且不报错。未配 judge_model 时 build_judge_completer 回退
     # 主 client/主模型，故对没配的人零行为变更。
-    _review_complete = build_judge_completer(client, config)
+    _review_complete = with_role(build_judge_completer(client, config), config, "critic")
     _exec_client, _exec_model = build_fast_client(client, config)   # 执行子步走快速档模型（占大头往返，提速）
     # 装配期回退用的执行子步工具视图（隐藏 update_plan）；实际运行时由 chat 路由传入每请求 registry 覆盖。
     _exec_reg = HidingRegistry(reg, {"update_plan"})
     orchestrator = Orchestrator(
         client=client, registry=reg, model=config.model,
-        planner=Planner(_plan_complete, max_retries=config.orchestrator_planner_max_retries),
+        planner=Planner(_plan_complete, max_retries=config.orchestrator_planner_max_retries,
+                        dynamic_temperature=config.enable_dynamic_temperature),
         # 单步 validate 与终局 review 都吃 judge 档：validate 现在能判 impossible（终结该步、
         # 并抑制重规划），一次误判代价放大到整条任务分支，故不再图快用便宜档，与 review 同级
         # 由裁判模型来判。做法是不再传 validate_complete，让它回退到基座（_review_complete）。
@@ -296,6 +305,7 @@ def build_harness(config) -> Harness:
                           max_steps=config.orchestrator_step_max_steps,
                           loop_detect_window=config.loop_detect_window,
                           disable_thinking=config.orchestrator_step_disable_thinking,
+                          temperature=role_temperature(config, "executor"),
                           # 有沙箱才按配置预渲染指引（工作目录/镜像/联网）；无沙箱这些工具没注册，提了反误导
                           sandbox_guide_text=(sandbox_guide(config)
                                               if sandbox is not None else "")),
@@ -308,6 +318,10 @@ def build_harness(config) -> Harness:
         budget_factory=lambda: BudgetTracker(config.max_tokens_budget, config.max_wall_seconds),
         max_step_retry=config.orchestrator_max_step_retry,
         max_replan=config.orchestrator_max_replan,
+        # 意图路由：triage 顺带产出的类别 → 本轮面向用户那几处调用的温度（查资料稳、创作散）
+        intent_temperature=lambda intent: intent_temperature(config, intent),
+        # 单步重试逐档升温（与 planner 重试的降温方向相反，两类失败成因不同）
+        dynamic_temperature=config.enable_dynamic_temperature,
         # 技能路由：有技能时按触发词匹配、命中剧本注入 planner/直答（无技能则 None，零行为变更）
         skill_matcher=SkillMatcher(skill_registry) if skill_registry is not None else None)
 

@@ -258,6 +258,7 @@ docs/                架构与专题文档、部署说明、截图
 - [`docs/memory-management.md`](docs/memory-management.md) —— 记忆管理:三类记忆、智能写入、自我整合。
 - [`docs/rag-retrieval.md`](docs/rag-retrieval.md) —— RAG 检索:入库、多路召回与融合排序、grounding 与出题。
 - [`docs/answer-gate.md`](docs/answer-gate.md) —— 回答校验门:五项校验、重答与降级、软/硬门、三层校验关系。
+- [`docs/sampling-temperature.md`](docs/sampling-temperature.md) —— 采样温度:按角色分档、按用户意图路由、失败时动态升/降温。
 
 **运维**
 - [`docs/DEPLOY.md`](docs/DEPLOY.md) —— 部署:服务器准备、GitHub Secrets、版本自检等。
