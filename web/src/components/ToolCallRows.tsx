@@ -6,7 +6,8 @@ import { ToolCallDetail } from "./ToolCallDetail";
 import { ToolLabel } from "./ToolLabel";
 
 export type ToolRow = {
-  text: string; status?: "running" | "ok" | "error" | null; key?: string | null;
+  // warn 见 ProgressBlock 里同名字段的注释（交付提醒借同一条 progress 列传输）
+  text: string; status?: "running" | "ok" | "error" | "warn" | null; key?: string | null;
   detail?: { tool?: string; args?: unknown; result?: string; is_error?: boolean; elapsed_ms?: number } | null;
 };
 

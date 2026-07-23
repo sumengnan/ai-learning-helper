@@ -1,6 +1,6 @@
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { describe, it, expect, afterEach } from "vitest";
-import { VerifyBadge, GATE_OPEN_KEY } from "./VerifyBadge";
+import { VerifyBadge, VERIFY_OPEN_KEY } from "./VerifyBadge";
 import type { ChatMessage } from "../types";
 
 afterEach(() => cleanup());
@@ -102,7 +102,7 @@ describe("VerifyBadge 状态机", () => {
   it("只有门已开信号（回答刚起头）→ 不渲染：此刻没有任何东西被校验过", () => {
     const { container } = render(<VerifyBadge live message={msg({
       status: "streaming", content: "",
-      progress: [{ scope: "verify", text: "生成中…", status: "running", key: GATE_OPEN_KEY }],
+      progress: [{ scope: "verify", text: "生成中…", status: "running", key: VERIFY_OPEN_KEY }],
     })} />);
     expect(container.firstChild).toBeNull();
   });
@@ -111,7 +111,7 @@ describe("VerifyBadge 状态机", () => {
     render(<VerifyBadge live message={msg({
       status: "streaming",
       progress: [
-        { scope: "verify", text: "生成中…", status: "running", key: GATE_OPEN_KEY },
+        { scope: "verify", text: "生成中…", status: "running", key: VERIFY_OPEN_KEY },
         { scope: "verify", text: "结果校验中…", status: "running", key: "k1" },
       ],
     })} />);
@@ -360,5 +360,54 @@ describe("刷新后从 progress 重建每步校验", () => {
       progress: [ck("search_knowledge 命中 3 条", "ok", "search_knowledge")],
     })} />);
     expect(screen.queryByText("search_knowledge 命中 3 条")).toBeNull();
+  });
+});
+
+describe("交付提醒（scope=notice）", () => {
+  const notice = (kind: string, label: string, text: string) =>
+    ({ scope: "notice", text, status: "warn" as const, key: `notice:${kind}`,
+       detail: { kind, label } });
+
+  it("有提醒但校验通过 → 主行仍是「通过」，只在旁边标出提醒条数", () => {
+    render(<VerifyBadge message={msg({
+      progress: [{ scope: "verify", text: "结果校验通过", status: "ok" },
+                 notice("code", "代码可运行", "代码未跑通：run_python: 报错")],
+    })} />);
+    // 提醒发生在交付之后，既没拦下什么也没触发重答 —— 标红等于谎称本轮失败
+    expect(screen.getByText("结果校验通过")).toBeTruthy();
+    expect(screen.queryByText("结果校验未通过")).toBeNull();
+    expect(screen.getByText("· 1 项提醒")).toBeTruthy();
+  });
+
+  it("展开后按独立一节列出，并写明不影响本次结果", () => {
+    render(<VerifyBadge message={msg({
+      progress: [{ scope: "verify", text: "结果校验通过", status: "ok" },
+                 notice("format", "完整性", "回答疑似被截断（代码围栏未闭合）")],
+    })} />);
+    fireEvent.click(screen.getByText("结果校验通过"));
+    expect(screen.getByText("交付提醒（不影响本次结果）")).toBeTruthy();
+    expect(screen.getByText(/完整性：回答疑似被截断/)).toBeTruthy();
+  });
+
+  it("只有提醒、没有任何校验信号 → 徽章照样渲染（否则提醒无处可看）", () => {
+    render(<VerifyBadge message={msg({
+      progress: [notice("facts", "引用链接", "引用链接不可达：http://x")],
+    })} />);
+    expect(screen.getByText("· 1 项提醒")).toBeTruthy();
+  });
+
+  it("多条提醒各列一行", () => {
+    render(<VerifyBadge message={msg({
+      progress: [notice("format", "完整性", "疑似截断"),
+                 notice("grounding", "检索依据", "缺依据：X")],
+    })} />);
+    expect(screen.getByText("· 2 项提醒")).toBeTruthy();
+  });
+
+  it("没有提醒时不显示提醒计数", () => {
+    render(<VerifyBadge message={msg({
+      progress: [{ scope: "verify", text: "结果校验通过", status: "ok" }],
+    })} />);
+    expect(screen.queryByText(/项提醒/)).toBeNull();
   });
 });

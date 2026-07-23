@@ -1,0 +1,9 @@
+{
+  "suite": "checks",
+  "metrics": {
+    "checks": {
+      "mean": 1.0,
+      "n": 10
+    }
+  }
+}

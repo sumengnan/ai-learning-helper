@@ -1,17 +1,22 @@
 # app/verify.py
-"""回答交付前的正确性校验器（Answer Delivery Gate 的判定核心）+ 轨迹 judge。
+"""交付后的机械检查（提醒型）+ 轨迹 judge。
 
-AnswerVerifier.verify 按配置逐项校验一版候选答案，短路优先低成本项：
-  1. format    —— 无 LLM：非空、代码围栏闭合、非空转。【硬门】
-  2. grounding —— LLM：本轮检索到的资料（知识库 或 联网检索）是否逐条支撑答案论断（仅当有检索命中）。【软门】
-  3. code      —— 在会话沙箱内实跑答案里的代码块（python/node/java），报错即不过。【硬门】
-  4. facts     —— 答案中引用的 http(s) 链接是否可达（2xx/3xx）。【软门】
-  5. judge     —— 独立 judge 模型 + 挑错视角打分，低于阈值不过。【软门】
-任一启用项不过 → ok=False，并合并各项反馈成 critique（供交付门回灌重答）。
-hard_failed 记录其中的硬门项：交付门据此决定「硬门失败不降级、必须重答或明确拦截」。
+**这里不再有「门」**：本模块的检查不拦截、不重答、不判本轮失败，只在答复交付后跑一遍，
+把发现的问题作为提醒推给前端（scope=notice）。「答复够不够格」由编排器的 Critic.review
+判定——那是唯一的 LLM 裁判，此前交付门的 judge 层与它做的是同一件事，重复了一份 prompt、
+一份配置和一整套各自演化的误判修补史（真实代价：「裁判要看最近对话」这个修复只进了
+judge、review 漏了几个月）。
 
-TrajectoryJudge.score 在交付前一次性回看整轨迹（任务拆分 / 关键步 / 最终答案），
-用独立模型分层打分，供门控加固与前端质量分展示。
+DeliveryChecker.run 保留的四项恰恰是 review 结构上做不到的——它只拿到文本，不执行、
+不联网、也做不了确定性检测：
+  1. format    —— 无 LLM：代码围栏是否闭合（截断迹象）
+  2. grounding —— LLM：本轮检索到的资料是否支撑答复里的事实陈述（仅当有知识库命中）
+  3. code      —— 在会话沙箱内实跑答复里的代码块（python/node/java）
+  4. facts     —— 答复中引用的 http(s) 链接是否可达（2xx/3xx）
+任一项发现问题 → 产出一条 Notice，仅供展示与统计。基建抖动一律跳过该项（不产生假提醒）。
+
+TrajectoryJudge.score 在交付后一次性回看整轨迹（任务拆分 / 关键步 / 最终答案），
+用独立模型分层打分，供前端质量分展示。同样不驱动重答。
 
 复用：app/completion.py::build_completer（单发 LLM 调用）、app/quiz_service.py 的 _strip_fence。
 harness 内核零改动。
@@ -21,7 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from harness.llm.openai_compat import json_output
 from harness.tools.base import ToolError
@@ -45,19 +50,10 @@ async def call_json(complete, system: str, user: str) -> dict:
         raw = await complete(system, user)
     return json.loads(_strip_fence(raw))
 
-# 硬门：失败不允许降级交付（必须重答或明确拦截）
-_HARD_CHECKS = frozenset({"format", "code", "empty"})
-
-# 校验层名 → 中文，供前端展示「未通过的是哪一层」
-_LAYER_ZH = {
-    "format": "格式/完整性", "grounding": "检索依据", "code": "代码可运行",
-    "judge": "质量评分", "facts": "引用链接", "trajectory": "整体质量", "empty": "未产出答案",
+# 检查项 → 中文名，供前端与统计展示（键即 Notice.kind）
+CHECK_ZH = {
+    "format": "完整性", "grounding": "检索依据", "code": "代码可运行", "facts": "引用链接",
 }
-
-
-def failed_layers_zh(failed: list[str]) -> str:
-    """把未通过的校验层名翻成中文（如 judge→质量评分），供前端展示哪层没过。"""
-    return "、".join(_LAYER_ZH.get(f, f) for f in failed)
 
 GROUNDING_SYSTEM = (
     "你是事实核查员。给你「检索到的资料」（可能来自用户知识库，也可能来自联网检索）和"
@@ -72,19 +68,6 @@ GROUNDING_SYSTEM = (
     "只输出 JSON：{\"grounded\": true 或 false, \"unsupported\": [\"缺依据的事实论断…\"], "
     "\"feedback\": \"一句话说明\"}；全部有据、或回答里只有上述无需核查的内容时，"
     "unsupported 为空数组、grounded 为 true。不要多余文字。")
-
-JUDGE_SYSTEM = (
-    "你是严格的答案质检员。评估「回答是否达成用户目标」，综合考量相关性、准确性、完整性、安全性。"
-    "重要：若任务主要通过工具执行完成（如已生成/保存/查询/下载成功），简洁的完成确认就是恰当的回答，"
-    "不要因为「正文没有展开罗列细节」而扣分——以是否真正达成用户意图为准，成果可能体现在工具执行结果里。"
-    "对话是多轮的：给出【最近几轮对话】时，必须结合它来解读用户本轮输入——"
-    "用户本轮往往是在接着往下回应。若近几轮里 AI 给过选项/清单（如「回复 A/B/C/D」「选一个方案」），"
-    "用户回「A」「第二个」「好」「就它」等简短内容就是【明确的选择】，AI 据此直接执行完全正确，"
-    "绝不能判成「输入含义不明」「AI 未澄清就动手」——那是没读上下文的误判。"
-    "只有在【结合最近对话后】用户输入仍然无效/残缺/有歧义时，AI 才应请求澄清；此时 AI 提示重新输入、"
-    "请求澄清或合理追问也是恰当推进，不能因「本轮没有直接给出最终答案」判为未达成；"
-    "只有在用户需求明确、AI 却答非所问或无理回避时才算未达成。"
-    "只输出 JSON：{\"score\": 0-100 的整数, \"feedback\": \"一句话点评（指出主要问题）\"}，不要多余文字。")
 
 TRAJECTORY_SYSTEM = (
     "你是严格的过程质检员。给你用户问题、AI 的任务拆分、关键步摘要（含每步工具及结果）、最终答案。"
@@ -129,19 +112,18 @@ _HTTP_STATUS_RE = re.compile(r"HTTP\s+(\d{3})")
 
 
 @dataclass
-class Verdict:
-    ok: bool
-    failed: list[str] = field(default_factory=list)   # 未通过的检查名
-    critique: str = ""                                # 合并反馈，供重答回灌
-    summary: str = ""                                 # 一行摘要，供进度/降级前缀
-    hard_failed: list[str] = field(default_factory=list)  # 其中的硬门项
+class Notice:
+    """一条交付提醒。kind 见 CHECK_ZH；text 是给用户看的中文说明。
 
-    @classmethod
-    def _make(cls, failed: list[str], feedbacks: list[str]) -> "Verdict":
-        crit = "；".join(f for f in feedbacks if f)
-        return cls(ok=not failed, failed=failed, critique=crit,
-                   summary="、".join(failed),
-                   hard_failed=[f for f in failed if f in _HARD_CHECKS])
+    刻意不带 ok/failed 之类的判定字段：它不参与「本轮成不成功」的判断，产生一条
+    Notice 只意味着「这里值得你扫一眼」，不意味着答复不合格。
+    """
+    kind: str
+    text: str
+
+    def as_dict(self) -> dict:
+        return {"kind": self.kind, "label": CHECK_ZH.get(self.kind, self.kind),
+                "text": self.text}
 
 
 def _looks_truncated(answer: str) -> bool:
@@ -230,74 +212,63 @@ class TrajectoryJudge:
             return TrajectoryScore(None, None, None, "")
 
 
-class AnswerVerifier:
-    def __init__(self, complete, config, judge_complete=None) -> None:
+class DeliveryChecker:
+    """交付后的机械检查。产出 Notice 列表——**不判成败、不触发重答**。
+
+    调用时机是答复已经交付给用户之后（编排器跑完、Critic.review 已经表过态）。故：
+    - 任何一项失败都不该让用户白等一次重答；发现问题就如实提醒，由用户自己判断。
+    - 基建抖动（沙箱不可达、抓取超时、LLM 解析失败）一律**静默跳过该项**：假提醒比
+      不提醒更糟——它会训练用户忽略所有提醒。
+    - 各项互相独立、逐项跑完，不像旧交付门那样在 format 处短路：既然不拦截，就没有
+      「早点失败省下后面开销」的动机，反倒是把问题一次报全更有用。
+    """
+
+    def __init__(self, complete, config) -> None:
         self._complete = complete          # async (system_prompt, user_prompt) -> str
-        # 独立 judge 模型（降低「自评打高分」偏差）；未注入则回退主 completer
-        self._judge_complete = judge_complete or complete
         self._config = config
 
-    async def verify(self, question: str, answer: str, grounding: list[dict],
-                     registry, steps: list[dict] | None = None,
-                     recent_dialogue: str = "") -> Verdict:
+    async def run(self, answer: str, grounding: list[dict], registry) -> list[Notice]:
         cfg = self._config
-        failed: list[str] = []
-        feedbacks: list[str] = []
         ans = (answer or "").strip()
+        notices: list[Notice] = []
+        if not ans:
+            return notices                 # 没产出答复，交由上游的错误处理表态，不在这里凑热闹
 
-        # 1) format —— 无 LLM，最先短路
-        if cfg.gate_check_format:
-            if not ans:
-                return Verdict._make(["format"], ["回答为空"])
-            if _looks_truncated(ans):
-                return Verdict._make(["format"], ["回答疑似被截断（代码围栏未闭合）"])
+        # 1) format —— 无 LLM
+        if cfg.delivery_check_format and _looks_truncated(ans):
+            notices.append(Notice("format", "回答疑似被截断（代码围栏未闭合）"))
 
-        # 2) grounding —— 触发条件仍是「本轮命中了知识库」（不扩大到纯联网轮，避免给大量
-        # 联网问答新增 grounding 噪音）。但核查上下文要把【联网检索的结果也算进去】：否则
-        # 「知识库+联网」混用时，联网来的事实会因不在知识库而被误判缺依据（本次要修的 bug）。
-        if cfg.gate_check_grounding:
+        # 2) grounding —— 触发条件是「本轮命中了知识库」（不扩大到纯联网轮，避免给大量
+        # 联网问答新增噪音）。但核查资料要把【联网检索结果与本轮读入的文档也算进去】：
+        # 否则「知识库+联网」混用时，联网来的事实会因不在知识库而被误报缺依据。
+        if cfg.delivery_check_grounding:
             def _live(entries):
                 return [g["content"] for g in entries if not g.get("is_error")
                         and g.get("content") and _NO_HIT not in g["content"]]
             kb = _live([g for g in grounding if g.get("tool") == "search_knowledge"])
             web = _live([g for g in grounding
                          if g.get("retrieval") and g.get("tool") != "search_knowledge"])
-            # 本轮经 read_attachment/read_file 读入的文档正文：整理成笔记/总结时模型据以作答的
-            # 依据，也纳入核查资料——否则「整理知识库成笔记」会因笔记内容不在本轮 top-k search_knowledge
-            # 片段里而被误判缺依据。不带 retrieval 标记，故不单独触发 grounding，仅在本轮另有知识库
-            # 命中时作为核查上下文。
             docs = _live([g for g in grounding
                           if g.get("tool") in ("read_attachment", "read_file")])
-            if kb:                                    # 有知识库依据才做 grounding
-                # 知识库 + 读入文档 + 联网 一并作为核查资料；可能很长，拼接去重后截断
+            if kb:
                 context = _cap(_dedup_join(kb + docs + web), _GROUNDING_CONTEXT_MAX)
                 ok, fb = await self._judge_grounding(context, ans)
                 if not ok:
-                    failed.append("grounding")
-                    feedbacks.append(fb or "回答存在缺乏检索依据的论断")
+                    notices.append(Notice("grounding", fb or "回答存在缺乏检索依据的论断"))
 
-        # 3) code —— 在会话沙箱内实跑答案里的代码块
-        if cfg.gate_check_code and registry is not None:
+        # 3) code —— 在会话沙箱内实跑答复里的代码块
+        if cfg.delivery_check_code and registry is not None:
             errs = await self._run_code_blocks(ans, registry)
             if errs:
-                failed.append("code")
-                feedbacks.append("代码未跑通：" + "；".join(errs))
+                notices.append(Notice("code", "代码未跑通：" + "；".join(errs)))
 
         # 4) facts —— 引用链接可达性
-        if cfg.gate_check_facts and registry is not None:
+        if cfg.delivery_check_facts and registry is not None:
             bad = await self._check_facts(ans, registry)
             if bad:
-                failed.append("facts")
-                feedbacks.append("引用链接不可达：" + "；".join(bad))
+                notices.append(Notice("facts", "引用链接不可达：" + "；".join(bad)))
 
-        # 5) judge —— 独立模型 + 挑错视角打分
-        if cfg.gate_check_judge:
-            score, fb = await self._judge_score(question, ans, steps, recent_dialogue)
-            if score is not None and score < cfg.answer_pass_score:
-                failed.append("judge")
-                feedbacks.append(fb or f"质量评分 {score} 低于阈值 {cfg.answer_pass_score}")
-
-        return Verdict._make(failed, feedbacks)
+        return notices
 
     async def _judge_grounding(self, context: str, answer: str) -> tuple[bool, str]:
         user = f"检索资料：\n{context}\n\n待核查回答：\n{answer}\n\n请逐条判断回答是否都有资料支撑。"
@@ -313,28 +284,6 @@ class AnswerVerifier:
         except Exception as e:                 # LLM/解析失败 → 不因基础设施抖动拦截交付
             _log.warning("grounding 校验失败，跳过该项：%s", e)
             return True, ""
-
-    async def _judge_score(self, question: str, answer: str,
-                           steps: list[dict] | None = None,
-                           recent_dialogue: str = "") -> tuple[int | None, str]:
-        tools = _tool_exec_summary(steps)
-        parts = []
-        if recent_dialogue:
-            # 最近几轮对话是解读用户本轮输入的关键上下文：没有它，"A"/"好"/"第二个"
-            # 这类简短回复会被误判为含义不明，反过来怪 AI 没澄清就动手（真实误判）。
-            parts.append(f"【最近几轮对话（用户本轮在接着往下回应）】：\n{recent_dialogue}")
-        parts.append(f"用户本轮输入：{question}")
-        if tools:
-            parts.append(f"AI 为完成此任务调用的工具及结果（成果可能在此、而非正文）：\n{tools}")
-        parts.append(f"回答：\n{answer}")
-        parts.append("请先找问题再打分并点评。")
-        user = "\n".join(parts)
-        try:
-            v = await call_json(self._judge_complete, JUDGE_SYSTEM, user)
-            return _coerce_int(v.get("score", 100)), v.get("feedback") or ""
-        except Exception as e:
-            _log.warning("judge 校验失败，跳过该项：%s", e)
-            return None, ""
 
     async def _run_code_blocks(self, answer: str, registry) -> list[str]:
         errs: list[str] = []

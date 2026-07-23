@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ChatView, fmtDuration, dropStepProgress } from "./ChatView";
-import { GATE_OPEN_KEY } from "./VerifyBadge";
+import { VERIFY_OPEN_KEY } from "./VerifyBadge";
 import { streamChat, attachChat, stopRun, sendDecision, api } from "../api/client";
 
 // mock streamChat：依次回调 TextDelta "你" / TextDelta "好" / RunFinished
@@ -487,7 +487,7 @@ describe("ChatView", () => {
     render(<MemoryRouter><ChatView conversationId="c1" initial={[
       { role: "user", content: "导出报告" },
       { role: "assistant", content: "", status: "streaming", steps: [_dlStep],
-        progress: [{ scope: "verify", text: "生成中…", status: "running", key: GATE_OPEN_KEY }] },
+        progress: [{ scope: "verify", text: "生成中…", status: "running", key: VERIFY_OPEN_KEY }] },
     ]} /></MemoryRouter>);
     expect(screen.queryByRole("button", { name: /报告\.md/ })).toBeNull();
   });
@@ -496,7 +496,7 @@ describe("ChatView", () => {
     render(<MemoryRouter><ChatView conversationId="c1" initial={[
       { role: "user", content: "导出报告" },
       { role: "assistant", content: "写着…", status: "streaming", steps: [_dlStep],
-        progress: [{ scope: "verify", text: "生成中…", status: "running", key: GATE_OPEN_KEY }] },
+        progress: [{ scope: "verify", text: "生成中…", status: "running", key: VERIFY_OPEN_KEY }] },
     ]} /></MemoryRouter>);
     expect(screen.queryByRole("button", { name: /报告\.md/ })).toBeNull();   // 文件仍盖住
     expect(screen.queryByText("校验")).toBeNull();                            // 徽章尚未出现

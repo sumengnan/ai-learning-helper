@@ -106,18 +106,23 @@ class ExamGradeScorer:
         return Score(0.0 if bad else 1.0, OK, "；".join(bad))
 
 
-class GateScorer:
-    """比对 AnswerVerifier.verify 的 Verdict 与期望。failed 用子集匹配（不要求穷举）。"""
+class ChecksScorer:
+    """比对 DeliveryChecker.run 产出的提醒与期望。
 
-    name = "gate"
+    期望列表用子集匹配（不要求穷举）；但**期望为空时要求实得也为空**——「不该提醒却提醒了」
+    是这套东西最要命的失败模式（假提醒会让用户学会无视全部提醒），必须能被这套 case 抓住。
+    """
+
+    name = "checks"
 
     async def score(self, case, output) -> Score:
+        got = [n.kind for n in output]
         bad: list[str] = []
-        if output.ok != case.expect.ok:
-            bad.append(f"ok 实得 {output.ok}、期望 {case.expect.ok}")
-        missing = [x for x in case.expect.failed if x not in output.failed]
+        missing = [x for x in case.expect.notices if x not in got]
         if missing:
-            bad.append(f"期望未通过的层 {missing} 不在实得 failed={output.failed} 中")
+            bad.append(f"期望的提醒 {missing} 不在实得 {got} 中")
+        if not case.expect.notices and got:
+            bad.append(f"不该产生提醒，实得 {got}")
         return Score(0.0 if bad else 1.0, OK, "；".join(bad))
 
 

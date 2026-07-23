@@ -428,10 +428,13 @@ class Orchestrator:
         # 重答工具表：考试轮空表（防 start_exam 重置进度），非考试的 1 步回退给真实工具表
         # （否则「单步但需工具」的题重答只能空转、没法重做检索/生成）。
         redo_registry = ToolRegistry() if in_exam else registry
-        async for ev in self._simple_answer(_redo_message(message, review.feedback),
-                                            budget, context=context,
-                                            registry=redo_registry, prefer_main=True):
-            yield ev
+        # 重答升温：拿同一个温度把上一版的毛病再写一遍，纠正指令就白给了。这是编排器路径下
+        # 唯一真正的「整轮重答」（旧交付门那套已删），故升温档挂在这里。
+        with _step_retry_temperature(getattr(self, "_dynamic_temperature", False), 1):
+            async for ev in self._simple_answer(_redo_message(message, review.feedback),
+                                                budget, context=context,
+                                                registry=redo_registry, prefer_main=True):
+                yield ev
 
     # ---- synthesize ----
     async def _synthesize(self, goal: str, artifacts: dict[str, Artifact], recent_dialogue: str = ""):
@@ -673,6 +676,7 @@ class Orchestrator:
 
             replan_count = 0
             _review_history: list[dict] = []   # 每轮终局校验结论（供 verify 列结构化统计）
+            _review_errored = False            # 是否出现过「裁判崩了→放行」（那种通过不算真通过）
             _last_review_ok = True             # verify=False 时不校验，按通过记
             retry_hints: dict[str, str] = {}
             # 跨轮累积 done 产物：replan 返回全新 Plan（旧 done 步不在其中），必须在换 plan 前收走，
@@ -712,6 +716,7 @@ class Orchestrator:
                 # 校验、结论却全丢——统计页因此显示「从来没有回答被拦下过」。
                 _review_history.append({"failed": [] if review.accept else ["review"],
                                         "feedback": review.feedback or ""})
+                _review_errored = _review_errored or getattr(review, "errored", False)
                 _last_review_ok = review.accept
                 yield Progress(scope="verify",
                                text="结果校验通过" if review.accept
@@ -775,7 +780,7 @@ class Orchestrator:
                     scope="verify", text="", key=VERIFY_TRACE_KEY,
                     detail={"attempts": replan_count + 1, "retries": replan_count,
                             "ok": bool(_last_review_ok), "degraded": _degraded,
-                            "gate_error": False, "history": _review_history})
+                            "gate_error": _review_errored, "history": _review_history})
             yield RunFinished(message=Message(role=Role.ASSISTANT, content=final))
         finally:
             cleanup.close()          # 还原本轮意图温度（若设过）

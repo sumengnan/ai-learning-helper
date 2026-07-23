@@ -57,6 +57,10 @@ class Review:
     """终局把关结论（Reflect 的整体层）：accept 表示整体是否可交付；不通过时 feedback 供重规划。"""
     accept: bool
     feedback: str
+    # 这次 accept 是不是「裁判自己崩了、放行」放出来的。Critic 对基建抖动一律 fail-open
+    # （绝不因端点抖动拦下一份可能是好的答复），但那种「通过」并不是真的通过过——不记下来，
+    # 统计页会把它们混进一次过率里，显得校验很健康。
+    errored: bool = False
 
 
 # 「问用户」类步骤的识别。计划在一轮内自主跑完，执行子步没有与用户对话的通道（工具表里

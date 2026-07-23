@@ -2,18 +2,22 @@ import { Box, Typography, CircularProgress } from "@mui/material";
 import FactCheckIcon from "@mui/icons-material/FactCheck";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
+import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import { CollapsibleBlock } from "./CollapsibleBlock";
 import { EllipsisText } from "./EllipsisText";
 import type { ChatMessage } from "../types";
 
-// 轮次开头下发的「本轮开了校验门」信号（app/api/chat.py 同名常量，改这里必须同时改那里）。
+// 轮次开头下发的「本轮开了结果校验」信号（app/api/chat.py 同名常量，改这里必须同时改那里）。
 // 它借 scope=verify 通道，但不是一条校验进展——此刻模型连初稿都还没生成，没有任何东西可校验。
-// 唯一用途是让 ChatView 在交付前盖住本轮生成的文件（未通过会重答、产物届时被服务端清掉）。
+// 唯一用途是让 ChatView 在交付前盖住本轮生成的文件（终局校验不过会重答、产物届时被服务端清掉）。
 // 故校验徽章必须把它排除在外：否则回答刚起头徽章就转圈说「生成中…」，谎称正在校验，
 // 而真正的校验要等模型出完初稿（「校验中…」）才开始。
-export const GATE_OPEN_KEY = "verify:gate-open";
-export const isGateOpen = (p: { scope: string; key?: string | null }) =>
-  p.scope === "verify" && p.key === GATE_OPEN_KEY;
+//
+// 字面值保留旧名 gate-open：历史消息的 progress 列里存的就是这个串，改了会让老消息里
+// 这条信号被当成一条真校验事件，徽章从此永远转圈。名字里的 gate 已无对应物（交付门已删）。
+export const VERIFY_OPEN_KEY = "verify:gate-open";
+export const isVerifyOpen = (p: { scope: string; key?: string | null }) =>
+  p.scope === "verify" && p.key === VERIFY_OPEN_KEY;
 
 // 轨迹 judge 只对「真发生过的环节」打分：模型没调 plan 工具就没有拆分可评，该项为 null
 // （见 verify.py TRAJECTORY_SYSTEM「无拆分或无步骤时对应字段给 null」）。
@@ -61,7 +65,15 @@ function checksFromProgress(progress: ChatMessage["progress"]): NonNullable<Chat
   return out;
 }
 
-// 展开明细里的来源分组标题（步骤校验 / 结果校验）
+// 从 progress 里取交付提醒（scope="notice"）。它只存在于 progress 列，没有独立字段——
+// 提醒不参与徽章的通过/未通过判定，只作为一节明细展示，故无需像 checks 那样另开状态。
+function noticesFromProgress(progress: ChatMessage["progress"]) {
+  return (progress || [])
+    .filter((p) => p.scope === "notice")
+    .map((p) => ({ label: p.detail?.label || "检查", text: p.text || "" }));
+}
+
+// 展开明细里的来源分组标题（步骤校验 / 结果校验 / 交付提醒）
 const SectionLabel = ({ text }: { text: string }) => (
   <Typography variant="caption" color="text.disabled"
     sx={{ display: "block", fontWeight: 600, letterSpacing: 0.3, py: 0.15 }}>
@@ -85,7 +97,10 @@ const SectionLabel = ({ text }: { text: string }) => (
 // 仅当本轮有 verify/check/quality 任一信号时渲染，否则返回 null。
 export function VerifyBadge({ message, live = false }: { message: ChatMessage; live?: boolean }) {
   // 排除门已开信号：它虽走 verify 通道，却先于任何校验发生，算进来会让徽章一开场就转圈
-  const verify = (message.progress || []).filter((p) => p.scope === "verify" && !isGateOpen(p));
+  const verify = (message.progress || []).filter((p) => p.scope === "verify" && !isVerifyOpen(p));
+  // 交付后的机械检查提醒：完整性/检索依据/代码可运行/引用链接。**不参与状态判定**——
+  // 它们发生在答复交付之后，既没拦下什么也没触发重答，把徽章标红等于谎称本轮失败。
+  const notices = noticesFromProgress(message.progress);
   // checks 实时由 ChatView 赋值、刷新后为空 → 回退到从 progress 重建（数据一直在那）。
   // 检索命中是正常情形，不作为校验状态展示（仅保留失败/未命中等有意义的每步校验）
   const checks = (message.checks || checksFromProgress(message.progress)).filter(
@@ -96,7 +111,7 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
   const quality = message.quality || qualityFromProgress(message.progress);
 
   // 无任何校验信号 → 不渲染徽章
-  if (verify.length === 0 && checks.length === 0 && !quality) return null;
+  if (verify.length === 0 && checks.length === 0 && !quality && notices.length === 0) return null;
 
   const vLast = verify[verify.length - 1];
   // 校验历史：每一轮的终态（通过/未通过），失败轮保留原因；重答后新增新记录、通过后亦不清除
@@ -150,6 +165,12 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
       {state === "error" && vLast?.text && (
         <EllipsisText text={vLast.text} sx={{ ml: 0.5, color: "text.secondary" }} maxChars={28} />
       )}
+      {/* 提醒计数：正常态下也要看得见，否则用户不会想到去展开。用中性色，不抢「未通过」的红 */}
+      {notices.length > 0 && (
+        <Typography variant="caption" color="warning.main" sx={{ flexShrink: 0 }}>
+          · {notices.length} 项提醒
+        </Typography>
+      )}
     </Box>
   );
 
@@ -185,6 +206,20 @@ export function VerifyBadge({ message, live = false }: { message: ChatMessage; l
                 <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "pre-wrap" }}>
                   {rounds.length > 1 ? `第 ${idx + 1} 次：` : ""}
                   {p.status === "error" ? `未通过 — ${p.text}` : "校验通过"}
+                </Typography>
+              </Box>
+            ))}
+          </Box>
+        )}
+        {/* 交付提醒：答复交付后才跑的机械检查，只提示不影响成败，故与校验分开成一节 */}
+        {notices.length > 0 && (
+          <Box sx={{ mb: quality ? 1 : 0 }}>
+            <SectionLabel text="交付提醒（不影响本次结果）" />
+            {notices.map((n, i) => (
+              <Box key={i} sx={{ display: "flex", alignItems: "flex-start", gap: 0.75, py: 0.15 }}>
+                <WarningAmberIcon sx={{ fontSize: 14, mt: 0.15 }} color="warning" />
+                <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "pre-wrap" }}>
+                  {n.label}：{n.text}
                 </Typography>
               </Box>
             ))}

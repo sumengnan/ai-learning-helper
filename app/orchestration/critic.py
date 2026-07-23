@@ -96,10 +96,6 @@ def _validate_user(step: PlanStep, artifact: Artifact) -> str:
             f"实际产出：\n{artifact.summary}\n\n请判定是否达成预期。")
 
 
-# 喂给终局 review 的最近对话上限（保尾：越近的轮次越能说明本轮在延续什么）。
-_REVIEW_DIALOGUE_MAX = 1500
-
-
 def _review_user(goal: str, plan: Plan, artifacts: dict, recent_dialogue: str = "") -> str:
     lines: list[str] = []
     if recent_dialogue:
@@ -107,8 +103,11 @@ def _review_user(goal: str, plan: Plan, artifacts: dict, recent_dialogue: str = 
         # LlamaIndex，接着说「帮我写个 hello world 看一下」，AI 给的 LlamaIndex 版
         # hello world 是对的，裁判却只看见孤立的一句「hello world」，判「用了复杂的
         # RAG 框架、严重答非所问」，把正确答复打回重答。
+        #
+        # 原样用、不再截断：窗口策略只归 chat._recent_dialogue 一处管（它已按条数+字数
+        # 收好），在这里再截一刀等于把同一个策略拆到两处、还比交付门 judge 拿得更少。
         lines.append("【最近几轮对话（用户本轮多半在接着往下说）】：\n"
-                     f"{recent_dialogue[-_REVIEW_DIALOGUE_MAX:]}\n")
+                     f"{recent_dialogue}\n")
     lines += [f"用户目标：\n{goal}\n", "各步骤产出："]
     for s in plan.steps:
         art = artifacts.get(s.id)
@@ -147,4 +146,5 @@ class Critic:
             return Review(accept=_coerce_bool(v.get("accept"), True), feedback=str(v.get("feedback", "")))
         except Exception as e:  # fail-open：抖动放行
             _log.warning("Critic.review 调用失败，fail-open 放行：%s", e)
-            return Review(accept=True, feedback=f"审查调用失败，放行：{str(e)[:120]}")
+            return Review(accept=True, errored=True,
+                          feedback=f"审查调用失败，放行：{str(e)[:120]}")

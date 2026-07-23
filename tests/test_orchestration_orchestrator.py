@@ -2440,12 +2440,15 @@ async def test_review_prompt_carries_dialogue_and_anti_misjudge_rule():
     assert "答非所问" in REVIEW_SYSTEM and "延续上文" in REVIEW_SYSTEM
 
 
-def test_review_dialogue_is_capped_keeping_the_tail():
-    """超长对话保尾——越近的轮次越能说明本轮在延续什么。"""
-    from app.orchestration.critic import _REVIEW_DIALOGUE_MAX, _review_user
+def test_review_does_not_re_truncate_the_dialogue():
+    """窗口只归 chat._recent_dialogue 一处管：裁判这里原样用，不再截第二刀。
+
+    截第二刀有两重坏处：同一个策略拆到两处，且终局裁判会比交付门 judge 拿得更少——
+    同一轮里两个裁判看见的上文不一样，误判起来无从对账。
+    """
+    from app.orchestration.critic import _review_user
 
     plan, arts = om._one_step_plan("g", "a")
-    long_dialogue = "早期无关内容" * 500 + "【最后一轮】说的是 LlamaIndex"
-    user = _review_user("g", plan, arts, long_dialogue)
-    assert "【最后一轮】说的是 LlamaIndex" in user
-    assert len(user) < len(long_dialogue)
+    dialogue = "用户：先聊 LlamaIndex\n" + "AI：中间还说了很多\n" * 200
+    user = _review_user("g", plan, arts, dialogue)
+    assert dialogue in user, "上文被就地截断了"

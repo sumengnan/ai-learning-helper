@@ -16,7 +16,9 @@ import { SkillDetail } from "./SkillDetail";
 
 type ProgressItem = {
   scope: string; text: string;
-  status?: "running" | "ok" | "error" | null;
+  // warn 来自交付提醒（scope=notice）：它不是进度状态，本块不渲染这类条目（见 ChatView
+  // 的过滤），但类型要收得下，否则 progress 列整体传不进来。
+  status?: "running" | "ok" | "error" | "warn" | null;
   key?: string | null;
   agent?: string | null;   // 沙箱步骤归属的子 agent（后端在子 agent 执行期间打标）
   // 机读附加信息：技能行带 {skill: 技能名}（供展开取正文），工具行带 tool/args/result

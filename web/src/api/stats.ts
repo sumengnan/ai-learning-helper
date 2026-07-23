@@ -18,6 +18,8 @@ export interface GateStat {
   first_pass_rate: number;   // 一次就过的比例
   gate_errors: number;       // 校验器自身故障而跳过校验（fail-open）的轮数：这些「通过」并非真通过
   layer_failures: GateLayer[];
+  notice_turns: number;      // 出现过交付提醒的轮数（提醒只提示、不拦截、不算失败）
+  notices: { kind: string; zh: string; count: number }[];   // 各项提醒次数，降序
 }
 /** 轨迹 judge 的分层质量分。judge 默认关闭，故常态可能全为空/0。 */
 export interface QualityStat {

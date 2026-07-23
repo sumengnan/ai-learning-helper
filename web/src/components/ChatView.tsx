@@ -24,7 +24,7 @@ import { linkifyCitations, citeId } from "./citations";
 import { EmptyHint } from "./EmptyHint";
 import { ProgressBlock } from "./ProgressBlock";
 import { SubagentProgress } from "./SubagentProgress";
-import { VerifyBadge, isGateOpen } from "./VerifyBadge";
+import { VerifyBadge, isVerifyOpen } from "./VerifyBadge";
 import { PlanBlock } from "./PlanBlock";
 import { RouteBadge, routeModeOf } from "./RouteBadge";
 import { SelfPlanBlock } from "./SelfPlanBlock";
@@ -330,6 +330,11 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
       a.checks = [...(a.checks || [])];
       const at = a.checks.findIndex((c) => c.tool === tool);
       if (at >= 0) a.checks[at] = row; else a.checks.push(row);
+    });
+    // 交付提醒（scope=notice）：交付后的机械检查发现的问题。只入 progress 列——它不是校验
+    // 结论，不该影响徽章的通过/未通过状态，徽章自己把它当独立一节渲染。
+    else if (e.type === "Progress" && e.data.scope === "notice") upd((a) => {
+      (a.progress ||= []).push({ scope: e.data.scope, text: e.data.text, status: e.data.status, key: e.data.key, agent: e.data.agent, detail: e.data.detail });
     });
     // 轨迹质量分（scope=quality）：text 为 JSON，解析失败忽略该事件、不抛。
     else if (e.type === "Progress" && e.data.scope === "quality") upd((a) => {
@@ -701,10 +706,10 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
               {m.role === "assistant" && (() => {
                 const files = generatedFiles(m.steps);
                 if (!files.length) return null;
-                // 开了校验门的轮次，交付前一律不显示：校验不过会带反馈重答，届时本轮产物会被
+                // 开了结果校验的轮次，交付前一律不显示：终局校验不过会带反馈重答，届时本轮产物会被
                 // 服务端清理掉，提前显示等于给用户一个马上会失效的下载按钮。服务端在轮次开头
                 // 就下发 scope=verify 信号，故整个生成/校验/重答期间都能盖住，不会闪一下。
-                // 这里必须把门已开信号(isGateOpen)算在内 —— 它正是轮次开头唯一那条 verify 事件，
+                // 这里必须把「本轮开了结果校验」信号(isVerifyOpen)算在内 —— 它正是轮次开头唯一那条 verify 事件，
                 // 是「不闪一下」的全部依据。别为了跟徽章的过滤保持一致而把它排掉。
                 const gating = m.status === "streaming"
                   && (m.progress || []).some((p) => p.scope === "verify");
@@ -731,11 +736,12 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                 // 校验是系统级信息，与状态/耗时/tokens 同处虚线下方（不受 showTools 开关影响）
                 // quality 刷新后不在 m.quality 上（只实时赋值），但 progress 里有
                 // scope="quality"，故一并认；否则「只有质量分、无 verify」的轮刷新后不渲染徽章
-                // 门已开信号（isGateOpen）不算校验信号：它在轮次开头就到，用它起徽章等于
+                // 校验已开信号（isVerifyOpen）不算校验信号：它在轮次开头就到，用它起徽章等于
                 // 回答刚起头就转圈谎称在校验。徽章要等真正的校验事件（「校验中…」）才出现。
                 const hasVerify = !!((m.progress || []).some(
-                  (p) => (p.scope === "verify" && !isGateOpen(p))
-                    || p.scope === "check" || p.scope === "quality")
+                  (p) => (p.scope === "verify" && !isVerifyOpen(p))
+                    || p.scope === "check" || p.scope === "quality"
+                    || p.scope === "notice")
                   || m.quality);
                 const hasStatus = live || m.status === "done" || m.status === "error"
                   || m.status === "stopped" || m.status === "interrupted";

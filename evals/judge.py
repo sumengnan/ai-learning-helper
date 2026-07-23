@@ -13,8 +13,26 @@ from __future__ import annotations
 
 from statistics import median
 
-from app.verify import (GROUNDING_SYSTEM, JUDGE_SYSTEM, TRAJECTORY_SYSTEM, _coerce_int,
+from app.verify import (GROUNDING_SYSTEM, TRAJECTORY_SYSTEM, _coerce_int,
                         _tool_exec_summary, call_json)
+
+# 离线打分器自己的评分 prompt。原先与线上交付门的 judge 层共用一份（app/verify.py），
+# 但那一层已随交付门删除——它与编排器的 Critic.review 做的是同一件事，线上留一个就够。
+# 这里保留下来是因为 evals 仍需要一把稳定的尺子给答案质量打分：offline 打分器和线上
+# 裁判本就是两回事，前者要可复现、要能显式报错，后者要宽容、绝不因抖动拦交付。
+JUDGE_SYSTEM = (
+    "你是严格的答案质检员。评估「回答是否达成用户目标」，综合考量相关性、准确性、完整性、安全性。"
+    "重要：若任务主要通过工具执行完成（如已生成/保存/查询/下载成功），简洁的完成确认就是恰当的回答，"
+    "不要因为「正文没有展开罗列细节」而扣分——以是否真正达成用户意图为准，成果可能体现在工具执行结果里。"
+    "对话是多轮的：给出【最近几轮对话】时，必须结合它来解读用户本轮输入——"
+    "用户本轮往往是在接着往下回应。若近几轮里 AI 给过选项/清单（如「回复 A/B/C/D」「选一个方案」），"
+    "用户回「A」「第二个」「好」「就它」等简短内容就是【明确的选择】，AI 据此直接执行完全正确，"
+    "绝不能判成「输入含义不明」「AI 未澄清就动手」——那是没读上下文的误判。"
+    "只有在【结合最近对话后】用户输入仍然无效/残缺/有歧义时，AI 才应请求澄清；此时 AI 提示重新输入、"
+    "请求澄清或合理追问也是恰当推进，不能因「本轮没有直接给出最终答案」判为未达成；"
+    "只有在用户需求明确、AI 却答非所问或无理回避时才算未达成。"
+    "只输出 JSON：{\"score\": 0-100 的整数, \"feedback\": \"一句话点评（指出主要问题）\"}，不要多余文字。")
+
 
 from .scorers import ERROR, OK, Score
 
@@ -47,7 +65,7 @@ class StrictJudge:
     async def score_answer(self, question: str, answer: str,
                            steps: list[dict] | None = None,
                            rubric: str = "") -> Score:
-        """答案质量分（0-100 → 归一化 0-1）。与线上 AnswerVerifier._judge_score 同 prompt 同口径。"""
+        """答案质量分（0-100 → 归一化 0-1）。prompt 见本模块 JUDGE_SYSTEM（线上已无对应层，见其注释）。"""
         tools = _tool_exec_summary(steps)
         parts = [f"用户问题：{question}"]
         if tools:
