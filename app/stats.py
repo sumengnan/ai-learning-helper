@@ -577,6 +577,11 @@ class StatsService:
         return {
             "documents": self._scalar(
                 self._app, "SELECT COUNT(*) FROM documents WHERE user_id=?", (user_id,)),
+            # 文档切成的片段(chunk)总数。documents 表一行=一个文档,num_chunks 是它切了多少片段;
+            # 概览卡片展示的是片段数(与知识库页「共 N 篇文档片段」同口径),文档数另作标注。
+            "document_chunks": self._scalar(
+                self._app, "SELECT COALESCE(SUM(num_chunks),0) FROM documents WHERE user_id=?",
+                (user_id,)),
             "questions": self._scalar(
                 self._app, "SELECT COUNT(*) FROM questions WHERE user_id=?", (user_id,)),
             "wrong_answers": self._scalar(
@@ -812,6 +817,7 @@ class StatsService:
         return {
             "assets": {
                 "documents": app_counts["documents"],
+                "document_chunks": app_counts["document_chunks"],
                 "memory": app_counts["memory"],
                 "questions": app_counts["questions"],
                 "wrong_answers": app_counts["wrong_answers"],

@@ -82,6 +82,11 @@ def _mk(planner, critic, order, triage_simple=False, synth="最终答复", max_r
     orch._max_step_retry = 2
     orch._budget = None
     orch._budget_factory = None
+    # off_topic 判定用 _fast_complete；默认判「学习相关」(on_topic)，使现有测试行为不变、
+    # 不被新增的无关拦截误伤。要测无关拦截的用例自行覆盖 _fast_complete 或 _is_off_topic。
+    async def _fast_on_topic(system, user):
+        return "on_topic"
+    orch._fast_complete = _fast_on_topic
     return orch
 
 
@@ -1475,6 +1480,21 @@ async def test_exam_review_still_states_what_to_actually_check():
     assert "篡改" in _EXAM_REVIEW_NOTE
 
 
+async def test_exam_review_forbids_mismatched_analysis_misjudgment():
+    """回归：用户实际遇到的第二种误判——
+
+    一轮回复=「讲解上一题(CompletableFuture) + 呈现新题(类加载机制)」是标准结构，
+    但校验器把上一题的讲解误当成新题的解析，判「张冠李戴/幻觉/复制粘贴」，还反过来
+    指控模型没解析当前题。note 必须明确封死这个推理：讲解针对上一题、与新题本就不同
+    主题；当前新题只原样呈现、本轮不该有解析。
+    """
+    from app.orchestration.orchestrator import _EXAM_REVIEW_NOTE
+    n = _EXAM_REVIEW_NOTE
+    assert "上一题" in n, "要点明讲解针对的是上一题"
+    assert "张冠李戴" in n, "要点名这个具体误判"
+    assert "原样呈现" in n, "要说清当前新题本轮只呈现、不解析"
+
+
 async def test_non_exam_round_review_has_no_exam_note():
     """反向：多步任务的终局 review 不该被塞考试说明，否则真正的内容遗漏会被放过。"""
     seen = {}
@@ -2291,3 +2311,80 @@ async def test_one_step_fallback_redo_keeps_tools_unlike_exam():
     assert events[-1].message.content == "第2版讲解"    # 交付重答那版
     # 徽章仍报简单直答（1 步回退）
     assert [r.detail["mode"] for r in _routes(events)] == ["simple"]
+
+
+# ---------- F-CHAT-1: 学习无关的复杂请求应婉拒，不进编排器拆解 ----------
+
+def _acoro(v):
+    async def _f(*a, **k):
+        return v
+    return _f
+
+
+async def test_off_topic_complex_request_is_declined_not_planned():
+    """明显无关(荐股)且被判复杂 → 直接婉拒，不调 Planner、不给工具。
+
+    修 F-CHAT-1：编排器路径会把无关请求拆成中性子任务(「搜索股票板块」)分发执行，
+    app_system_prompt 的学习边界只在单循环整体判断时生效、拦不住拆解后的子步。
+    """
+    planner = FakePlanner([_plan(_s("s1"))])
+    orch = _mk(planner, FakeCritic(), [])
+    orch._is_simple = _acoro(False)          # triage 判复杂
+    orch._is_off_topic = _acoro(True)        # 判为学习无关
+
+    captured = {}
+    async def _fake_simple(message, budget=None, *, context=None, registry=None,
+                           prefer_main=False, skill_hint=""):
+        captured["message"] = message
+        captured["no_tools"] = registry is not None and len(registry.tools()) == 0
+        from harness.events import TextDelta
+        yield TextDelta(text="我是学习助手，只能帮助学习相关的问题。")
+    orch._simple_answer = _fake_simple
+
+    evs = [e async for e in orch.run("帮我推荐几只能赚钱的股票")]
+    assert len(planner.seen_tools) == 0, "无关请求绝不能进 Planner 拆解"
+    assert captured.get("no_tools") is True, "婉拒不给工具，避免联网荐股/检索"
+    assert "无关" in captured.get("message", ""), "应注入婉拒指令"
+
+
+async def test_on_topic_complex_request_not_misjudged():
+    """别误伤：学习相关的复杂请求(off_topic=False)照常走编排器，行为不变。"""
+    planner = FakePlanner([_plan(_s("s1"))])
+    orch = _mk(planner, FakeCritic(reviews=(True,)), [])
+    orch._is_simple = _acoro(False)          # 复杂
+    orch._is_off_topic = _acoro(False)       # 相关
+    evs = [e async for e in orch.run("系统梳理一下 Java 类加载机制")]
+    assert len(planner.seen_tools) == 1, "学习相关的复杂请求仍应正常进 Planner"
+
+
+async def test_simple_request_skips_off_topic_check():
+    """判简单的请求不做无关判定(省调用、且简单直答由 app_system_prompt 兜)：
+    _is_off_topic 若被调用就抛错，用它证明没被调。"""
+    async def _boom(*a, **k):
+        raise AssertionError("简单请求不该触发 off_topic 判定")
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), FakeCritic(), [], triage_simple=True)
+    orch._is_off_topic = _boom
+    # triage_simple=True → _is_simple 返回 True → 走简单直答，不应碰 off_topic
+    evs = [e async for e in orch.run("你好呀")]
+    routes = [e for e in evs if isinstance(e, Progress) and e.scope == "route"]
+    assert routes and routes[0].detail.get("mode") == "simple"
+
+
+async def test_is_off_topic_parses_and_defaults_safe():
+    """_is_off_topic 解析：off_topic → True，其余 → False；异常一律 False(不误伤)。"""
+    orch = _mk(FakePlanner([]), FakeCritic(), [])
+
+    orch._fast_complete = _acoro("off_topic")
+    assert await orch._is_off_topic("推荐股票") is True
+
+    orch._fast_complete = _acoro("on_topic")
+    assert await orch._is_off_topic("讲讲多态") is False
+
+    # 判不出/脏输出 → 不判无关(宁可漏判不可误判)
+    orch._fast_complete = _acoro("不确定")
+    assert await orch._is_off_topic("模糊请求") is False
+
+    async def _raise(*a, **k):
+        raise RuntimeError("端点抖动")
+    orch._fast_complete = _raise
+    assert await orch._is_off_topic("任意") is False, "异常必须放过，绝不误伤"

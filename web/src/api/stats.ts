@@ -44,7 +44,7 @@ export interface ContextStat {
 export interface StatsOverview {
   range_days: number;
   learn: {
-    assets: { documents: number; memory: number; questions: number; wrong_answers: number };
+    assets: { documents: number; document_chunks: number; memory: number; questions: number; wrong_answers: number };
     conversations: number;
     messages: number;
     recent_downloads: RecentDownload[];

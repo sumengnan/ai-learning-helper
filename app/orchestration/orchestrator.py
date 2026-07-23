@@ -78,6 +78,24 @@ TRIAGE_SYSTEM = (
 # triage 认得的意图词；模型给了表外的词一律回退 chat（=项目原本的温度），不赌。
 _INTENT_WORDS = frozenset(INTENT_TEMPERATURES)
 
+# 学习相关性判定。只对「已判复杂、要进编排器拆解」的请求做——编排器会把请求拆成中性子任务
+# （「搜索股票板块」）分发执行，app_system_prompt 的「只帮学习」边界只在单循环整体判断时生效、
+# 拦不住拆解后的子步（F-CHAT-1：荐股请求被拆成 4 步联网搜索、真的推荐了个股）。
+# **极度保守，宁可漏判不可误判**：判错成 off_topic 会把正当的学习请求婉拒掉，比放过个别无关严重得多。
+OFF_TOPIC_SYSTEM = (
+    "判断用户本次请求是否**明显与学习无关、且属于本助手不应执行的类型**。"
+    "只有这几类实质请求才算无关(off_topic)：荐股/炒股/投资理财具体建议、购物/带货/商品推荐、"
+    "情感陪伴/心理疏导/算命、纯娱乐(推荐游戏影视、明星八卦、闲聊消遣)、违法违规内容。\n"
+    "**极度保守，拿不准一律判 on_topic**——判错会把正当学习请求拒之门外，代价远大于放过个别无关：\n"
+    "- 只要请求有任何学习/知识/技能/研究角度，一律 on_topic。例：「用 Python 分析股票数据」是学"
+    "编程、「解释什么是通货膨胀」是学经济、「写一首关于秋天的诗」是学文学写作、「翻译这段话」是"
+    "语言学习、「讲讲某历史事件」是学历史——全部 on_topic。\n"
+    "- 打招呼、致谢、对上文的追问、要求换个说法/再详细点，一律 on_topic。\n"
+    "- 只有「直接索取无关的具体结果」(告诉我买哪只股、推荐几款游戏、帮我挑件衣服、陪我聊聊天)"
+    "才算 off_topic；只要沾了「怎么学、原理是什么、帮我理解」就不是。\n"
+    "只回一个词：on_topic 或 off_topic。"
+)
+
 # 喂给 triage 的最近对话上限。够判断「是不是在延续某个任务」即可，不必给全文——
 # triage 每轮都跑，是最快那条路径上的固定开销。
 _TRIAGE_DIALOGUE_MAX = 800
@@ -119,7 +137,16 @@ _EXAM_REVIEW_NOTE = (
     "【本轮是考试进行中的一轮，请按考试规则审查】"
     "考试由服务端托管：题目一次只出一道，判分与游标推进都由服务端完成，"
     "模型本轮只负责「讲解上一题的对错 + 呈现当前这一道题」。\n"
-    "因此**只出现一道题是正确的**，不要因为「用户说要考 5 道题、这里只有第 1 题」"
+    # 用户实际遇到的第二种误判：把上一题的讲解误当成当前题的解析。前一题(如 CompletableFuture)
+    # 与当前题(如类加载)是完全不同的主题，校验器按「解析应配题」的默认逻辑一对就判「张冠李戴/
+    # 幻觉/复制粘贴」，还反过来指控模型没解析当前题。这两句专门封死这条推理。
+    "**关键——别把上一题的讲解误当成当前题的解析**："
+    "回复里的『讲解』针对的是**上一题**，其知识点与当前呈现的新题本就属于不同主题、互不相关，"
+    "这是正常的；**绝不能**因为讲解内容与当前这道新题对不上，就判成张冠李戴、幻觉、复制粘贴"
+    "或解析错误——那恰恰是把上一题的讲解错认成了本题的解析。\n"
+    "当前这道新题**只需原样呈现题干与选项、等用户作答**，本轮不该也不会给它解析；"
+    "不要因为『没解析当前题、没指出当前题的答案』就判成内容缺失或答非所问。\n"
+    "因此**只出现一道题是正确的**，也不要因为「用户说要考 5 道题、这里只有第 1 题」"
     "就判成内容遗漏——其余题目会在后续轮次逐一出现，不该也不能在本轮一次性给出。\n"
     "本轮该看的是：判分讲解有没有说反、该告知的「已存入错题集」有没有漏、"
     "呈现的题目是否与服务端给定的一致（不得篡改题干或选项）。\n"
@@ -285,6 +312,35 @@ class Orchestrator:
             if word and word[0] in _INTENT_WORDS:
                 intent = word[0]
         return simple, intent
+
+    async def _is_off_topic(self, message: str, recent_dialogue: str = "") -> bool:
+        """本轮请求是否明显与学习无关、应婉拒。仅对「已判复杂」的请求调用（见 run 分流）。
+
+        极度保守：**任何异常、任何非 off_topic 的回答都返回 False**（放过、按正常流程走）——
+        误判成 off_topic 会把正当学习请求婉拒掉，是最不该犯的错。
+        """
+        user = message
+        if recent_dialogue:
+            tail = recent_dialogue[-_TRIAGE_DIALOGUE_MAX:]
+            user = f"【最近对话】\n{tail}\n\n【本次消息】\n{message}"
+        try:
+            raw = await self._fast_complete(OFF_TOPIC_SYSTEM, user)
+            return raw.strip().lower().startswith("off_topic")
+        except Exception:
+            return False   # 判不了就放过，绝不误伤
+
+    async def _decline_off_topic(self, message: str, budget=None, *, context=None):
+        """婉拒学习无关的请求：走单循环，但**空工具表**（不联网/不检索/不拆解）+ 强婉拒指令，
+        让模型礼貌说明只帮学习、并邀请学习相关的需求。context 仍传（带 app_system_prompt 与
+        会话历史），使婉拒能自然承接上下文。"""
+        decline = (
+            f"{message}\n\n"
+            "[系统提示] 上面这条请求与学习无关，不在本助手的服务范围内。请**礼貌、简短**地说明"
+            "你是学习助手、只能帮助学习相关的问题，并邀请用户提出学习相关的需求。"
+            "不要执行该请求，不要给出任何相关的具体建议或结果，也不要调用任何工具。")
+        async for ev in self._simple_answer(decline, budget, context=context,
+                                            registry=ToolRegistry(), prefer_main=False):
+            yield ev
 
     async def _simple_answer(self, message: str, budget=None, *, context=None, registry=None,
                              prefer_main: bool = False, skill_hint: str = ""):
@@ -545,6 +601,18 @@ class Orchestrator:
                 async for ev in self._simple_deliver(
                         user_message, budget, context=context, registry=registry,
                         skill_hint=skill_hint, verify=verify, force_simple=force_simple):
+                    yield ev
+                return
+
+            # 走到这里 = 要进编排器拆解（非考试、非寒暄、非技能，且 triage 判复杂）。
+            # 拆解前先做一道保守的学习相关性把关：编排器会把请求拆成中性子任务分发执行，
+            # app_system_prompt 的学习边界拦不住拆解后的子步（F-CHAT-1）。仅在此处判，
+            # 不碰简单/寒暄/考试/技能路径——既省调用、又不误伤那些本就有明确学习语境的路径。
+            # off_topic → 走单循环空工具表婉拒；判不出/异常一律放过（_is_off_topic 内部兜底）。
+            if await self._is_off_topic(user_message, recent_dialogue):
+                yield Progress(scope="route", text="简单直答", key="route",
+                               detail={"mode": "simple"}, status="ok")
+                async for ev in self._decline_off_topic(user_message, budget, context=context):
                     yield ev
                 return
 

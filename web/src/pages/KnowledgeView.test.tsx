@@ -127,4 +127,18 @@ describe("KnowledgeView", () => {
     expect(api.documents.search).toHaveBeenCalledWith("光合作用");
   });
 
+
+  it("搜索转圈不影响导入按钮(F5:两者 busy 独立)", async () => {
+    (api.documents.list as any).mockResolvedValue({ items: [], total: 0 });
+    // search 永不 resolve → 停在搜索进行中
+    (api.documents.search as any).mockReturnValue(new Promise(() => {}));
+    renderView();
+    const box = await screen.findByPlaceholderText("搜索文档…");
+    fireEvent.change(box, { target: { value: "泛型" } });
+    await waitFor(() => expect(api.documents.search).toHaveBeenCalled(), SEARCH_WAIT);
+    // 搜索进行中:导入按钮不该被这个状态带着一起转圈/禁用
+    expect(screen.getByText("导入文档")).toBeTruthy();
+    expect(screen.queryByText("导入中…")).toBeNull();
+  });
+
 });
