@@ -27,6 +27,15 @@ ARG APP_VERSION
 ARG APP_GIT_SHA
 ARG APP_BUILD_TIME
 
+# 时区：镜像默认 UTC，日志与入库时间会比国内早 8 小时。装 tzdata 并把 /etc/localtime
+# 指到东八区（slim 基础镜像不带 tzdata，只设 TZ 环境变量是不生效的）。
+ENV TZ=Asia/Shanghai
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends tzdata \
+ && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+ && echo $TZ > /etc/timezone \
+ && rm -rf /var/lib/apt/lists/*
+
 # uv：按 uv.lock 复现锁定依赖
 RUN pip install --no-cache-dir uv
 
@@ -46,6 +55,7 @@ COPY mcp ./mcp
 COPY --from=web /web/dist ./web/dist
 
 ENV PATH="/app/.venv/bin:$PATH" \
+    TZ=Asia/Shanghai \
     PYTHONPATH="/app/src:/app" \
     PYTHONUNBUFFERED=1 \
     HARNESS_APP_HOST=0.0.0.0 \

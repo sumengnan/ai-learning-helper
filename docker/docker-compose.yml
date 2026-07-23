@@ -20,6 +20,9 @@ services:
     env_file:
       - ../.env
     environment:
+      # 时区东八区：镜像里已装 tzdata 并链好 /etc/localtime，这里再显式声明一次，
+      # 便于服务器上临时改（日志时间、入库的本地时间都跟着走）
+      TZ: Asia/Shanghai
       # 容器内对外监听
       HARNESS_APP_HOST: "0.0.0.0"
       HARNESS_APP_PORT: "8000"
