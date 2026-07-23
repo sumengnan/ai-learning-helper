@@ -221,6 +221,12 @@ docker compose up -d --pull always --no-build   # 手动重新拉起
 ```
 
 - 容器起不来：先看 `.env` 是否存在、`HARNESS_API_KEY` 是否填了。
+- 日志时间：容器时区固定东八区（Dockerfile 装 tzdata + 链 `/etc/localtime`，compose 再显式设
+  `TZ: Asia/Shanghai`）。要换时区改这两处的 `TZ` 即可。数据库里的时间戳一律存带时区的 UTC，
+  由前端换算，不受此设置影响。
+- 日志里认人：每条日志前缀带 `[user=<账号>]`（未登录为 `user=匿名`），另有每请求一行
+  `方法 路径 -> 状态码 耗时`。嫌吵可在 `.env` 里设 `HARNESS_ACCESS_LOG=0` 只关访问行
+  （账号前缀仍在）；整体级别用 `HARNESS_LOG_LEVEL` 控制。
 - 镜像仓库 `sumengnan/ai-learning-helper` 目前**公开**，服务器免登录 pull。若改为私有，需在服务器上
   先 `docker login`（或在 workflow 拉取步骤前加 `docker login`）。
 - workflow 用密码 SSH 且跳过 host key 校验（`StrictHostKeyChecking=no`）。要更强的安全性，改用 SSH

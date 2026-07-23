@@ -40,6 +40,7 @@ from .profile import ProfileStore
 from .knowledge import KnowledgeService
 from .logging_setup import configure_logging
 from .question_import import QuestionImporter
+from .request_log import UserLogContextMiddleware
 from .questions import QuestionStore
 from .quiz_service import QuizService
 from .wrong_answers import WrongAnswerStore
@@ -125,6 +126,12 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
         CORSMiddleware, allow_origins=config.cors_origins,
         allow_methods=["*"], allow_headers=["*"],
         expose_headers=["X-Refresh-Token", "X-Run-Id"])
+    # 最外层中间件：把登录账号写进日志上下文，本次请求（含派生的后台生成任务）每条日志
+    # 都带 `[user=xxx]`，控制台一眼看出是谁在操作。访问日志可用 HARNESS_ACCESS_LOG=0 关掉。
+    app.add_middleware(
+        UserLogContextMiddleware, auth=auth,
+        access_log=os.environ.get("HARNESS_ACCESS_LOG", "1").lower()
+        not in ("0", "false", "no"))
     # 回答交付前校验门（开关开时装配；测试可注入 verifier）：用单发 completer 做
     # grounding/judge，代码块在会话沙箱实跑。
     from .completion import build_check_completer, build_judge_completer

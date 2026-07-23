@@ -32,6 +32,23 @@ def test_correlation_skips_empty_fields():
     assert rec.corr == "run_id=r1"
 
 
+def test_context_merges_outer_fields():
+    """内层只设 conv/run 时，外层（中间件）设的 user 要保留下来。"""
+    rec = _rec()
+    with set_log_context(user="alice"):
+        with set_log_context(conv_id="c1", run_id="r1"):
+            _CorrelationFilter().filter(rec)
+    assert rec.corr == "user=alice conv_id=c1 run_id=r1"
+
+
+def test_context_same_key_overrides_in_place():
+    rec = _rec()
+    with set_log_context(user="alice", conv_id="c1"):
+        with set_log_context(user="bob"):
+            _CorrelationFilter().filter(rec)
+    assert rec.corr == "user=bob conv_id=c1"
+
+
 def test_context_restored_after_with():
     rec = _rec()
     with set_log_context(run_id="r1"):
