@@ -17,7 +17,7 @@ vi.mock("../api/profile", () => ({
 const OV: StatsOverview = {
   range_days: 14,
   learn: {
-    assets: { documents: 4, memory: 52, questions: 0, wrong_answers: 0 },
+    assets: { documents: 4, document_chunks: 40, memory: 52, questions: 0, wrong_answers: 0 },
     conversations: 7, messages: 44,
     recent_downloads: [{ id: "dl1", filename: "复习提纲.md", content_type: "text/markdown", size: 128, created_at: "2026-07-11T07:00:00+00:00" }],
     last_conversation: { id: "c1", title: "二叉树遍历", updated_at: "2026-07-11T10:00:00+00:00", message_count: 12 },
@@ -79,6 +79,9 @@ describe("HomeView", () => {
     expect(screen.getByText("52")).toBeTruthy();          // AI 记的偏好
     expect(screen.getByText("联网查资料")).toBeTruthy();   // 能力（产品话术）
     expect(screen.getByText("114.0 万")).toBeTruthy();     // token 格式化
+    // F2:知识库卡片大数字=片段数(40),不是文档数(4);副标题标注文档数防误会
+    expect(screen.getByText("40")).toBeTruthy();
+    expect(screen.getByText(/4 篇文档/)).toBeTruthy();
     // 工程黑话不出现在学习主场（默认落在「概览」视图，运维指标在「AI 运行统计」切换项下）
     expect(screen.queryByText("P95 延迟")).toBeNull();
     expect(screen.queryByRole("button", { name: "工程台" })).toBeNull();  // 切换页签已移除

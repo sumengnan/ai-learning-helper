@@ -14,7 +14,7 @@ vi.mock("../api/profile", () => ({
 const OV: StatsOverview = {
   range_days: 14,
   learn: {
-    assets: { documents: 4, memory: 52, questions: 0, wrong_answers: 0 },
+    assets: { documents: 4, document_chunks: 4, memory: 52, questions: 0, wrong_answers: 0 },
     conversations: 7, messages: 44, recent_downloads: [], last_conversation: null,
     abilities: [], effort: { runs: 94, total_tokens: 1140386, avg_steps: 3, max_steps: 12, success_rate: 0.93 },
     activity: Array.from({ length: 14 }, (_, i) => ({ date: `2026-07-${i + 1}`, runs: i, tokens: i * 100 })),
