@@ -323,6 +323,8 @@ def build_harness(config) -> Harness:
         fast_client=_exec_client, fast_model=_exec_model,
         # 简单直答的上下文按快速模型口径再收一道（0=不裁）
         fast_max_prompt_tokens=config.context_max_prompt_tokens_fast,
+        # 简单直答单循环步数上限（可配；防失控后备闸）
+        simple_max_steps=config.orchestrator_simple_max_steps,
         # 每次 run 新建独立预算封顶时长/token（超限带现有成果收尾）；单例并发安全
         budget_factory=lambda: BudgetTracker(config.max_tokens_budget, config.max_wall_seconds),
         max_step_retry=config.orchestrator_max_step_retry,

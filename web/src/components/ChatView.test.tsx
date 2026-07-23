@@ -154,6 +154,16 @@ describe("ChatView", () => {
     expect(screen.queryByText("你你好好")).toBeNull();
   });
 
+  it("AI 回复完成后自动聚焦输入框（免得用户手动点击）", async () => {
+    render(<ChatView conversationId="c1" initial={[]} />);
+    const box = () => screen.getByPlaceholderText("问点什么…") as HTMLTextAreaElement;
+    fireEvent.change(box(), { target: { value: "hi" } });
+    fireEvent.click(screen.getByText("发送"));
+    await waitFor(() => expect(screen.getByText("你好")).toBeTruthy());
+    // 回复完成（busy: true→false）→ 输入框自动获得焦点
+    await waitFor(() => expect(document.activeElement).toBe(box()));
+  });
+
   it("AI 回复中封住输入/开关/附件，只留停止按钮", async () => {
     // streamChat 挂住（回一个 TextDelta 后不结束）→ busy 保持 true
     vi.mocked(streamChat).mockImplementationOnce(
