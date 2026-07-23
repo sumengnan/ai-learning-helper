@@ -72,12 +72,17 @@ def sandbox_guide(config) -> str:
         ver = f"（Java 另有 {', '.join(jvers)}，可传 version 指定）" if jvers else ""
         lines.append(
             f"run_python / run_node / run_java 各在对应语言子沙箱执行（{imgs}）{ver}，{net(sub_online)}。")
-    # 能否自行安装依赖，严格按各自网络如实说——防止在禁网沙箱里执意联网装包/选错命令
+    # 装依赖：先讲权限硬约束（防止照着旧文案去 apt 白撞 Permission denied），再按网络讲可行路径
     lines.append(
-        "需要用到额外的库或命令时：在【可联网】的环境里可以自行安装（Python 用 pip install、"
-        "Node 用 npm i、系统命令按镜像发行版用 dnf/apt 等），装好后再用；在【禁止联网】的环境里"
-        "无法联网下载，只能使用镜像已自带的标准库与预装命令，不要执意 pip/npm/apt 联网安装（必然失败），"
-        "改用镜像已有的等价命令，或改用可联网的那个工具（如基础容器里的 run_shell）来完成需要联网的步骤。")
+        "关于装依赖：沙箱是加固环境——**非 root 用户、禁止提权、系统目录不可写**。因此"
+        "apt/dnf/apk 装系统包、以及 pip 全局装、npm -g 全局装一律会 Permission denied，不要尝试"
+        "（即便【可联网】也一样，这是权限问题、不是网络问题）。"
+        f"确需额外的语言包、且所在环境【可联网】时，只能装到可写的工作目录 {ws} 内："
+        f"Python 用 `pip install --no-cache-dir --target=<{ws} 下的子目录> 包名`，再把该目录加入 sys.path；"
+        f"Node 在 {ws} 里 `npm i 包名` 装到本地 node_modules。"
+        "【禁止联网】的环境连下载都做不到，只能用镜像已自带的标准库与预装命令，"
+        "或改用可联网的那个工具（如基础容器里的 run_shell）来完成需要联网的步骤。"
+        "任何情况下都优先使用镜像预装的库与命令；装包失败就改用预装的等价物，别反复重试。")
     return guide + "".join(lines)
 
 # 当前请求所属会话；由 chat 处理器在 pump() 内 set，工具执行都在此上下文内。
