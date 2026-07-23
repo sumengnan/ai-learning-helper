@@ -1,6 +1,7 @@
 import json
 from harness.events import Progress, RunError, RunFinished, RunStarted, TextDelta
 from harness.tools.base import ToolRegistry
+import app.orchestration.orchestrator as om
 from app.orchestration.orchestrator import Orchestrator
 from app.orchestration.plan import Artifact, Plan, PlanStep, Verdict, Review
 from app.orchestration.planner import PlannerError
@@ -28,10 +29,12 @@ class FakeCritic:
         self._validate_ok = validate_ok
         self._validate_impossible = validate_impossible
         self._reviews = list(reviews); self._ri = 0
+        self.last_dialogue = None   # review 收到的上文；未被调用时保持 None
     async def validate(self, step, artifact):
         return Verdict(ok=self._validate_ok, reason="",
                        impossible=(not self._validate_ok) and self._validate_impossible)
-    async def review(self, goal, plan, artifacts):
+    async def review(self, goal, plan, artifacts, recent_dialogue=""):
+        self.last_dialogue = recent_dialogue   # 供「上文有没有喂给裁判」的用例断言
         r = self._reviews[min(self._ri, len(self._reviews) - 1)]; self._ri += 1
         return Review(accept=r, feedback="补一下X")
 
@@ -92,6 +95,11 @@ def _mk(planner, critic, order, triage_simple=False, synth="最终答复", max_r
 
 async def _run(orch, msg="做点复杂的事"):
     return [ev async for ev in orch.run(msg)]
+
+
+async def _run_kw(orch, msg, **kw):
+    """带额外 run() 入参跑一轮（如 recent_dialogue）。"""
+    return [ev async for ev in orch.run(msg, **kw)]
 
 
 def _plan(*steps):
@@ -162,7 +170,7 @@ async def test_failed_step_blocking_dependent_degrades_gracefully():
     class PerStepCritic:
         async def validate(self, step, artifact):
             return Verdict(ok=(step.id != "s1"), reason="s1 bad")
-        async def review(self, goal, plan, artifacts):
+        async def review(self, goal, plan, artifacts, recent_dialogue=""):
             return Review(accept=True, feedback="")
     got = {}
     async def capture_synth(goal, artifacts, recent_dialogue=""):
@@ -232,7 +240,7 @@ class _CountingCritic:
     def __init__(self): self.reviews = 0
     async def validate(self, step, artifact):
         return Verdict(ok=True, reason="")
-    async def review(self, goal, plan, artifacts):
+    async def review(self, goal, plan, artifacts, recent_dialogue=""):
         self.reviews += 1
         return Review(accept=True, feedback="")
 
@@ -300,7 +308,7 @@ async def test_run_aggregates_all_usage_incl_planner_critic():
     class UCritic:
         async def validate(self, step, art):
             record_usage(Usage(0, 0, 10), 0.001); return Verdict(ok=True, reason="")
-        async def review(self, goal, plan, arts):
+        async def review(self, goal, plan, arts, recent_dialogue=""):
             record_usage(Usage(0, 0, 20), 0.002); return Review(accept=True, feedback="")
 
     class UPlanner:
@@ -784,7 +792,7 @@ async def test_run_emits_per_model_usage():
     class MCritic:
         async def validate(self, step, art):
             record_usage(Usage(0, 0, 10), 0.001, "fast-model"); return Verdict(ok=True, reason="")
-        async def review(self, goal, plan, arts):
+        async def review(self, goal, plan, arts, recent_dialogue=""):
             record_usage(Usage(0, 0, 20), 0.002, "main-model"); return Review(accept=True, feedback="")
 
     class MPlanner:
@@ -1445,7 +1453,7 @@ async def test_exam_review_gets_one_question_at_a_time_rule():
     seen = {}
 
     class _CapturingCritic:
-        async def review(self, goal, plan, artifacts):
+        async def review(self, goal, plan, artifacts, recent_dialogue=""):
             seen["goal"] = goal
             from app.orchestration.plan import Review
             return Review(accept=True, feedback="")
@@ -1500,7 +1508,7 @@ async def test_non_exam_round_review_has_no_exam_note():
     seen = {}
 
     class _CapturingCritic:
-        async def review(self, goal, plan, artifacts):
+        async def review(self, goal, plan, artifacts, recent_dialogue=""):
             seen["goal"] = goal
             from app.orchestration.plan import Review
             return Review(accept=True, feedback="")
@@ -1535,9 +1543,10 @@ async def test_simple_path_verifies_when_switch_on():
     seen = {}
 
     async def _verified(self, message, budget=None, *, context=None, registry=None,
-                        skill_hint="", in_exam=True):
+                        skill_hint="", in_exam=True, recent_dialogue=""):
         seen["called"] = True
         seen["in_exam"] = in_exam
+        seen["recent_dialogue"] = recent_dialogue
         from harness.events import RunFinished
         from harness.types import Message, Role
         yield RunFinished(message=Message(role=Role.ASSISTANT, content="答"))
@@ -1646,7 +1655,7 @@ class _SeqCritic:
         ok = self._v[min(self._i, len(self._v) - 1)]; self._i += 1
         return Verdict(ok=ok, reason="不够好")
 
-    async def review(self, goal, plan, artifacts):
+    async def review(self, goal, plan, artifacts, recent_dialogue=""):
         return Review(accept=True, feedback="")
 
 
@@ -2388,3 +2397,55 @@ async def test_is_off_topic_parses_and_defaults_safe():
         raise RuntimeError("端点抖动")
     orch._fast_complete = _raise
     assert await orch._is_off_topic("任意") is False, "异常必须放过，绝不误伤"
+
+
+# ── 回归：终局裁判必须看得到最近对话 ────────────────────────────────────────────
+# 真实误判：用户与 AI 聊了半天 LlamaIndex，接着说「帮我写个 hello world 看一下」。
+# AI 给的 LlamaIndex 版 hello world 是对的，裁判却只看见孤立的那一句，判「用了复杂的
+# RAG 框架、严重答非所问、未能达成基本目标」，把正确答复打回重答。
+_LLAMA_DIALOGUE = "用户：LlamaIndex 怎么建索引？\nAI：先 SimpleDirectoryReader 读文档，再 VectorStoreIndex…"
+
+
+async def _drafting_simple(msg, budget=None, *, context=None, registry=None,
+                           prefer_main=False, skill_hint=""):
+    """出一份草稿的简单直答：空产出会被直接收尾、根本不进校验，测不到裁判。"""
+    yield TextDelta(text="from llama_index.core import VectorStoreIndex ...")
+
+
+async def test_simple_verified_feeds_recent_dialogue_to_critic():
+    """简单直答（用户实际踩到的那条路）：上文必须喂给终局裁判。"""
+    critic = FakeCritic()
+    orch = _mk(FakePlanner([_plan(_s("s1"))]), critic, [], triage_simple=True)
+    orch._simple_answer = _drafting_simple
+    await _run_kw(orch, "帮我写个 hello world 看一下", recent_dialogue=_LLAMA_DIALOGUE)
+    assert critic.last_dialogue == _LLAMA_DIALOGUE, "简单直答的终局校验没带上文 → 承接前文的请求会被判答非所问"
+
+
+async def test_multi_step_review_feeds_recent_dialogue_to_critic():
+    """多步路径的终局 review 同样要带上文。"""
+    critic = FakeCritic()
+    orch = _mk(FakePlanner([_plan(_s("s1"), _s("s2"))]), critic, [])
+    await _run_kw(orch, "把刚才那套流程整理成文档", recent_dialogue=_LLAMA_DIALOGUE)
+    assert critic.last_dialogue == _LLAMA_DIALOGUE
+
+
+async def test_review_prompt_carries_dialogue_and_anti_misjudge_rule():
+    """裁判的 prompt 里既要有上文正文，也要有「别因脱离上文显得跑题就判不过」这条。"""
+    from app.orchestration.critic import REVIEW_SYSTEM, _review_user
+    from app.orchestration.plan import Artifact
+
+    plan, arts = om._one_step_plan("帮我写个 hello world 看一下", "from llama_index...")
+    user = _review_user("帮我写个 hello world 看一下", plan, arts, _LLAMA_DIALOGUE)
+    assert "LlamaIndex" in user and "最近几轮对话" in user
+    assert "答非所问" in REVIEW_SYSTEM and "延续上文" in REVIEW_SYSTEM
+
+
+def test_review_dialogue_is_capped_keeping_the_tail():
+    """超长对话保尾——越近的轮次越能说明本轮在延续什么。"""
+    from app.orchestration.critic import _REVIEW_DIALOGUE_MAX, _review_user
+
+    plan, arts = om._one_step_plan("g", "a")
+    long_dialogue = "早期无关内容" * 500 + "【最后一轮】说的是 LlamaIndex"
+    user = _review_user("g", plan, arts, long_dialogue)
+    assert "【最后一轮】说的是 LlamaIndex" in user
+    assert len(user) < len(long_dialogue)
