@@ -1468,6 +1468,21 @@ async def test_exam_review_still_states_what_to_actually_check():
     assert "篡改" in _EXAM_REVIEW_NOTE
 
 
+async def test_exam_review_forbids_mismatched_analysis_misjudgment():
+    """回归：用户实际遇到的第二种误判——
+
+    一轮回复=「讲解上一题(CompletableFuture) + 呈现新题(类加载机制)」是标准结构，
+    但校验器把上一题的讲解误当成新题的解析，判「张冠李戴/幻觉/复制粘贴」，还反过来
+    指控模型没解析当前题。note 必须明确封死这个推理：讲解针对上一题、与新题本就不同
+    主题；当前新题只原样呈现、本轮不该有解析。
+    """
+    from app.orchestration.orchestrator import _EXAM_REVIEW_NOTE
+    n = _EXAM_REVIEW_NOTE
+    assert "上一题" in n, "要点明讲解针对的是上一题"
+    assert "张冠李戴" in n, "要点名这个具体误判"
+    assert "原样呈现" in n, "要说清当前新题本轮只呈现、不解析"
+
+
 async def test_non_exam_round_review_has_no_exam_note():
     """反向：多步任务的终局 review 不该被塞考试说明，否则真正的内容遗漏会被放过。"""
     seen = {}

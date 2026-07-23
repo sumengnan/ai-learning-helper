@@ -50,7 +50,7 @@ def _seed_traj(conn):
 def _app_conn():
     conn = sqlite3.connect(":memory:")
     conn.executescript(
-        "CREATE TABLE documents(id TEXT, user_id TEXT);"
+        "CREATE TABLE documents(id TEXT, user_id TEXT, num_chunks INTEGER);"
         "CREATE TABLE questions(id TEXT, user_id TEXT);"
         "CREATE TABLE wrong_answers(id TEXT, user_id TEXT);"
         "CREATE TABLE conversations(id TEXT, user_id TEXT, title TEXT, created_at TEXT);"
@@ -58,7 +58,7 @@ def _app_conn():
         "CREATE TABLE conversation_runs(conv_id TEXT, run_id TEXT, created_at TEXT);"
         "CREATE TABLE downloads(id TEXT, user_id TEXT, filename TEXT, size INTEGER, "
         "content_type TEXT, created_at TEXT, seq INTEGER);")
-    conn.executemany("INSERT INTO documents VALUES (?,?)", [("d1", "u"), ("d2", "u")])
+    conn.executemany("INSERT INTO documents VALUES (?,?,?)", [("d1", "u", 10), ("d2", "u", 5)])
     conn.execute("INSERT INTO conversations VALUES ('cv1','u','二叉树','2026-07-10T09:00:00+00:00')")
     conn.executemany("INSERT INTO conversation_messages(conv_id, seq, created_at) VALUES (?,?,?)",
                      [("cv1", 0, "2026-07-11T08:00:00+00:00"), ("cv1", 1, "2026-07-11T08:05:00+00:00")])
@@ -174,7 +174,7 @@ def test_ops_steps_histogram():
 
 def test_learn_assets_and_abilities():
     learn = _svc().overview("u")["learn"]
-    assert learn["assets"] == {"documents": 2, "memory": 3, "questions": 0, "wrong_answers": 0}
+    assert learn["assets"] == {"documents": 2, "document_chunks": 15, "memory": 3, "questions": 0, "wrong_answers": 0}
     assert learn["conversations"] == 1 and learn["messages"] == 2
     abilities = {a["label"]: a["count"] for a in learn["abilities"]}
     assert abilities["联网查资料"] == 1 and abilities["运行代码"] == 1
@@ -408,7 +408,7 @@ def _quality_app_conn():
     """带 progress 列的 app 库（_app_conn 那份刻意不带，用于验证缺列时的优雅降级）。"""
     conn = sqlite3.connect(":memory:")
     conn.executescript(
-        "CREATE TABLE documents(id TEXT, user_id TEXT);"
+        "CREATE TABLE documents(id TEXT, user_id TEXT, num_chunks INTEGER);"
         "CREATE TABLE questions(id TEXT, user_id TEXT);"
         "CREATE TABLE wrong_answers(id TEXT, user_id TEXT);"
         "CREATE TABLE conversations(id TEXT, user_id TEXT, title TEXT, created_at TEXT);"

@@ -54,7 +54,10 @@ export function OverviewTab({ data, days }: { data: StatsOverview; days: number 
   const abilityMax = Math.max(1, ...learn.abilities.map((a) => a.count));
 
   const assetCards: { icon: string; lbl: string; v: number | string; sub: string; hue: Hue; act?: boolean; emphasizeValue?: boolean; onClick: () => void }[] = [
-    { icon: "📚", lbl: "知识库", v: learn.assets.documents, sub: "去查看 →", hue: "info", onClick: () => nav("/knowledge") },
+    // 大数字用片段数(与知识库页「共 N 篇文档片段」同口径),副标题标注文档数——
+    // 否则「知识库 324」易被误读成 324 个文档
+    { icon: "📚", lbl: "知识库", v: learn.assets.document_chunks,
+      sub: `${learn.assets.documents} 篇文档 · 去查看 →`, hue: "info", onClick: () => nav("/knowledge") },
     { icon: "✏️", lbl: "题库", v: learn.assets.questions, sub: "去查看 →", hue: "primary", onClick: () => nav("/questions") },
     { icon: "❌", lbl: "错题集", v: learn.assets.wrong_answers, sub: "去查看 →", hue: "warning", onClick: () => nav("/wrong") },
     { icon: "🧠", lbl: "AI 记的偏好", v: memoryCount, sub: "点击查看它记住了什么 →", hue: "secondary", onClick: () => setMemoryOpen(true) },

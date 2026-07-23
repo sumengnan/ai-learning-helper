@@ -38,7 +38,9 @@ export function KnowledgeView() {
   const [category, setCategory] = useState("");                    // 类型筛选（空=全部）
   const [results, setResults] = useState<Fragment[] | null>(null); // 非 null = 搜索态
   const [page, setPage] = useState(1);
-  const [busy, setBusy] = useState(false);
+  // 搜索与导入各自独立的忙碌态:否则搜索转圈会带着导入按钮一起转、反之亦然
+  const [searchBusy, setSearchBusy] = useState(false);
+  const [uploadBusy, setUploadBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -60,11 +62,11 @@ export function KnowledgeView() {
       setPage(1);
       setError(null);
       if (q) {
-        setBusy(true);
+        setSearchBusy(true);
         api.documents.search(q)
           .then((r) => setResults(r as Fragment[]))
           .catch((e: any) => { setError(String(e?.message || e)); setResults([]); })
-          .finally(() => setBusy(false));
+          .finally(() => setSearchBusy(false));
       } else {
         setResults(null);
       }
@@ -78,7 +80,7 @@ export function KnowledgeView() {
   }, [page, searching, category, loadList]);
 
   async function upload(file: File) {
-    setBusy(true); setError(null); setNotice(null);
+    setUploadBusy(true); setError(null); setNotice(null);
     try {
       const r = await api.documents.upload(file);
       // 内容与已有文档完全相同 → 后端不会重复入库，如实说明，别让用户以为又存了一份
@@ -88,7 +90,7 @@ export function KnowledgeView() {
       setQuery(""); setResults(null);
       if (page === 1) await loadList(1, category); else setPage(1);
     } catch (e: any) { setError(`导入失败：${String(e?.message || e)}`); }
-    finally { setBusy(false); if (fileRef.current) fileRef.current.value = ""; }
+    finally { setUploadBusy(false); if (fileRef.current) fileRef.current.value = ""; }
   }
 
   async function remove(id: string) {
@@ -119,9 +121,9 @@ export function KnowledgeView() {
           <Typography variant="h5" sx={{ fontWeight: 700 }}>知识库</Typography>
           <Typography color="text.secondary" variant="body2">共 {total} 篇文档片段</Typography>
         </Box>
-        <Button component="label" variant="contained" disabled={busy}
-          startIcon={busy ? <CircularProgress size={16} color="inherit" /> : <UploadFileIcon />}>
-          {busy ? "导入中…" : "导入文档"}
+        <Button component="label" variant="contained" disabled={uploadBusy}
+          startIcon={uploadBusy ? <CircularProgress size={16} color="inherit" /> : <UploadFileIcon />}>
+          {uploadBusy ? "导入中…" : "导入文档"}
           <input
             ref={fileRef} hidden type="file" accept=".pdf,.docx,.txt,.md"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); }}
@@ -139,7 +141,7 @@ export function KnowledgeView() {
               startAdornment: (
                 <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>
               ),
-              endAdornment: busy ? <CircularProgress size={18} /> : undefined,
+              endAdornment: searchBusy ? <CircularProgress size={18} /> : undefined,
             },
           }}
         />
