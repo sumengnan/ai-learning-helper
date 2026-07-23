@@ -154,10 +154,19 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
   const fileRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
   const flashTimer = useRef<number | undefined>(undefined);
+
+  // AI 回复结束（busy 由 true→false）后自动把焦点移回输入框，省得用户手动点击再输入。
+  // 只在这一次跳变时聚焦：不在挂载时抢焦点，也不打断用户在别处的操作。
+  const prevBusyRef = useRef(busy);
+  useEffect(() => {
+    if (prevBusyRef.current && !busy) inputRef.current?.focus();
+    prevBusyRef.current = busy;
+  }, [busy]);
 
   // 点击正文 [n] 角标：滚动到对应来源并短暂高亮
   const scrollToCite = (msgKey: string, n: number) => {
@@ -870,7 +879,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
             </span>
           </Tooltip>
           <TextField
-            fullWidth size="small" value={input}
+            fullWidth size="small" value={input} inputRef={inputRef}
             multiline minRows={1} maxRows={6}
             disabled={busy}   // AI 回复中封住输入框
             onChange={(e) => setInput(e.target.value)}
