@@ -743,7 +743,8 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                   || m.quality);
                 const hasStatus = live || m.status === "done" || m.status === "error"
                   || m.status === "stopped" || m.status === "interrupted";
-                const hasElapsed = (live && m.startedAt != null) || (showTools && m.elapsedMs != null);
+                // 耗时始终显示（不随「展示工具调用和 Token」开关消失）；仅 tokens 受开关控制
+                const hasElapsed = (live && m.startedAt != null) || m.elapsedMs != null;
                 const hasTokens = showTools && !!m.usage;
                 const showMetaRow = hasStatus || hasElapsed || hasTokens;
                 if (!showMetaRow && !hasSources && !hasVerify) return null;
