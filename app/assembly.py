@@ -1,6 +1,7 @@
 # app/assembly.py
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from harness.llm.openai_compat import OpenAICompatibleClient
@@ -17,6 +18,9 @@ from .tools.validating import ValidatingTool, relevance_check, web_content_check
 
 
 # 执行子步的隐藏工具视图 HidingRegistry 已移至 app.orchestration.executor（供编排器与装配层共用）。
+
+
+log = logging.getLogger("app.assembly")
 
 
 @dataclass
@@ -181,7 +185,12 @@ def build_harness(config) -> Harness:
         _reg(RememberTool(mem))
         _reg(RecallEpisodesTool(EpisodicMemory(mem), default_k=config.episode_recall_k))
 
-    if config.enable_browser:
+    # 浏览器统一在沙箱容器内跑（宿主不再内置 Playwright）：没配沙箱就没法抓，禁用并告警，
+    # 而不是回退本地——本地路径已随 playwright 一起移除。
+    if config.enable_browser and sandbox is None:
+        log.warning("enable_browser 需要沙箱：浏览器在沙箱容器内跑（开 enable_sandbox 并配"
+                    "浏览器专用镜像），未配沙箱，浏览器抓取已禁用。")
+    if config.enable_browser and sandbox is not None:
         from harness.browser.factory import build_browser
         from harness.tools.builtins.browse_tool import BrowseTool
         # 配了浏览器专用镜像 → 浏览器沙箱**全局共用一个**（跨会话），懒加载启动、复用，空闲 24h
