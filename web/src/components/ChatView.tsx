@@ -143,8 +143,12 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
   const stickRef = useRef(true);
   const thinkRef = useRef(think);
   thinkRef.current = think;
-  const verifyRef = useRef(verify);
-  verifyRef.current = verify;
+  // 结果校验开关的「有效值」：考试进行中强制关闭（不改动 verify 本身与 localStorage，
+  // 故考试一结束就自动恢复用户原来的设置）。经 ref 传给发送逻辑，保证本轮真的不校验。
+  const examActive = !!exam?.active;
+  const effectiveVerify = examActive ? false : verify;
+  const verifyRef = useRef(effectiveVerify);
+  verifyRef.current = effectiveVerify;
   // 待发附件（发送前可增删）；含本地 File 供即时预览、上传状态。
   const [pending, setPending] = useState<AttachmentItem[]>([]);
   const pendingRef = useRef(pending);
@@ -774,9 +778,9 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
           label={<Typography variant="caption">思考模式</Typography>}
         />
         <FormControlLabel
-          control={<Switch size="small" checked={verify} disabled={busy}
+          control={<Switch size="small" checked={effectiveVerify} disabled={busy || examActive}
             onChange={(e) => toggleVerify(e.target.checked)} />}
-          label={<Typography variant="caption">结果校验</Typography>}
+          label={<Typography variant="caption">结果校验{examActive ? "（考试中禁用）" : ""}</Typography>}
         />
         <FormControlLabel
           control={<Switch size="small" checked={showTools} disabled={busy}
