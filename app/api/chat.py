@@ -44,7 +44,8 @@ from ..orchestration.orchestrator import VERIFY_TRACE_KEY
 from ..orchestration.executor import CLARIFY_GUIDE
 from ..profile import render_profile_block
 from ..side_effects import SideEffectPurger
-from ..sandbox_manager import reset_sandbox_conv, sandbox_guide, set_sandbox_conv
+from ..sandbox_manager import (
+    reset_sandbox_conv, sandbox_guide, set_sandbox_conv, tool_container_image)
 from ..summaries import SummaryStore
 from ..summarizer import RollingSummarizer
 from ..sources import SOURCE_GUIDE, SourceSink, wrap_tool
@@ -748,6 +749,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     elif isinstance(ev, ToolStarted):
                         tc = ev.tool_call
                         st = {"tool": tc.name, "args": tc.arguments}
+                        _img0 = tool_container_image(config, tc.name, tc.arguments)  # 执行中就标镜像
+                        if _img0:
+                            st["image"] = _img0
                         collect["steps"].append(st)
                         step_by_id[tc.id] = st
                         tool_t0[tc.id] = time.time()

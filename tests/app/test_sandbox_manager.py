@@ -98,6 +98,21 @@ async def test_proxy_without_context_raises():
         await proxy.write_file("x", "y")
 
 
+def test_tool_container_image_maps_tool_to_image():
+    from app.config import AppConfig
+    from app.sandbox_manager import tool_container_image
+    cfg = AppConfig(api_key="k", sandbox_backend="docker", app_db_path=":memory:", _env_file=None,
+                    sandbox_shell_image="debian:12-slim",
+                    sandbox_lang_images={"python": "python:3.12-slim", "java": "eclipse-temurin:21-jdk",
+                                         "java8": "eclipse-temurin:8-jdk"})
+    assert tool_container_image(cfg, "run_python", {}) == "python:3.12-slim"
+    assert tool_container_image(cfg, "run_java", {"version": "8"}) == "eclipse-temurin:8-jdk"
+    assert tool_container_image(cfg, "run_shell", {}) == "debian:12-slim"
+    assert tool_container_image(cfg, "calculator", {}) is None      # 非容器工具
+    # 本地后端无镜像概念 → None
+    assert tool_container_image(_cfg(), "run_python", {}) is None
+
+
 async def test_proxy_for_language_and_shell_default_share_local_box():
     # 本地后端：所有语言共用一个 local 沙箱。for_language(任意) 与协议方法（→shell）取到同一个。
     m = SandboxManager(_cfg())

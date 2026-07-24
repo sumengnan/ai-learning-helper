@@ -120,6 +120,31 @@ def sandbox_guide(config) -> str:
     return guide + "".join(lines)
 
 
+# 工具名 → 语言（用于把 run_python 等映射到它将用的容器镜像）
+_TOOL_LANG = {"run_python": "python", "run_node": "node", "run_java": "java", "run_shell": "shell"}
+
+
+def tool_container_image(config, tool_name: str, args: dict | None = None) -> str | None:
+    """容器工具（run_python/run_node/run_java/run_shell）**将要**用的镜像名。
+
+    确定性映射（语言[+version]→镜像），故在工具开始执行时就能算出、无需等它跑完——
+    让前端在「执行中」就能标出用的哪个镜像（run_python 可能跑很久，如 pip 装依赖）。
+    非容器工具或非 docker 后端返回 None（前端不显示）。
+    """
+    if getattr(config, "sandbox_backend", "") != "docker":
+        return None
+    lang = _TOOL_LANG.get(tool_name)
+    if lang is None:
+        return None
+    if lang == "shell":
+        return getattr(config, "sandbox_shell_image", "") or None
+    images = getattr(config, "sandbox_lang_images", None) or {}
+    version = (args or {}).get("version")
+    if version and f"{lang}{version}" in images:
+        return images[f"{lang}{version}"]
+    return images.get(lang) or getattr(config, "sandbox_shell_image", "") or None
+
+
 # 当前请求所属会话；由 chat 处理器在 pump() 内 set，工具执行都在此上下文内。
 _current_conv: ContextVar[str | None] = ContextVar("sandbox_conv", default=None)
 

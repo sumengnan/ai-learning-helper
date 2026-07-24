@@ -279,7 +279,7 @@ def build_harness(config) -> Harness:
     from app.orchestration.critic import Critic
     from app.orchestration.executor import Executor, HidingRegistry
     from harness.skills.matcher import SkillMatcher
-    from app.sandbox_manager import sandbox_guide
+    from app.sandbox_manager import sandbox_guide, tool_container_image
     from app.sampling_policy import intent_temperature, role_temperature
     from harness.reliability.budget import BudgetTracker
     # 规划用主模型（判断质量要求高）；温度 0.2 而非 0——拆 DAG 要一点组合能力
@@ -318,7 +318,10 @@ def build_harness(config) -> Harness:
                           temperature=role_temperature(config, "executor"),
                           # 有沙箱才按配置预渲染指引（工作目录/镜像/联网）；无沙箱这些工具没注册，提了反误导
                           sandbox_guide_text=(sandbox_guide(config)
-                                              if sandbox is not None else "")),
+                                              if sandbox is not None else ""),
+                          # 容器工具将用的镜像映射：让任务步骤里「执行中」的 run_python 等就标出镜像
+                          tool_image_for=(lambda name, args: tool_container_image(config, name, args)
+                                          if sandbox is not None else None)),
         fast_complete=_fast_complete,
         # 简单直答走快速档模型/端点（省钱提速）；未配 fast_model 时 _exec_* 即回退主 client/主模型
         fast_client=_exec_client, fast_model=_exec_model,

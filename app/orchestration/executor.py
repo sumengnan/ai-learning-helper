@@ -181,7 +181,8 @@ class Executor:
     def __init__(self, client, registry: ToolRegistry, system_prompt: str,
                  model: str, *, max_steps: int = 10, budget=None,
                  loop_detect_window: int = 0, disable_thinking: bool = False,
-                 sandbox_guide_text: str = "", temperature: float | None = None) -> None:
+                 sandbox_guide_text: str = "", temperature: float | None = None,
+                 tool_image_for=None) -> None:
         """temperature：执行子步的采样温度（None=不覆盖，用全局基准）。这是机械执行，
         工具入参不该飘；但也不设 0——带工具的循环温度过低更容易卡在重复调同一个工具上，
         正是 loop_detect_window 那套防打转逻辑在治的事。"""
@@ -197,6 +198,8 @@ class Executor:
         # 子步是"带工具干活"的机械执行，思考链多为白烧延迟；开则本步强制关思考（与 fast/judge 档一致）
         self._disable_thinking = disable_thinking
         self._temperature = temperature
+        # 容器工具将用的镜像名映射（tool_name, args)->image；让「执行中」的工具行就能标出镜像
+        self._tool_image_for = tool_image_for
 
     async def execute(self, step: PlanStep, deps: dict[str, Artifact], hint: str = "",
                       *, registry: ToolRegistry | None = None, goal: str = "",
@@ -259,8 +262,9 @@ class Executor:
                     # 这些埋点在编排器复杂路径下全丢了。前端在有计划时不再另显扁平 steps（见 ChatView），
                     # 故不会与计划树里的执行明细重复。
                     yield ev
+                    _img0 = self._tool_image_for(tc.name, tc.arguments) if self._tool_image_for else None
                     yield Progress(scope, f"调用工具 {tc.name}", status="running", key=tc.id,
-                                   detail={"tool": tc.name, "args": tc.arguments})
+                                   detail={"tool": tc.name, "args": tc.arguments, "image": _img0})
                 elif isinstance(ev, ToolFinished):
                     r = ev.result
                     name = tool_names.get(r.tool_call_id, "工具")
