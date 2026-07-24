@@ -123,7 +123,7 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
       <Eyebrow note={rangeLabel(days)}>回答质量</Eyebrow>
       <>
           <Box sx={{ display: "grid", gap: 1.75, mb: 1.75,
-            gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4,1fr)" } }}>
+            gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(5,1fr)" } }}>
             <StatTile label="平均质量分"
               value={q.avg_final == null ? "—" : String(q.avg_final)}
               hint={`${q.scored_turns} 轮已评`}
@@ -144,8 +144,8 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
                 只提示、不拦截、不算本轮失败，故用警告色而非 error 色——后者会让人以为出了故障。 */}
             <StatTile label="交付提醒" value={String(gate.notice_turns)}
               hint={gate.notices.length
-                ? gate.notices.map((n) => `${n.zh} ${n.count}`).join(" · ")
-                : "交付后检查未发现问题 · 不影响本轮结果"}
+                ? `${gate.notice_turns} 轮触发交付后检查 · ${gate.notices.map((n) => `${n.zh} ${n.count}`).join(" · ")}`
+                : "交付后查完整性·检索依据·代码可运行·引用链接 · 只提示不判失败"}
               stripe={gate.notice_turns > 0 ? theme.palette.warning.main : theme.palette.success.main} />
           </Box>
           <Box sx={{ display: "grid", gap: 1.75, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>

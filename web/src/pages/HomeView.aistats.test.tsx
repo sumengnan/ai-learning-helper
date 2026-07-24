@@ -211,17 +211,17 @@ describe("HomeView · 交付提醒", () => {
     (statsApi.overview as any).mockResolvedValue(OV);
     renderOps();
     await waitFor(() => expect(screen.getByText("交付提醒")).toBeTruthy());
-    // 各项次数只出现在这块的 hint 里，比裸数字「2」更能唯一定位到这张卡
-    expect(screen.getByText("代码可运行 3")).toBeTruthy();
+    // 轮数与各项次数只出现在这块的 hint 里，比裸数字「2」更能唯一定位到这张卡
+    expect(screen.getByText("2 轮触发交付后检查 · 代码可运行 3")).toBeTruthy();
   });
 
-  it("没有提醒时明说「不影响本轮结果」，免得空值被当成没跑", async () => {
+  it("没有提醒时副标题说清查了什么、只提示不判失败，免得空值被当成没跑", async () => {
     (statsApi.overview as any).mockResolvedValue({
       ...OV,
       ops: { ...OV.ops, gate: { ...OV.ops.gate, notice_turns: 0, notices: [] } },
     });
     renderOps();
     await waitFor(() =>
-      expect(screen.getByText("交付后检查未发现问题 · 不影响本轮结果")).toBeTruthy());
+      expect(screen.getByText("交付后查完整性·检索依据·代码可运行·引用链接 · 只提示不判失败")).toBeTruthy());
   });
 });
