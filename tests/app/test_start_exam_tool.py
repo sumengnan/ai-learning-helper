@@ -23,6 +23,31 @@ async def test_start_from_bank_populates_session():
     assert sess is not None and sess["mode"] == "instant" and len(sess["questions"]) == 1
 
 
+async def test_start_from_bank_filters_by_topic():
+    """「从题库抽 AI 题考我」：只抽题干含该主题的，不把无关的 Java 题抽出来。"""
+    qs = QuestionStore(":memory:"); es = ExamSessionStore(":memory:")
+    for i in range(5):
+        qs.create("u1", _q(stem=f"什么是 fail-fast？{i}"))          # 无关（Java）
+    qs.create("u1", _q(stem="AI 中的过拟合是指什么？"))            # 相关
+    qs.create("u1", _q(stem="机器学习属于 AI 的分支吗？"))         # 相关
+    t = StartExamTool(es, "u1", "c1", question_store=qs)
+    out = await t.run(t.Params(source="bank", count=5, topic="AI", mode="instant"))
+    assert "已开始考试" in out
+    stems = [q["stem"] for q in es.get_active("u1", "c1")["questions"]]
+    assert stems and all("AI" in s for s in stems)                # 全是 AI 题，无 fail-fast
+
+
+async def test_start_from_bank_topic_no_match_errors():
+    """题库里没有该主题的题 → 明确报错、不静默全库随机抽冒充、不开考。"""
+    qs = QuestionStore(":memory:"); es = ExamSessionStore(":memory:")
+    for i in range(5):
+        qs.create("u1", _q(stem=f"什么是 fail-fast？{i}"))
+    t = StartExamTool(es, "u1", "c1", question_store=qs)
+    out = await t.run(t.Params(source="bank", count=5, topic="AI"))
+    assert "没有匹配" in out and "AI" in out
+    assert es.get_active("u1", "c1") is None                      # 没开考
+
+
 async def test_start_from_wrong_uses_snapshots():
     ws = WrongAnswerStore(":memory:"); es = ExamSessionStore(":memory:")
     snap = {"type": "truefalse", "stem": "地球是圆的", "options": None, "answer": True, "explanation": ""}
