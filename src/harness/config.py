@@ -68,7 +68,9 @@ class HarnessConfig(BaseSettings):
     retry_base_delay: float = 0.5
     max_tokens_budget: int | None = None
     max_wall_seconds: float | None = None
-    tool_result_max_chars: int = 100000
+    # 单个工具结果回喂给模型的全局字符上限（所有工具的二次截断兜底）。放到 1M 以让
+    # read_file 等大输出真正透传（各工具仍受自身上限约束，如 shell 输出走 sandbox_output_max_chars）。
+    tool_result_max_chars: int = 1_000_000
     include_usage: bool = True
     otel_enabled: bool = False
     otel_exporter: str = "console"      # console | otlp
@@ -157,7 +159,10 @@ class HarnessConfig(BaseSettings):
     sandbox_pids_limit: int = 128                # 每个容器进程数上限
     sandbox_read_only: bool = False         # 容器根文件系统是否只读（默认可写）
     sandbox_exec_timeout: float = 30.0
-    sandbox_output_max_chars: int = 8000
+    # 沙箱输出上限（字符）：read_file 读文件、run_shell/run_python 等执行输出共用此上限，
+    # 超出截断。放到 1M 以支持读大文件（之前 8000 太小）。注意还受全局 tool_result_max_chars
+    # 二次截断，故那个也需 ≥ 此值才真正生效。
+    sandbox_output_max_chars: int = 1_000_000
     # 语言容器空闲驱逐（秒）：每个 (会话,语言) 容器按此空闲超时缓存复用——超过此时长无操作才销毁，
     # 有操作即续期；避免每次执行都重建镜像容器。<=0 关闭空闲驱逐（用完即销毁）。默认 1 小时。
     # 与「删除会话即销毁该会话全部语言容器」的主路径无关（那是确定性回收）。
