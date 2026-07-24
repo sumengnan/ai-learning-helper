@@ -218,9 +218,12 @@ def build_harness(config) -> Harness:
         _reg(ListFilesTool(sandbox))
         _reg_exec(RunShellTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
         _reg_exec(RunPythonTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
-        # 配了多镜像路由（sandbox_images）或语言/版本子沙箱（sandbox_lang_images）时暴露多语言代码工具
-        if getattr(sandbox, "sandbox_for", None) is not None or config.sandbox_lang_images:
+        # run_node / run_java 按 sandbox_lang_images 是否含该语言镜像注册（数据驱动）。
+        # java 多版本键为 java/java8/java17…，故按前缀判断（配了 java8 也应暴露 run_java）。
+        _lang_images = config.sandbox_lang_images or {}
+        if any(k.startswith("node") for k in _lang_images):
             _reg_exec(RunNodeTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
+        if any(k.startswith("java") for k in _lang_images):
             _reg_exec(RunJavaTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
 
     if config.enable_dispatch:

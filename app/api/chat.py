@@ -696,18 +696,21 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     tiers=config.model_price_tiers,
                     tiers_by_model=config.model_price_tiers_by_model)
                 try:
-                    # 本轮附件播种进会话沙箱 /workspace/uploads/，供模型直接执行（写盘≠给模型）
+                    # 本轮附件登记给沙箱：供各语言容器（按需创建时）在 /workspace/uploads/ 播种，
+                    # 让模型可直接执行/读取（写盘≠给模型）。累积语义由 manager.set_uploads 保证。
                     if attachment_metas and harness.sandbox is not None:
+                        _ups = []
                         for meta in attachment_metas:
                             try:
-                                data = attachment_store.bytes(meta["id"])
-                                await harness.sandbox.write_bytes(
-                                    f"uploads/{meta['filename']}", data)
-                            except Exception as e:  # 播种失败不应打断本轮对话
+                                _ups.append((f"uploads/{meta['filename']}",
+                                             attachment_store.bytes(meta["id"])))
+                            except Exception as e:  # 取字节失败不应打断本轮对话
                                 queue.put_nowait(Progress(
                                     scope="sandbox",
                                     text=f"附件 {meta['filename']} 载入沙箱失败：{e}",
                                     status="error"))
+                        if _ups:
+                            await harness.sandbox.set_uploads(_ups)
                     async for ev in harness.sink.wrap(_merged(loop_obj.run(message))):
                         queue.put_nowait(ev)
                 except Exception as e:  # 兜底成 RunError，避免流卡死

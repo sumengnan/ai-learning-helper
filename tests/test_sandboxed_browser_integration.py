@@ -18,13 +18,13 @@ def _sandbox():
     cfg = HarnessConfig(
         api_key="k", sandbox_backend="docker",
         sandbox_docker_host=os.environ["HARNESS_SANDBOX_DOCKER_HOST"],
-        sandbox_image=os.environ["HARNESS_SANDBOX_IMAGE"],
         sandbox_network=os.getenv("HARNESS_SANDBOX_NETWORK", "bridge"),
         sandbox_read_only=False,
         sandbox_docker_tls_ca_cert=os.environ.get("HARNESS_SANDBOX_DOCKER_TLS_CA_CERT", ""),
         sandbox_docker_tls_client_cert=os.environ.get("HARNESS_SANDBOX_DOCKER_TLS_CLIENT_CERT", ""),
         sandbox_docker_tls_client_key=os.environ.get("HARNESS_SANDBOX_DOCKER_TLS_CLIENT_KEY", ""))
-    return build_sandbox(cfg)
+    # 浏览器测试直接用一个含 Playwright/Chromium 的镜像起单容器沙箱
+    return build_sandbox(cfg, image=os.environ["HARNESS_SANDBOX_IMAGE"])
 
 
 async def test_sandboxed_browser_fetches_real_page():

@@ -12,7 +12,7 @@ from ._sandbox_util import format_exec
 
 @dataclass
 class LangSpec:
-    language: str            # 路由到语言容器的 key（对应 config.sandbox_images 的键）
+    language: str            # 语言 key（对应 config.sandbox_lang_images 的键，用于路由到语言容器）
     filename: str            # 源码写入的文件名
     argv: list[str] | None   # 直接执行的命令；None 表示用 shell 编译+运行
     shell: str | None = None # 需编译时的 sh -c 脚本（如 java 先 javac 再 java）
@@ -22,23 +22,14 @@ async def _run_code(sandbox: Sandbox, spec: LangSpec, code: str, version: str | 
                     timeout: float, max_chars: int) -> str:
     """执行某语言代码；非零退出/超时 → ToolError。
 
-    会话代理（有 run_code，SandboxProxy）：按语言[+版本]起一次性子沙箱，跑完销毁、
-    产物回传会话基础容器（子沙箱未配镜像时回退基础容器/路由容器）。
-    否则（直接注入 DockerSandbox/RoutingSandbox/LocalSandbox，测试用）：保留原
-    路由/直连逻辑。
+    经 for_language(语言[,版本]) 取到该语言的容器（会话代理据此起/复用对应语言容器；
+    直连 Docker/Local 时返回自身），在其中 write_file + exec。显式 version 无对应镜像
+    → SandboxError（is_error，让模型换版本）。
     """
-    run_code = getattr(sandbox, "run_code", None)
-    if run_code is not None:
-        res = await run_code(spec.language, version, spec.filename, code,
-                             spec.argv, spec.shell, timeout)   # SandboxError→is_error
-    else:
-        box = sandbox
-        route = getattr(sandbox, "sandbox_for", None)
-        if route is not None:                       # RoutingSandbox：取到语言专属容器
-            box = await route(spec.language)
-        await box.write_file(spec.filename, code)   # SandboxError→is_error
-        cmd = spec.argv if spec.argv is not None else ["sh", "-c", spec.shell]
-        res = await box.exec(cmd, timeout)
+    box = await sandbox.for_language(spec.language, version)   # SandboxError→is_error
+    await box.write_file(spec.filename, code)                  # SandboxError→is_error
+    cmd = spec.argv if spec.argv is not None else ["sh", "-c", spec.shell]
+    res = await box.exec(cmd, timeout)
     out = format_exec(res, max_chars)
     if res.exit_code != 0 or res.timed_out:     # 非零退出/超时 → 标记失败
         raise ToolError(out)

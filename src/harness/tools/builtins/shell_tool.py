@@ -45,7 +45,8 @@ class RunShellTool(Tool):
                     "你必须如实告诉用户「该命令未执行，因为你拒绝了」——"
                     "绝对不要声称它已执行，也不要描述任何执行结果、影响或后续状态。"
                     "若该步骤因此无法完成，就说明卡在这里、并给出替代做法。")
-        res = await self._sandbox.exec(["sh", "-c", params.command], self._timeout)
+        box = await self._sandbox.for_language("shell")   # run_shell 在 shell 容器执行
+        res = await box.exec(["sh", "-c", params.command], self._timeout)
         out = format_exec(res, self._max_chars)
         if res.exit_code != 0 or res.timed_out:   # 非零退出/超时 → 标记失败
             raise ToolError(out)
