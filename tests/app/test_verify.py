@@ -1,11 +1,15 @@
-"""AnswerVerifier 单测——用假 complete / 假 registry，不打网络、不碰 Docker。"""
+"""DeliveryChecker 单测——用假 complete / 假 registry，不打网络、不碰 Docker。
+
+这些检查是**提醒型**的：产出 Notice 只意味着「值得扫一眼」，既不拦截交付、也不判本轮失败。
+故断言的形状是「产生了哪几条提醒」，而不是旧交付门那种 ok/failed/hard_failed。
+"""
 import json
 
 import pytest
 
 from app.config import AppConfig
 from app.url_blocklist import UrlBlockedError
-from app.verify import AnswerVerifier, TrajectoryJudge, _tool_exec_summary
+from app.verify import DeliveryChecker, TrajectoryJudge, _tool_exec_summary
 from harness.tools.base import ToolError
 
 
@@ -23,47 +27,44 @@ def _fake_complete(mapping):
     return complete
 
 
-# grounding 判 grounded=true / judge 高分：默认"全通过"的 complete
+# grounding 判 grounded=true：默认"没有可提醒之处"的 complete
 def _pass_complete():
-    return _fake_complete({"事实核查": {"grounded": True, "feedback": ""},
-                           "质检": {"score": 95, "feedback": "好"}})
+    return _fake_complete({"事实核查": {"grounded": True, "feedback": ""}})
 
 
-async def test_format_empty_fails():
-    v = AnswerVerifier(_pass_complete(), _cfg())
-    verdict = await v.verify("问", "   ", [], None)
-    assert verdict.ok is False and "format" in verdict.failed
+def _kinds(notices):
+    return [n.kind for n in notices]
 
 
 async def test_format_unclosed_code_fence_fails():
-    v = AnswerVerifier(_pass_complete(), _cfg())
-    verdict = await v.verify("问", "看代码：\n```python\nprint(1)", [], None)
-    assert verdict.ok is False and "format" in verdict.failed
+    v = DeliveryChecker(_pass_complete(), _cfg())
+    notices = await v.run("看代码：\n```python\nprint(1)", [], None)
+    assert _kinds(notices) == ["format"]
 
 
 async def test_all_pass_normal_answer():
-    v = AnswerVerifier(_pass_complete(), _cfg(gate_check_code=False))
-    verdict = await v.verify("光合作用是什么", "光合作用是植物把光能转化为化学能的过程。", [], None)
-    assert verdict.ok is True and verdict.failed == []
+    v = DeliveryChecker(_pass_complete(), _cfg(delivery_check_code=False))
+    notices = await v.run("光合作用是植物把光能转化为化学能的过程。", [], None)
+    assert notices == []
 
 
 async def test_grounding_fail_when_unsupported():
     complete = _fake_complete({"事实核查": {"grounded": False, "feedback": "X 无依据"},
                                "质检": {"score": 95, "feedback": ""}})
-    v = AnswerVerifier(complete, _cfg(gate_check_code=False))
+    v = DeliveryChecker(complete, _cfg(delivery_check_code=False))
     grounding = [{"tool": "search_knowledge", "content": "[1]（来源：a）光合作用相关资料", "is_error": False}]
-    verdict = await v.verify("问", "答案含臆造论断。", grounding, None)
-    assert verdict.ok is False and "grounding" in verdict.failed
-    assert "无依据" in verdict.critique
+    notices = await v.run("答案含臆造论断。", grounding, None)
+    assert _kinds(notices) == ["grounding"]
+    assert "无依据" in notices[0].text
 
 
 async def test_grounding_skipped_when_no_retrieval():
     # 本轮没有 search_knowledge 命中 → grounding 跳过（N/A 视为通过）
     complete = _fake_complete({"事实核查": {"grounded": False, "feedback": "不该被调用"},
                                "质检": {"score": 95, "feedback": ""}})
-    v = AnswerVerifier(complete, _cfg(gate_check_code=False))
-    verdict = await v.verify("问", "闲聊回答", [], None)
-    assert verdict.ok is True and "grounding" not in verdict.failed
+    v = DeliveryChecker(complete, _cfg(delivery_check_code=False))
+    notices = await v.run("闲聊回答", [], None)
+    assert _kinds(notices) == []
 
 
 async def test_grounding_includes_web_retrieval_context():
@@ -77,15 +78,15 @@ async def test_grounding_includes_web_retrieval_context():
             return json.dumps({"grounded": True, "feedback": ""})
         return json.dumps({"score": 95, "feedback": ""})
 
-    v = AnswerVerifier(complete, _cfg(gate_check_code=False))
+    v = DeliveryChecker(complete, _cfg(delivery_check_code=False))
     grounding = [
         {"tool": "search_knowledge", "content": "知识库：光合作用发生在叶绿体",
          "is_error": False, "retrieval": True},
         {"tool": "mcp__websearch__bailian_web_search",
          "content": "联网：2026 年 Spring AI 发布 2.0", "is_error": False, "retrieval": True},
     ]
-    verdict = await v.verify("问", "光合作用在叶绿体；Spring AI 2026 出了 2.0。", grounding, None)
-    assert verdict.ok is True                 # 两条论断各有依据 → 不该判缺依据
+    notices = await v.run("光合作用在叶绿体；Spring AI 2026 出了 2.0。", grounding, None)
+    assert notices == []                      # 两条论断各有依据 → 不该提醒
     assert "叶绿体" in seen["context"] and "Spring AI" in seen["context"]  # 两类来源都进了核查上下文
 
 
@@ -100,13 +101,13 @@ async def test_grounding_includes_read_document_context():
             return json.dumps({"grounded": True, "feedback": ""})
         return json.dumps({"score": 95, "feedback": ""})
 
-    v = AnswerVerifier(complete, _cfg(gate_check_code=False))
+    v = DeliveryChecker(complete, _cfg(delivery_check_code=False))
     grounding = [
         {"tool": "search_knowledge", "content": "知识库片段：光合作用", "is_error": False, "retrieval": True},
         {"tool": "read_attachment", "content": "文档正文：叶绿体是光合作用的场所", "is_error": False},
     ]
-    verdict = await v.verify("问", "整理的笔记内容。", grounding, None)
-    assert verdict.ok is True
+    notices = await v.run("整理的笔记内容。", grounding, None)
+    assert notices == []
     assert "叶绿体是光合作用的场所" in seen["context"]   # 读入的文档进了核查上下文
 
 
@@ -115,58 +116,20 @@ async def test_grounding_not_expanded_to_web_only():
     问答新增 grounding 噪音。本次只修「知识库+联网混用时联网内容被误判」，不改触发条件。"""
     complete = _fake_complete({"事实核查": {"grounded": False, "feedback": "不该被调用"},
                                "质检": {"score": 95, "feedback": ""}})
-    v = AnswerVerifier(complete, _cfg(gate_check_code=False))
+    v = DeliveryChecker(complete, _cfg(delivery_check_code=False))
     grounding = [{"tool": "browse", "content": "网页内容：只讲了 A", "is_error": False,
                   "retrieval": True}]
-    verdict = await v.verify("问", "答案含 B 这条论断。", grounding, None)
-    assert verdict.ok is True and "grounding" not in verdict.failed   # 无知识库锚点 → 跳过
+    notices = await v.run("答案含 B 这条论断。", grounding, None)
+    assert _kinds(notices) == []                      # 无知识库锚点 → 跳过
 
 
 async def test_grounding_skipped_on_no_hit_sentinel():
     complete = _fake_complete({"事实核查": {"grounded": False, "feedback": "不该被调用"},
                                "质检": {"score": 95, "feedback": ""}})
-    v = AnswerVerifier(complete, _cfg(gate_check_code=False))
+    v = DeliveryChecker(complete, _cfg(delivery_check_code=False))
     grounding = [{"tool": "search_knowledge", "content": "（未在知识库中检索到相关内容）", "is_error": False}]
-    verdict = await v.verify("问", "答", grounding, None)
-    assert verdict.ok is True
-
-
-async def test_judge_low_score_fails():
-    complete = _fake_complete({"事实核查": {"grounded": True, "feedback": ""},
-                               "质检": {"score": 40, "feedback": "跑题"}})
-    v = AnswerVerifier(complete, _cfg(gate_check_code=False, answer_pass_score=70))
-    verdict = await v.verify("问", "答", [], None)
-    assert verdict.ok is False and "judge" in verdict.failed and "跑题" in verdict.critique
-
-
-async def test_judge_gets_recent_dialogue_for_terse_input():
-    """核心修复：上一轮 AI 给了菜单、用户回「A」，judge 必须拿到上一轮才能把「A」读成
-    选择而非含义不明。验证 recent_dialogue 确实进了 judge 的输入。"""
-    seen = {}
-
-    async def complete(system, user):
-        if "质检" in system:
-            seen["judge_input"] = user
-            return json.dumps({"score": 95, "feedback": ""})
-        return json.dumps({"grounded": True, "feedback": ""})
-
-    v = AnswerVerifier(complete, _cfg(gate_check_code=False))
-    verdict = await v.verify(
-        "A", "好的，正在按方案 A 生成文件……", [], None,
-        recent_dialogue="请回复 A / B / C / D / E + 补充说明，我据此立即执行。")
-    assert verdict.ok is True
-    # 上一轮菜单与本轮输入都进了 judge 的上下文
-    assert "A / B / C / D" in seen["judge_input"]
-    assert "用户本轮输入：A" in seen["judge_input"]
-
-
-async def test_judge_works_without_recent_dialogue():
-    """首轮无上一轮（recent_dialogue 空）时，judge 仍照常打分，不崩、不硬塞空上下文。"""
-    complete = _fake_complete({"事实核查": {"grounded": True, "feedback": ""},
-                               "质检": {"score": 90, "feedback": ""}})
-    v = AnswerVerifier(complete, _cfg(gate_check_code=False))
-    verdict = await v.verify("讲讲光合作用", "光合作用是……", [], None)
-    assert verdict.ok is True
+    notices = await v.run("答", grounding, None)
+    assert notices == []
 
 
 class _StubCodeTool:
@@ -193,58 +156,44 @@ class _StubRegistry:
 
 
 async def test_code_block_error_fails():
-    v = AnswerVerifier(_pass_complete(), _cfg(gate_check_grounding=False, gate_check_judge=False))
+    v = DeliveryChecker(_pass_complete(), _cfg(delivery_check_grounding=False))
     reg = _StubRegistry({"run_python": _StubCodeTool(fail=True)})
     answer = "如下：\n```python\nprint(1+\n```"
     # 注意：上面围栏未闭合会先被 format 拦掉，这里用闭合的坏代码
     answer = "如下：\n```python\nprint( SyntaxError here\n```"
-    verdict = await v.verify("写段代码", answer, [], reg)
-    assert verdict.ok is False and "code" in verdict.failed
-    assert "run_python" in verdict.critique
+    notices = await v.run(answer, [], reg)
+    assert _kinds(notices) == ["code"]
+    assert "run_python" in notices[0].text
 
 
 async def test_code_block_success_passes():
-    v = AnswerVerifier(_pass_complete(), _cfg(gate_check_grounding=False, gate_check_judge=False))
+    v = DeliveryChecker(_pass_complete(), _cfg(delivery_check_grounding=False))
     reg = _StubRegistry({"run_python": _StubCodeTool(fail=False)})
     answer = "如下：\n```python\nprint(1+1)\n```"
-    verdict = await v.verify("写段代码", answer, [], reg)
-    assert verdict.ok is True
+    notices = await v.run(answer, [], reg)
+    assert notices == []
 
 
 async def test_code_block_with_ellipsis_skipped():
     # 含省略占位 → 非自包含 → 跳过执行（即便工具会失败也不判不过）
-    v = AnswerVerifier(_pass_complete(), _cfg(gate_check_grounding=False, gate_check_judge=False))
+    v = DeliveryChecker(_pass_complete(), _cfg(delivery_check_grounding=False))
     reg = _StubRegistry({"run_python": _StubCodeTool(fail=True)})
     answer = "示例：\n```python\ndef f():\n    ...\n```"
-    verdict = await v.verify("写段代码", answer, [], reg)
-    assert verdict.ok is True
+    notices = await v.run(answer, [], reg)
+    assert notices == []
 
 
 async def test_llm_error_does_not_block_delivery():
     # judge 调用抛异常 → 该项跳过，不因基础设施抖动拦截交付
     async def boom(system, user):
         raise RuntimeError("LLM down")
-    v = AnswerVerifier(boom, _cfg(gate_check_code=False, gate_check_grounding=False))
-    verdict = await v.verify("问", "正常答案", [], None)
-    assert verdict.ok is True
+    v = DeliveryChecker(boom, _cfg(delivery_check_code=False, delivery_check_grounding=False))
+    notices = await v.run("正常答案", [], None)
+    assert notices == []
 
 
 # ---- 硬门/软门 ----
 
-async def test_format_is_hard_gate():
-    v = AnswerVerifier(_pass_complete(), _cfg())
-    verdict = await v.verify("问", "   ", [], None)
-    assert "format" in verdict.hard_failed
-
-
-async def test_judge_is_soft_gate():
-    complete = _fake_complete({"事实核查": {"grounded": True}, "质检": {"score": 30, "feedback": "差"}})
-    v = AnswerVerifier(complete, _cfg(gate_check_code=False))
-    verdict = await v.verify("问", "答", [], None)
-    assert "judge" in verdict.failed and verdict.hard_failed == []
-
-
-# ---- grounding 逐句归因 ----
 
 def test_grounding_prompt_excludes_greetings_and_advice():
     # 回归护栏：grounding 提示词须显式把「问候语/建议/鼓励/推理」排除在事实核查之外，
@@ -260,24 +209,14 @@ async def test_grounding_unsupported_listed_in_critique():
     complete = _fake_complete({
         "事实核查": {"grounded": False, "unsupported": ["地球是平的", "水往高处流"], "feedback": ""},
         "质检": {"score": 95}})
-    v = AnswerVerifier(complete, _cfg(gate_check_code=False))
+    v = DeliveryChecker(complete, _cfg(delivery_check_code=False))
     grounding = [{"tool": "search_knowledge", "content": "[1] 资料", "is_error": False}]
-    verdict = await v.verify("问", "答", grounding, None)
-    assert "grounding" in verdict.failed and "地球是平的" in verdict.critique
+    notices = await v.run("答", grounding, None)
+    assert _kinds(notices) == ["grounding"] and "地球是平的" in notices[0].text
 
 
 # ---- judge 独立模型 ----
 
-async def test_judge_uses_independent_completer():
-    main_c = _fake_complete({"事实核查": {"grounded": True}, "质检": {"score": 99}})
-    judge_c = _fake_complete({"质检": {"score": 20, "feedback": "独立judge判差"}})
-    v = AnswerVerifier(main_c, _cfg(gate_check_code=False, gate_check_grounding=False),
-                       judge_complete=judge_c)
-    verdict = await v.verify("问", "答", [], None)
-    assert "judge" in verdict.failed and "独立judge" in verdict.critique
-
-
-# ---- facts 引用链接可达性 ----
 
 class _HttpStub:
     class Params:
@@ -293,20 +232,20 @@ class _HttpStub:
 
 async def test_facts_unreachable_link_fails():
     reg = _StubRegistry({"http_request": _HttpStub("HTTP 404\n标题：Not Found\n")})
-    v = AnswerVerifier(_pass_complete(), _cfg(
-        gate_check_grounding=False, gate_check_judge=False, gate_check_code=False,
-        gate_check_facts=True))
-    verdict = await v.verify("问", "详见 https://example.com/x 。", [], reg)
-    assert "facts" in verdict.failed
+    v = DeliveryChecker(_pass_complete(), _cfg(
+        delivery_check_grounding=False, delivery_check_code=False,
+        delivery_check_facts=True))
+    notices = await v.run("详见 https://example.com/x 。", [], reg)
+    assert _kinds(notices) == ["facts"]
 
 
 async def test_facts_reachable_link_passes():
     reg = _StubRegistry({"http_request": _HttpStub("HTTP 200\n标题：OK\n")})
-    v = AnswerVerifier(_pass_complete(), _cfg(
-        gate_check_grounding=False, gate_check_judge=False, gate_check_code=False,
-        gate_check_facts=True))
-    verdict = await v.verify("问", "详见 https://example.com/x 。", [], reg)
-    assert verdict.ok is True
+    v = DeliveryChecker(_pass_complete(), _cfg(
+        delivery_check_grounding=False, delivery_check_code=False,
+        delivery_check_facts=True))
+    notices = await v.run("详见 https://example.com/x 。", [], reg)
+    assert notices == []
 
 
 class _BlockedHttpStub(_HttpStub):
@@ -325,22 +264,21 @@ async def test_facts_flags_link_known_dead_from_blocklist():
     # 登记过就是「我们知道它坏」的证据，不能当基建故障放行——否则加了失败登记反而
     # 让 facts 门对最确定的死链失明
     reg = _StubRegistry({"http_request": _BlockedHttpStub("")})
-    v = AnswerVerifier(_pass_complete(), _cfg(
-        gate_check_grounding=False, gate_check_judge=False, gate_check_code=False,
-        gate_check_facts=True))
-    verdict = await v.verify("问", "详见 https://example.com/x 。", [], reg)
-    assert "facts" in verdict.failed
-    assert "页面不存在" in verdict.critique
+    v = DeliveryChecker(_pass_complete(), _cfg(
+        delivery_check_grounding=False, delivery_check_code=False,
+        delivery_check_facts=True))
+    notices = await v.run("详见 https://example.com/x 。", [], reg)
+    assert _kinds(notices) == ["facts"] and "页面不存在" in notices[0].text
 
 
 async def test_facts_still_passes_on_infra_flake():
     # 对比：普通抓取异常仍放行，不因基建抖动误拦回答
     reg = _StubRegistry({"http_request": _FlakyHttpStub("")})
-    v = AnswerVerifier(_pass_complete(), _cfg(
-        gate_check_grounding=False, gate_check_judge=False, gate_check_code=False,
-        gate_check_facts=True))
-    verdict = await v.verify("问", "详见 https://example.com/x 。", [], reg)
-    assert verdict.ok is True
+    v = DeliveryChecker(_pass_complete(), _cfg(
+        delivery_check_grounding=False, delivery_check_code=False,
+        delivery_check_facts=True))
+    notices = await v.run("详见 https://example.com/x 。", [], reg)
+    assert notices == []
 
 
 # ---- TrajectoryJudge ----
@@ -375,42 +313,6 @@ def test_tool_exec_summary_marks_success_and_failure():
     assert "run_python（失败）" in s
 
 
-async def test_judge_receives_tool_summary():
-    captured = {}
-    async def cap(system, user):
-        captured["user"] = user
-        return json.dumps({"score": 90, "feedback": ""})
-    v = AnswerVerifier(_pass_complete(),
-                       _cfg(gate_check_grounding=False, gate_check_code=False),
-                       judge_complete=cap)
-    steps = [{"tool": "add_questions", "result": "已入库5道题", "is_error": False}]
-    verdict = await v.verify("生成5道题保存到题库", "已完成", [], None, steps=steps)
-    assert verdict.ok is True
-    # judge 的输入里带上了工具执行摘要，才能公正评价「简短确认」
-    assert "add_questions" in captured["user"] and "已入库5道题" in captured["user"]
-
-
-# ---- structured output：judge/grounding LLM 调用强制 JSON ----
-
-async def test_judge_call_forces_json_response_format():
-    from harness.llm.openai_compat import get_extra_body_override
-    seen = {}
-    async def cap(system, user):
-        seen["rf"] = get_extra_body_override().get("response_format")
-        return json.dumps({"score": 90, "feedback": ""})
-    v = AnswerVerifier(cap, _cfg(gate_check_grounding=False, gate_check_code=False))
-    await v.verify("问", "答", [], None)
-    assert seen["rf"] == {"type": "json_object"}   # judge 调用期间强制了 JSON 输出
-
-
-def test_judge_prompt_allows_multiturn_clarification():
-    # 回归护栏：judge 提示词须允许「针对无效/歧义输入的澄清、追问」，
-    # 否则考试等多轮场景里 AI 对无效作答的正常提示会被误判为「未达成目标」。
-    from app.verify import JUDGE_SYSTEM
-    for kw in ("多轮", "无效", "澄清", "追问"):
-        assert kw in JUDGE_SYSTEM, f"judge 提示词缺少多轮语境词：{kw}"
-
-
 def test_trajectory_prompt_forbids_leaking_schema_into_feedback():
     """feedback 是直接展示给用户的，不该出现字段名/null——曾出现「拆分字段为null，
     步骤和最终答案均高质有效」这种评语：judge 在讲自己的 JSON，不是在评价回答。"""
@@ -429,3 +331,52 @@ async def test_null_plan_passes_through_as_none():
     j = TrajectoryJudge(_judge, _cfg())
     s = await j.score("问", "", "步骤摘要", "答案")
     assert s.plan is None and s.steps == 100 and s.final == 100
+
+
+# ── 提醒型语义（这次改动的要害）─────────────────────────────────────────────────
+async def test_notices_are_advisory_not_a_verdict():
+    """Notice 上没有任何「成败」字段：它不参与本轮是否成功的判断。
+
+    这条钉住的是设计意图。旧交付门返回 Verdict(ok/failed/hard_failed)，调用方据此
+    重答甚至拦截交付；现在只返回提醒，谁都不能拿它当判定。
+    """
+    v = DeliveryChecker(_pass_complete(), _cfg())
+    notices = await v.run("看代码：\n```python\nprint(1)", [], None)
+    n = notices[0]
+    assert not hasattr(n, "ok") and not hasattr(n, "failed")
+    assert n.as_dict() == {"kind": "format", "label": "完整性", "text": n.text}
+
+
+async def test_empty_answer_produces_no_notice():
+    """空产出交由上游的错误处理表态，检查器不凑热闹再补一条提醒。"""
+    v = DeliveryChecker(_pass_complete(), _cfg())
+    assert await v.run("   ", [], None) == []
+
+
+async def test_all_items_run_no_short_circuit():
+    """各项独立跑完，不像旧交付门那样在 format 处短路——既然不拦截，就该把问题一次报全。"""
+    complete = _fake_complete({"事实核查": {"grounded": False, "feedback": "X 无依据"}})
+    reg = _StubRegistry({"run_python": _StubCodeTool(fail=True)})
+    grounding = [{"tool": "search_knowledge", "content": "资料", "is_error": False}]
+    v = DeliveryChecker(complete, _cfg())
+    # 截断 + 缺依据 + 代码跑不通，三项同时成立
+    notices = await v.run("见代码：\n```python\nprint(1)\n```\n还有未闭合的：\n```python\nx",
+                          grounding, reg)
+    assert set(_kinds(notices)) == {"format", "grounding", "code"}
+
+
+async def test_infra_flake_produces_no_false_notice():
+    """基建抖动一律静默跳过：假提醒比不提醒更糟，它会训练用户忽略所有提醒。"""
+    async def boom(system, user):
+        raise RuntimeError("端点抖了")
+    grounding = [{"tool": "search_knowledge", "content": "资料", "is_error": False}]
+    v = DeliveryChecker(boom, _cfg(delivery_check_code=False))
+    assert await v.run("正常答案", grounding, None) == []
+
+
+async def test_each_item_can_be_switched_off():
+    reg = _StubRegistry({"run_python": _StubCodeTool(fail=True)})
+    v = DeliveryChecker(_pass_complete(), _cfg(delivery_check_code=False,
+                                               delivery_check_format=False))
+    notices = await v.run("```python\nprint(1)\n```\n未闭合：\n```python\nx", [], reg)
+    assert notices == []

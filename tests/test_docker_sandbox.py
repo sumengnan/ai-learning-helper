@@ -87,10 +87,14 @@ async def test_start_tmpfs_is_writable_by_sandbox_user(monkeypatch):
 
     monkeypatch.setattr(docker, "DockerClient", fake_docker_client)
     sb = DockerSandbox(docker_host="tcp://h:2376", image="img", user="1000:1000",
-                       workspace="/workspace")
+                       workspace="/workspace", disk_limit="500m",
+                       mem_limit="200m", cpus=2.0)
     await sb.start()
     tmpfs = captured["tmpfs"]["/workspace"]
     assert "uid=1000" in tmpfs and "gid=1000" in tmpfs and "mode=07" in tmpfs
+    assert "size=500m" in tmpfs                       # 工作区磁盘上限来自 disk_limit
+    assert captured["mem_limit"] == "200m"            # 内存上限
+    assert captured["nano_cpus"] == 2_000_000_000     # CPU 上限（核→nano_cpus）
 
 
 async def test_staging_transfer_emits_no_progress_noise(monkeypatch):

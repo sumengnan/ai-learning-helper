@@ -8,7 +8,7 @@
 产出服务两种视角，作用域**不同**，故分别聚合：
 - learn（学习主场，「AI 在为我做什么」）：把运行数据翻译成产品语言（AI 用过哪些能力、
   花了多少力气）+ 学习资产 —— 全部按 user_id 隔离，讲的是「我的」。
-- ops（工程台 / AI 运行统计）：运维口径（成功率、P95 延迟、工具成功率、步数分布、交付门
+- ops（工程台 / AI 运行统计）：运维口径（成功率、P95 延迟、工具成功率、步数分布、结果校验
   一次过率、轨迹 judge 质量分、全站会话数）—— **整片保持全库**，同一台机器上别人的运行
   也是运维对象；其中任何一项若按 user 切，就会和同页其它指标对不上。
 
@@ -25,7 +25,10 @@ from datetime import datetime, timedelta, timezone
 
 from harness.usage import tiered_cost
 
-from .verify import failed_layers_zh
+from .verify import CHECK_ZH
+
+# 终局校验未通过的层名 → 中文。编排器只有 review 这一层（此前交付门那套多层判定已删）。
+_LAYER_ZH = {"review": "结果校验"}
 
 # 统计口径统一按 UTC+8（北京时间）自然日切：「今日」= 北京今天 00:00 到现在，
 # 「近 N 天」= 往前数 N-1 个自然日的 00:00 到现在。存储仍是 UTC（库内时间戳带 +00:00），
@@ -351,7 +354,7 @@ class StatsService:
         """从 progress 抽 scope=quality —— 轨迹 judge 的分层打分。
 
         _emit_quality 存的 text 是 {"plan","steps","final","feedback"} 的 JSON（外层 progress
-        是列表 JSON，故这里是两层）。交付门的重答/拦截统计不在这里，走 _gate_stats（读专门的
+        是列表 JSON，故这里是两层）。结果校验的重答/拦截统计不在这里，走 _gate_stats（读专门的
         verify 列，比从渲染用文案里反推可靠）。
         """
         finals: list[int] = []
@@ -596,15 +599,16 @@ class StatsService:
         }
 
     def _gate_stats(self, cutoff_iso: str) -> dict:
-        """交付门重答统计，读 conversation_messages.verify 列。**全局**，不按用户切
+        """结果校验统计，读 conversation_messages.verify 列。**全局**，不按用户切
         （与同页其它运维指标同口径，见 _load_progress_rows）。
 
-        与 ops.totals.retries 是两回事：那个统计的是 LLM 网络重试（超时/限流后重发请求），
-        与交付门无关。这里统计的是「答案没过校验、带反馈重答」的次数。
+        数据来自编排器的终局 Critic.review（未通过即重答/重规划），外加交付后机械检查
+        产生的提醒条数。与 ops.totals.retries 是两回事：那个统计的是 LLM 网络重试
+        （超时/限流后重发请求），与校验无关。
         """
         empty = {"turns": 0, "retries": 0, "avg_retries": 0.0, "degraded": 0,
                  "degraded_rate": 0.0, "first_pass_rate": 0.0, "gate_errors": 0,
-                 "layer_failures": []}
+                 "layer_failures": [], "notice_turns": 0, "notices": []}
         if self._app is None:
             return empty
         try:
@@ -615,38 +619,51 @@ class StatsService:
         except sqlite3.Error:
             return empty
 
-        turns = retries = degraded = first_pass = gate_errors = 0
+        turns = retries = degraded = first_pass = gate_errors = notice_turns = 0
         layers: Counter = Counter()
+        notices: Counter = Counter()
         for (raw,) in rows:
             try:
                 vt = json.loads(raw)
             except (TypeError, ValueError):
                 continue        # 脏数据不该让整个统计页 500
-            turns += 1
-            retries += vt.get("retries", 0) or 0
-            if vt.get("degraded"):
-                degraded += 1
-            if vt.get("gate_error"):   # 校验器故障跳过校验的轮数：这些「通过」并非真通过
-                gate_errors += 1
-            if (vt.get("attempts") or 0) == 1 and vt.get("ok"):
-                first_pass += 1
+            # 「只有交付提醒、没有终局校验」的轮（如兜底直通路径）不算进校验口径——
+            # 否则它们会被当成 0 次尝试的轮，把一次过率拖低，而它们根本没经过校验。
+            if vt.get("attempts") is not None:
+                turns += 1
+                retries += vt.get("retries", 0) or 0
+                if vt.get("degraded"):
+                    degraded += 1
+                if vt.get("gate_error"):   # 校验器故障跳过校验：这些「通过」并非真通过
+                    gate_errors += 1
+                if (vt.get("attempts") or 0) == 1 and vt.get("ok"):
+                    first_pass += 1
             for h in vt.get("history") or []:
                 for name in h.get("failed") or []:
                     layers[name] += 1
-        if turns == 0:
+            kinds = vt.get("notices") or []
+            if kinds:
+                notice_turns += 1
+            for k in kinds:
+                notices[k] += 1
+        if turns == 0 and not notice_turns:
             return empty
         return {
             "turns": turns,
             "retries": retries,
-            "avg_retries": round(retries / turns, 3),
+            "avg_retries": round(retries / turns, 3) if turns else 0.0,
             "degraded": degraded,
-            "degraded_rate": round(degraded / turns, 3),
-            "first_pass_rate": round(first_pass / turns, 3),
+            "degraded_rate": round(degraded / turns, 3) if turns else 0.0,
+            "first_pass_rate": round(first_pass / turns, 3) if turns else 0.0,
             # 因校验器自身故障而跳过校验的轮数（fail-open）：>0 说明有回答其实没被真校验过
             "gate_errors": gate_errors,
             # 哪层最爱拦：按次数降序，用于判断该调哪个分项开关/阈值
-            "layer_failures": [{"layer": k, "zh": failed_layers_zh([k]), "count": v}
+            "layer_failures": [{"layer": k, "zh": _LAYER_ZH.get(k, k), "count": v}
                                for k, v in layers.most_common()],
+            # 交付提醒（只提示、不拦截）：多少轮出现过、各项各多少次
+            "notice_turns": notice_turns,
+            "notices": [{"kind": k, "zh": CHECK_ZH.get(k, k), "count": v}
+                        for k, v in notices.most_common()],
         }
 
     def _context_stats(self, cutoff_iso: str) -> dict:
@@ -855,7 +872,7 @@ class StatsService:
                 "p95_latency_ms": agg["p95_latency_ms"],
                 "avg_run_duration_ms": agg["avg_run_duration_ms"],
                 "total_run_duration_ms": agg["total_run_duration_ms"],
-                # 注意：这是 LLM 网络重试（超时/限流后重发请求），与交付门重答无关；
+                # 注意：这是 LLM 网络重试（超时/限流后重发请求），与结果校验重答无关；
                 # 后者见下面的 gate.retries。两者口径完全不同，别混着看。
                 "retries": agg["retries"],
                 "cost_usd": agg["cost_usd"],
@@ -869,7 +886,7 @@ class StatsService:
             "daily": series,
             "tools": self._tools_list(agg["tool_counts"], agg["tool_errors"]),
             "steps_histogram": self._steps_histogram(agg["steps_per_run"]),
-            # 交付门：答案没过校验带反馈重答的统计（读 conversation_messages.verify 列）
+            # 结果校验：答案没过终局 Critic.review 带反馈重答的统计 + 交付提醒条数（读 conversation_messages.verify 列）
             "gate": gate,
             # 轨迹 judge 的分层质量分（读 progress 列 scope=quality 项）
             "quality": quality,

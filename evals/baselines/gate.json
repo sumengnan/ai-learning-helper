@@ -1,9 +1,0 @@
-{
-  "suite": "gate",
-  "metrics": {
-    "gate": {
-      "mean": 1.0,
-      "n": 15
-    }
-  }
-}

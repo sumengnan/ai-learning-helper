@@ -27,6 +27,12 @@ class LocalSandbox:
             shutil.rmtree(self.workspace, ignore_errors=True)
         self._started = False
 
+    async def for_language(self, language: str | None = None,
+                           version: str | None = None) -> "LocalSandbox":
+        # 本地沙箱无镜像/隔离概念：所有语言共用这一个本地目录（仅测试/离线开发用）
+        await self.start()
+        return self
+
     async def exec(self, command: list[str], timeout: float,
                    *, quiet: bool = False) -> ExecResult:
         await self.start()   # 本地沙箱本就不发 Progress，quiet 仅为接口一致

@@ -26,10 +26,12 @@ class DockerSandbox:
     def __init__(self, docker_host: str, image: str, workspace: str = "/workspace",
                  user: str = "1000:1000", network: str = "none", mem_limit: str = "512m",
                  cpus: float = 1.0, pids_limit: int = 128, read_only: bool = False,
+                 disk_limit: str = "500m",
                  tls_ca_cert: str = "", tls_client_cert: str = "",
                  tls_client_key: str = "", tls_verify: bool = True,
                  labels: dict | None = None, display_name: str = "沙箱") -> None:
         self.workspace = workspace
+        self.image = image                  # 公开：供工具在结果 meta 里标注「用的哪个镜像」
         self._display_name = display_name   # 前端进度里区分基础沙箱/子沙箱
         self._docker_host = docker_host
         self._image = image
@@ -38,6 +40,7 @@ class DockerSandbox:
         self._mem_limit = mem_limit
         self._cpus = cpus
         self._pids_limit = pids_limit
+        self._disk_limit = disk_limit
         self._read_only = read_only
         self._tls_ca_cert = tls_ca_cert
         self._tls_client_cert = tls_client_cert
@@ -83,7 +86,7 @@ class DockerSandbox:
             self._image, command="sleep infinity", detach=True,
             working_dir=self.workspace, user=self._user, network_mode=self._network,
             read_only=self._read_only,
-            tmpfs={self.workspace: f"rw,size=64m,{self._tmpfs_owner_opts()}"},
+            tmpfs={self.workspace: f"rw,size={self._disk_limit},{self._tmpfs_owner_opts()}"},
             mem_limit=self._mem_limit, nano_cpus=int(self._cpus * 1e9),
             pids_limit=self._pids_limit, cap_drop=["ALL"],
             security_opt=["no-new-privileges"], auto_remove=False,
@@ -100,6 +103,12 @@ class DockerSandbox:
             if self._client is not None:
                 await asyncio.to_thread(self._client.close)
                 self._client = None
+
+    async def for_language(self, language: str | None = None,
+                           version: str | None = None) -> "DockerSandbox":
+        # 单容器直连（测试/无会话管理时）：无按语言路由，就是这一个容器。start 幂等。
+        await self.start()
+        return self
 
     def _tmpfs_owner_opts(self) -> str:
         """从 self._user（"uid:gid" 或 "uid"）解析 tmpfs 的 uid/gid/mode 挂载选项。

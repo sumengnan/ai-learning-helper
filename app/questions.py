@@ -138,16 +138,25 @@ class QuestionStore:
             "ORDER BY source", (user_id,)).fetchall()
         return [r[0] for r in rows]
 
-    def sample(self, user_id: str, count: int, types: list[str] | None) -> list[dict]:
+    def sample(self, user_id: str, count: int, types: list[str] | None,
+               keyword: str | None = None) -> list[dict]:
+        """从题库随机抽 count 道。types 限题型；keyword 按题干筛主题（如「AI」），
+        避免「考 AI 题」抽到全库无关题（题库无独立 topic 字段，只能按 stem 匹配）。
+
+        用 instr（**大小写敏感**子串）而非 LIKE：SQLite 的 LIKE 对 ASCII 大小写不敏感，
+        "%AI%" 会命中 "f**ai**l-fast" 这类英文词，把 Java 题当成 AI 题抽出来——正是要修的 bug。
+        instr 大小写敏感，"AI" 只配大写「AI」；中文主题（如「数据结构」）不受大小写影响。"""
+        clauses = ["user_id=?"]
+        params: list = [user_id]
         if types:
             ph = ",".join("?" * len(types))
-            rows = self._db.execute(
-                f"SELECT {self._COLS} FROM questions WHERE user_id=? AND type IN ({ph}) "
-                "ORDER BY RANDOM() LIMIT ?", (user_id, *types, count)).fetchall()
-        else:
-            rows = self._db.execute(
-                f"SELECT {self._COLS} FROM questions WHERE user_id=? ORDER BY RANDOM() LIMIT ?",
-                (user_id, count)).fetchall()
+            clauses.append(f"type IN ({ph})"); params += list(types)
+        if keyword:
+            clauses.append("instr(stem, ?) > 0"); params.append(keyword)
+        where = " AND ".join(clauses)
+        rows = self._db.execute(
+            f"SELECT {self._COLS} FROM questions WHERE {where} ORDER BY RANDOM() LIMIT ?",
+            (*params, count)).fetchall()
         return [self._row(r) for r in rows]
 
     def delete(self, user_id: str, qid: str) -> None:

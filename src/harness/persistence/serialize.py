@@ -64,7 +64,8 @@ def event_to_dict(ev) -> dict:
         data = {"tool_call": toolcall_to_dict(ev.tool_call)}
     elif isinstance(ev, ToolFinished):
         r = ev.result
-        data = {"result": {"tool_call_id": r.tool_call_id, "content": r.content, "is_error": r.is_error}}
+        data = {"result": {"tool_call_id": r.tool_call_id, "content": r.content,
+                           "is_error": r.is_error, "meta": r.meta}}
     elif isinstance(ev, RunFinished):
         data = {"message": message_to_dict(ev.message)}
     elif isinstance(ev, RunError):

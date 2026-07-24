@@ -142,7 +142,8 @@ class ConversationStore:
                     reasoning_ms: int | None = None) -> None:
         """一轮结束：按 run_id 把 streaming 占位 assistant UPDATE 为最终内容 + steps/progress/
         sources（参考来源）+ 状态 + 用量（tokens/cost）+ 耗时（elapsed_ms）+ reasoning（思考过程）
-        + verify（交付门结构化判定轨迹，门未开时为 None）+ context（上下文组装结果：L1 挤出多少、
+        + verify（结果校验结构化留痕：终局 review 结论 + 交付提醒 notices；本轮未开结果校验为 None）
+        + context（上下文组装结果：L1 挤出多少、
         L2/L3 成没成，full 策略下为 None）+ reasoning_ms（思考耗时，非思考模式为 None）
         ——刷新后仍能还原。"""
         self._conn.execute(
@@ -159,6 +160,24 @@ class ConversationStore:
              json.dumps(context, ensure_ascii=False) if context else None,
              reasoning_ms,
              conv_id, run_id))
+        self._conn.commit()
+
+    def mark_delivered(self, conv_id: str, run_id: str, content: str,
+                       status: str, elapsed_ms: int | None) -> None:
+        """答案对用户可见后，立刻把占位从 streaming 翻成终态并冻结耗时——**先于**交付检查/
+        轨迹 judge/清单收尾这些旁路后处理。
+
+        为什么必须早翻：这些后处理跑在答案已交付之后、finish_turn 之前，其间消息若仍是
+        streaming，用户一刷新，前端会把它当在途 run 重新接回、`startedAt` 归零重新计时
+        （耗时「从 1 开始」的真凶）。尤其交付检查会在沙箱里实跑答案里的代码，慢/卡时这个
+        窗口很长甚至永不结束。翻成 done 后刷新走「已完成」路径，显示冻结耗时，不再重计。
+
+        只更 content/status/elapsed_ms 三样、且仅当仍是 streaming（幂等）：steps/progress/
+        sources/verify 仍交末尾的 finish_turn 补全（那时 notices/quality 才齐）。"""
+        self._conn.execute(
+            "UPDATE conversation_messages SET content=?, status=?, elapsed_ms=? "
+            "WHERE conv_id=? AND run_id=? AND role='assistant' AND status='streaming'",
+            (content, status, elapsed_ms, conv_id, run_id))
         self._conn.commit()
 
     def flush_partial(self, conv_id: str, run_id: str, content: str) -> None:

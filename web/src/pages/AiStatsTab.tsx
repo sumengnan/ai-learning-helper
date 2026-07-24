@@ -132,7 +132,7 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
               value={`${q.avg_plan ?? "—"} / ${q.avg_steps ?? "—"}`}
               hint="任务拆分 · 关键步执行" stripe={theme.palette.primary.main} />
             <StatTile label="一次过率" value={gate.turns ? fmtPct(gate.first_pass_rate) : "—"}
-              hint={`${gate.turns} 轮经过交付门 · 共重答 ${gate.retries} 次`}
+              hint={`${gate.turns} 轮经过结果校验 · 共重答 ${gate.retries} 次`}
               stripe={gate.turns === 0 ? theme.palette.primary.main
                 : gate.first_pass_rate >= 0.8 ? theme.palette.success.main : theme.palette.warning.main} />
             <StatTile label="降级交付" value={String(gate.degraded)}
@@ -140,6 +140,13 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
                 ? `另有 ${gate.gate_errors} 轮因校验器故障未真校验`
                 : `占 ${fmtPct(gate.degraded_rate)} · 红徽章标未通过，正文原样交付`}
               stripe={gate.degraded > 0 ? theme.palette.error.main : theme.palette.success.main} />
+            {/* 交付提醒：交付后的机械检查（完整性/检索依据/代码可运行/引用链接）。
+                只提示、不拦截、不算本轮失败，故用警告色而非 error 色——后者会让人以为出了故障。 */}
+            <StatTile label="交付提醒" value={String(gate.notice_turns)}
+              hint={gate.notices.length
+                ? gate.notices.map((n) => `${n.zh} ${n.count}`).join(" · ")
+                : "交付后检查未发现问题 · 不影响本轮结果"}
+              stripe={gate.notice_turns > 0 ? theme.palette.warning.main : theme.palette.success.main} />
           </Box>
           <Box sx={{ display: "grid", gap: 1.75, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
             <Card sx={cardSx}>

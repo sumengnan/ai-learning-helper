@@ -49,7 +49,7 @@ AI 不只是"聊天",还能调用工具——联网查资料、在沙箱里跑�
 - **首页概览**:学习主场 + 系统监控双视角,时间范围筛选、图表、记忆查看、产物预览、模型分层计费与成本估算。
 - **工具能力**:联网 `http_request`(失败/被防抓自动改用浏览器)、代码沙箱(按语言起一次性子沙箱执行)、
   无头浏览器抓取、MCP 客户端(stdio + streamable-http)、技能渐进式披露、多智能体派发。
-- **回答校验门**(可选):交付前对格式 / 知识库 grounding / 代码可运行 / LLM 自评打分做校验,不过则自动带反馈重答(详见 [回答校验门](docs/answer-gate.md))。
+- **回答把关**:干活途中每调一次高风险工具就查一次(每步校验),跑完由编排器 `Critic` 整体审一遍、不过带缺口重做;交付**之后**再跑一遍机械检查(代码真跑、链接真访、对着检索原文核对),发现问题只作提醒、不重答不判失败(详见 [回答把关](docs/answer-checks.md))。
 - **循环/停滞防护**:除步数、token、墙钟时间三道硬上限外,agent 循环还做循环检测——连续 N 步发起完全相同的工具调用(同名+同参)即判为原地打转,先注入一次纠偏提示让模型换思路,纠偏后仍重复才中止,防模型卡在重复动作上白跑(`HARNESS_LOOP_DETECT_WINDOW`,默认 3,<2 关闭)。
 - **上下文管理**:长对话按 `full` / `window` / `layered` 三档策略裁剪(详见 [上下文管理](docs/context-management.md))。
 - **记忆管理**:三类长期记忆(语义/情景/程序),自动提炼、去重消矛盾、自我整合(详见 [记忆管理](docs/memory-management.md))。
@@ -69,7 +69,7 @@ flowchart TD
 
 - **harness 核心**(`src/harness/`):最小 Agent 运行时,只负责"模型 ↔ 工具"的循环、记忆、
   持久化、可观测。详见 [架构:harness 核心](docs/architecture-harness.md)。
-- **app 应用层**(`app/`):FastAPI 把内核包装成学习助手产品——鉴权、会话、知识库、题库、校验门等。
+- **app 应用层**(`app/`):FastAPI 把内核包装成学习助手产品——鉴权、会话、知识库、题库、回答把关等。
   详见 [架构:app 层](docs/architecture-app.md)。
 
 ### 一次聊天请求怎么走
@@ -101,7 +101,7 @@ flowchart TD
   (终结该步并抑制重规划),一次误判代价放大到整条任务分支,故不再图快用便宜档;代价是它每子步
   都跑,走 judge 会加每轮延迟。**注意**:validate 跟随 judge 档回退——只配了 `HARNESS_FAST_MODEL`
   却没配 `HARNESS_JUDGE_MODEL` 时,validate 走的是**主模型**(不是你配的快速档),想省成本就把
-  judge 一并配上。triage / 执行子步走快速档(`HARNESS_FAST_MODEL`,未配则回退主模型)。交付门的 grounding 事实核对**留在主模型**:它是拿答案对着检索到的原文核对有无依据,
+  judge 一并配上。triage / 执行子步走快速档(`HARNESS_FAST_MODEL`,未配则回退主模型)。交付提醒里的 grounding 事实核对**留在主模型**:它是拿答案对着检索到的原文核对有无依据,
   不是自评打分,没有"给自己打高分"的偏差,不必占用(可能更贵的)裁判模型;但思考跟 judge 一样关掉。
 - **有状态流程强制单循环**:模拟考试走 `force_simple` + 主模型逐题推进——拆成多步再汇总会把
   "原样呈现下一题"的指令吞掉。
@@ -109,7 +109,7 @@ flowchart TD
 - **重试上限**:单步 2 次、终局重规划 2 轮、Planner 出无效 DAG 重试 2 次、每个执行子步内部
   最多 10 个 AgentLoop 步(均可配,见[环境变量](#环境变量))。用户拒绝危险操作导致的失败是
   **终态**,不重试——重跑只会把同一个弹窗再怼给用户一次。
-- **交付门**:轮次开头就下发"开门"信号,本轮生成的文件在结果校验完成前不显示。
+- **结果校验**:轮次开头就下发"已开启"信号,本轮生成的文件在校验完成前不显示。
 - **失败尝试的产物会被清理**:单步质检不过要重跑时,先把这一版已产出的下载/入库/出题副作用删掉,
   并让前端抖掉该步上次的工具调用记录——否则模型重跑会把 `save_download` 再调一遍,
   消息下方挂出两个下载按钮,其中一个还是判定不合格的那版。
@@ -183,7 +183,7 @@ dict / list 值写 JSON。生产务必设置随机 `AUTH_SECRET` 与真实 `HARN
 | `HARNESS_ENABLE_SKILLS` | `false` | 技能渐进式披露(扫 `skills/`) |
 | `HARNESS_ENABLE_MCP` | `false` | MCP 客户端,清单见 `mcp/mcp_servers.json` |
 | `HARNESS_ENABLE_DISPATCH` | `false` | 多智能体派发(花名册在 `agents/`) |
-| `HARNESS_ENABLE_ANSWER_GATE` | `false` | 回答校验门 |
+| `HARNESS_ENABLE_DELIVERY_CHECKS` | `true` | 交付后的机械检查(只提醒,不重答) |
 | `HARNESS_ENABLE_STEP_CHECK` | `true` | 高风险步实时校验(检索相关性 / 代码执行) |
 | `HARNESS_ENABLE_URL_BLOCKLIST` | `true` | 抓取失败网址分级登记 |
 | `HARNESS_REQUIRE_CAPTCHA` | `false` | 登录/注册强制图形验证码 |
@@ -257,7 +257,7 @@ docs/                架构与专题文档、部署说明、截图
 - [`docs/context-management.md`](docs/context-management.md) —— 上下文管理:三档策略、L1/L2/L3 分层、token 预算。
 - [`docs/memory-management.md`](docs/memory-management.md) —— 记忆管理:三类记忆、智能写入、自我整合。
 - [`docs/rag-retrieval.md`](docs/rag-retrieval.md) —— RAG 检索:入库、多路召回与融合排序、grounding 与出题。
-- [`docs/answer-gate.md`](docs/answer-gate.md) —— 回答校验门:五项校验、重答与降级、软/硬门、三层校验关系。
+- [`docs/answer-checks.md`](docs/answer-checks.md) —— 回答把关:每步校验、编排器分层反思、交付后的机械提醒。
 - [`docs/sampling-temperature.md`](docs/sampling-temperature.md) —— 采样温度:按角色分档、按用户意图路由、失败时动态升/降温。
 
 **运维**

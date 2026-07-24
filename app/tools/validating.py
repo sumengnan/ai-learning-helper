@@ -1,11 +1,9 @@
 # app/tools/validating.py
 """每步正确性校验（实时层）：用装饰器包住高风险工具，规则/阈值判定，内核零改动。
 
-两种校验策略：
-- result 型（检索）：inner 正常返回文本，按文本判定；失败把 hint 追加到结果尾部，
-  驱动模型下一步自纠正（不硬阻断）。
-- exec 型（代码/命令）：inner 失败会 raise ToolError（非零退出/超时），捕获后 emit
-  校验事件再原样重抛——语义不变，仍走内核 executor 的 is_error 自纠正。
+result 型校验（检索/联网抓取）：inner 正常返回文本，按文本判定；失败把 hint 追加到结果
+尾部，驱动模型下一步自纠正（不硬阻断）。代码/命令执行工具**不**在此校验——执行失败
+（非零退出）是正常的迭代过程，工具自身已 raise ToolError→is_error 让编排器自纠正。
 
 校验结果经 harness.progress.emit(Progress(scope="check", ...)) 发到 SSE 流，前端展示
 每步校验标记。校验逻辑自身异常绝不吞掉 inner 原结果（仅跳过该步校验）。
@@ -18,7 +16,7 @@ from typing import Callable
 
 from harness.events import Progress
 from harness.progress import emit
-from harness.tools.base import Tool, ToolError
+from harness.tools.base import Tool
 from harness.tools.builtins.memory_search import NO_KNOWLEDGE_HIT
 from harness.types import ToolOutput
 
@@ -64,12 +62,9 @@ class ValidatingTool(Tool):
         self,
         inner: Tool,
         check: Callable[[str], CheckResult] | None = None,
-        *,
-        exec_mode: bool = False,
     ) -> None:
         self._inner = inner
         self._check = check
-        self._exec_mode = exec_mode
         # 对外完全等同 inner：注册键、schema、参数模型都取 inner 的
         self.name = inner.name
         self.description = inner.description
@@ -79,22 +74,6 @@ class ValidatingTool(Tool):
         return self._inner.schema()
 
     async def run(self, params):
-        if self._exec_mode:
-            return await self._run_exec(params)
-        return await self._run_result(params)
-
-    async def _run_exec(self, params):
-        try:
-            raw = await self._inner.run(params)
-        except ToolError:
-            emit(Progress(scope="check", text=f"{self.name} 执行未通过",
-                          status="error", key=f"check:{self.name}"))
-            raise                                    # 语义不变：继续走 is_error 自纠正
-        emit(Progress(scope="check", text=f"{self.name} 执行通过",
-                      status="ok", key=f"check:{self.name}"))
-        return raw
-
-    async def _run_result(self, params):
         raw = await self._inner.run(params)
         text = raw.text if isinstance(raw, ToolOutput) else raw
         try:

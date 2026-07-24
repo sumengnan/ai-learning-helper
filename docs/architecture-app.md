@@ -19,7 +19,7 @@ flowchart TD
     subgraph APP["app/"]
       API --> R["API 路由 app/api/<br/>chat · questions · documents · stats …"]
       R --> ORCH["编排层 app/orchestration/<br/>Orchestrator · Planner · Executor · Critic"]
-      R --> SVC["领域服务<br/>KnowledgeService · QuizService · AnswerVerifier<br/>RunManager · PendingActionStore …"]
+      R --> SVC["领域服务<br/>KnowledgeService · QuizService · DeliveryChecker<br/>RunManager · PendingActionStore …"]
       SVC --> DB[("SQLite<br/>app.db 业务数据<br/>memory.db 向量<br/>harness.db 轨迹/检查点")]
       ORCH --> SVC
     end
@@ -99,7 +99,7 @@ Orchestrator(
 | **记忆（应用侧）** | `app/conversation_memory.py` | 对话文本入向量库 + 语义召回 |
 | **知识库** | `app/knowledge.py` / `app/parsing.py` / `app/documents.py` | 文档解析、切块入库、检索（见 [RAG 检索](rag-retrieval.md)） |
 | **题库 / 考试** | `app/questions.py` / `app/quiz_service.py` / `app/question_import.py` / `app/exam_session.py` / `app/exam_flow.py` / `app/exam_grader.py` / `app/wrong_answers.py` | 出题、导入、服务端托管考试、判分、错题 |
-| **回答校验** | `app/verify.py` | `AnswerVerifier`（format / grounding / code / facts / judge 五层）、`TrajectoryJudge` |
+| **回答把关** | `app/verify.py` | `DeliveryChecker`（交付后提醒四项：format / grounding / code / facts）、`TrajectoryJudge` |
 | **来源标注** | `app/sources.py` | `wrap_tool` 给工具包一层记源，正文内联 `[n]` 引用 |
 | **待确认动作** | `app/pending_actions.py` + `app/api/pending_actions.py` | 破坏性删除的两段式确认 |
 | **抓取黑名单** | `app/url_blocklist.py` | 抓失败的网址分级 TTL 登记，下次短路让模型换来源 |
@@ -260,20 +260,26 @@ sequenceDiagram
   `_spawn_post_turn` 丢进独立 task。此前直接 await 会让流迟迟不关、前端一直转圈，
   且该 run 仍算在途、用户连下一句都发不了。
 
-### 关于 chat.py 里的另外两个分支
+### 关于 chat.py 里的另一个分支
 
-`app/api/chat.py::gen()` 里有 `if getattr(harness, "orchestrator", None) is not None:` /
-`elif not gate_on:` / `else:` 三支。**只有第一支是正常路径**——`build_harness` 恒建
-orchestrator，生产环境必定走它。后两支（ReAct 直通、ReAct + 交付门循环）是
-**orchestrator 缺失时的惰性兜底**，主要服务于注入 `harness=SimpleNamespace(orchestrator=None)`
-的精简测试。读代码时不要把它们当成三条并列的正常流程。
+`app/api/chat.py::gen()` 里有 `if getattr(harness, "orchestrator", None) is not None:` / `else:`
+两支。**只有第一支是正常路径**——`build_harness` 恒建 orchestrator，生产环境必定走它。
+第二支（ReAct 直通）是 **orchestrator 缺失时的惰性兜底**，主要服务于注入
+`harness=SimpleNamespace(orchestrator=None)` 的精简测试。读代码时不要把它当成并列的正常流程。
 
-同理，`app/verify.py` 的 `AnswerVerifier` 交付门循环（缓冲 → 校验 → 回灌重答 → 清理未通过轮
-的副作用产物）只在那条兜底分支上跑。编排器路径上「结果校验」这个前端开关映射到的是
-**`Critic.review` 终局把关**（`req.verify` → `Orchestrator.run(verify=...)`）；
-`AnswerVerifier` 在编排器路径下不参与；`TrajectoryJudge` 则仍会额外打一次分层质量分——
-但要三个条件同时成立：`enable_trajectory_judge`（默认 **False**）、本轮工具步 > 1、本轮未出错。
-它只落 `progress` 供「AI 运行统计 · 回答质量」展示，**不驱动重答**。
+> 曾经还有第三支：`AnswerVerifier` 交付门循环（缓冲 → 五项校验 → 回灌重答 → 清理未通过轮的
+> 副作用产物）。它已被删除——那条分支在生产里一次都走不到，而它的第 5 项 judge 与
+> `Critic.review` 做的是同一件事（同一个 bug 修了两遍中的一遍，见 `docs/answer-checks.md`
+> 文末）。其余四项机械检查保留为交付后的**提醒**，见下。
+
+编排器路径上「结果校验」这个前端开关映射到的是 **`Critic.review` 终局把关**
+（`req.verify` → `Orchestrator.run(verify=...)`）。另有两个**交付后**的旁路，都只展示、
+不驱动重答：
+
+- `DeliveryChecker`：交付提醒四项，需 `enable_delivery_checks`（默认 **True**）+ 本轮 `req.verify`。
+  发 `Progress(scope="notice", status="warn")`，并把 kind 列表记进 `verify` 列的 `notices`。
+- `TrajectoryJudge`：分层质量分，要三个条件同时成立：`enable_trajectory_judge`（默认 **False**）、
+  本轮工具步 > 1、本轮未出错。只落 `progress` 供「AI 运行统计 · 回答质量」展示。
 
 ## 安全机制
 
@@ -341,7 +347,7 @@ React + TypeScript + MUI + Vite。页面在 `web/src/pages/`：聊天 `ChatPage`
 - **确定性的服务端兜底，不依赖模型自觉**。考试判分与错题入库在 `exam_flow.py` 里做完，
   不给模型留跳过的余地；破坏性删除的执行者换成 API；计划的可执行性约束由
   `validate_plan` 正则确定性拦截，而不是只写在提示词里。
-- **旁路失败一律降级但不静默**。L2 摘要失败、判官抖动、交付门故障都不阻断交付，
+- **旁路失败一律降级但不静默**。L2 摘要失败、判官抖动、交付检查故障都不阻断交付，
   但都会打日志并记进 trace（`ctx_trace` / `verify_trace`），使「多少轮其实没真校验过」
   可被统计到。
 

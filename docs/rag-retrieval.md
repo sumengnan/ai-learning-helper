@@ -22,7 +22,7 @@ RAG = **检索增强生成**(Retrieval-Augmented Generation)。一句话:
 另外两个见 [记忆管理](memory-management.md) 与 [上下文管理](context-management.md)。
 
 对应关系一句话:知识库存在 `knowledge:<用户>` 这个 scope,AI 用 `search_knowledge` 工具取,
-交付门的 grounding 校验也只认这个工具的命中。
+grounding 检查也只认这个工具的命中。
 
 ## 整体流程
 
@@ -132,7 +132,7 @@ relevance = clip(round((1 − distance) × 100), 0, 100)
   这句文案被 `app/tools/validating.py` 和 `app/verify.py` **逐字匹配**用作哨兵,改动需同步。
   开启每步校验时,知识库检索还会被 `ValidatingTool` 包一层,空命中会驱动模型自纠正
   (记忆检索**不包**这层——记忆为空是常态,不是失败)。
-- **grounding 校验**(交付门的一层,`app/verify.py`):答案交付前,核对其中的事实性陈述
+- **grounding 检查**(交付提醒的一项,`app/verify.py`):答案交付后,核对其中的事实性陈述
   是否真能被资料支撑。几个要点:
   - **只有本轮 `search_knowledge` 有非空命中才触发**——避免给纯联网问答新增噪音;
   - 触发后,核查上下文会把**联网检索结果**与本轮 `read_attachment`/`read_file` 读入的

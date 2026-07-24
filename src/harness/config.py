@@ -68,7 +68,9 @@ class HarnessConfig(BaseSettings):
     retry_base_delay: float = 0.5
     max_tokens_budget: int | None = None
     max_wall_seconds: float | None = None
-    tool_result_max_chars: int = 100000
+    # 单个工具结果回喂给模型的全局字符上限（所有工具的二次截断兜底）。放到 1M 以让
+    # read_file 等大输出真正透传（各工具仍受自身上限约束，如 shell 输出走 sandbox_output_max_chars）。
+    tool_result_max_chars: int = 1_000_000
     include_usage: bool = True
     otel_enabled: bool = False
     otel_exporter: str = "console"      # console | otlp
@@ -133,39 +135,41 @@ class HarnessConfig(BaseSettings):
     sandbox_docker_tls_client_cert: str = ""    # 客户端证书路径
     sandbox_docker_tls_client_key: str = ""     # 客户端私钥路径
     sandbox_docker_tls_verify: bool = True      # 是否校验服务端证书
-    sandbox_image: str = "quay.io/centos/centos:stream9"   # 路由未启用时的单镜像；也是 base/shell 容器镜像
-    # 语言->镜像；空=禁用路由（向后兼容单容器）。
-    # 例: {"python":"python:3.12-slim","node":"node:20-slim","java":"eclipse-temurin:21-jdk"}
-    sandbox_images: dict = {}
-    sandbox_default_language: str = "python"     # 协议方法（shell/fs）委托到的容器语言
-    # 语言[+版本]->镜像；配置后 run_python/run_node/run_java 会按语言[+可选 version]
-    # 另起一次性子沙箱执行（跑完即销毁、产物回传会话基础容器）。key 优先 f"{language}{version}"
-    # （回退 language）；显式指定的 version 无对应镜像则报错。空=不启用子沙箱（代码在会话
-    # 基础容器内直接执行，向后兼容）。
-    # 例: {"python":"python:3.12-slim","node":"node:20-slim","java":"eclipse-temurin:21-jdk",
-    #      "java8":"eclipse-temurin:8-jdk","java11":"eclipse-temurin:11-jdk",
-    #      "java17":"eclipse-temurin:17-jdk","java21":"eclipse-temurin:21-jdk"}
+    # run_shell 与「缺省（未指定 language）的 write_file/read_file/list_files」落这个 shell 容器；
+    # 沙箱内的 http_request（curl）与 DNS 解析（getent）也在此容器执行——故 shell 镜像须同时自带
+    # curl 与 glibc 的 getent。CentOS/RHEL 系基础镜像两者都有；debian/ubuntu slim 不含 curl、
+    # alpine 不含 getent，都不合适。默认用 centos:stream9（重构前的基础镜像，已验证可用）。
+    sandbox_shell_image: str = "quay.io/centos/centos:stream9"
+    # 语言[+版本]->镜像：run_python/run_node/run_java 按语言[+可选 version]自动起对应语言容器执行，
+    # 各语言容器各自独立工作区、按 (会话,语言) 缓存复用、1h 空闲销毁。key 优先 f"{language}{version}"
+    # （回退 language）；显式指定的 version 无对应镜像则报错。write_file 等带 language 参数时也落对应容器。
+    # 含 java 多版本，供 run_java 的 version 选择。
     sandbox_lang_images: dict = {"python":"python:3.12-slim","node":"node:20-slim","java":"eclipse-temurin:21-jdk",
           "java8":"eclipse-temurin:8-jdk","java11":"eclipse-temurin:11-jdk",
           "java17":"eclipse-temurin:17-jdk","java21":"eclipse-temurin:21-jdk"}
-    sandbox_sub_network: str = "none"            # 一次性代码子沙箱的网络（默认禁网；需 pip/maven 取包时置 bridge）
     sandbox_approval_timeout: float = 120.0      # 危险命令人工确认超时（秒）；超时自动拒绝
     sandbox_workspace: str = "/workspace"
     sandbox_user: str = "1000:1000"
-    sandbox_network: str = "bridge"
-    sandbox_mem_limit: str = "100m"
-    sandbox_cpus: float = 1.0
-    sandbox_pids_limit: int = 128
+    sandbox_network: str = "bridge"              # 所有语言容器统一的网络（bridge=联网，下载落工作区；none=禁网）
+    sandbox_mem_limit: str = "200m"              # 每个容器内存上限
+    sandbox_cpus: float = 1.0                    # 每个容器 CPU 上限（核）
+    # 工作区磁盘上限（/workspace tmpfs 大小）。注意：tmpfs 是内存盘，其占用**算进 mem_limit**——
+    # 故实际可写 ≈ min(disk_limit, mem_limit - 进程开销)。默认 500m 是天花板，mem_limit 才是更紧的实际卡口。
+    sandbox_disk_limit: str = "500m"
+    sandbox_pids_limit: int = 128                # 每个容器进程数上限
     sandbox_read_only: bool = False         # 容器根文件系统是否只读（默认可写）
-    sandbox_exec_timeout: float = 30.0
-    sandbox_output_max_chars: int = 8000
-    # 会话级沙箱空闲驱逐（秒）：某会话超过此时长无沙箱操作则销毁其容器（安全阀，防泄漏）。
-    # 与「删除会话即销毁」的主路径无关；<=0 关闭空闲驱逐。默认 30 分钟。
-    sandbox_idle_timeout: float = 1800.0
-    # 语言子沙箱空闲驱逐（秒）：各语言/版本子沙箱用完不再即时销毁，而是按 (会话, 语言) 缓存复用，
-    # 超过此时长无该子沙箱操作才销毁——避免每次执行都重建镜像容器。<=0 则用完即销毁（旧行为）。
-    # 默认 1 小时。会话销毁/关停/空闲驱逐其基础容器时，其子沙箱一并销毁。
-    sandbox_sub_idle_timeout: float = 3600.0
+    # 单次 run_python/run_node/run_java/run_shell 的执行超时（秒）。容器内用 `timeout` 命令强制，
+    # 到点即杀（exit 124）——**也罩住你在代码里起的 pip/子进程**，故 pip install 也吃这个预算。
+    # 默认 600（10 分钟，给 pip --target 装依赖留足时间）；调小可让失控代码更早被杀。
+    sandbox_exec_timeout: float = 600.0
+    # 沙箱输出上限（字符）：read_file 读文件、run_shell/run_python 等执行输出共用此上限，
+    # 超出截断。放到 1M 以支持读大文件（之前 8000 太小）。注意还受全局 tool_result_max_chars
+    # 二次截断，故那个也需 ≥ 此值才真正生效。
+    sandbox_output_max_chars: int = 1_000_000
+    # 语言容器空闲驱逐（秒）：每个 (会话,语言) 容器按此空闲超时缓存复用——超过此时长无操作才销毁，
+    # 有操作即续期；避免每次执行都重建镜像容器。<=0 关闭空闲驱逐（用完即销毁）。默认 1 小时。
+    # 与「删除会话即销毁该会话全部语言容器」的主路径无关（那是确定性回收）。
+    sandbox_idle_timeout: float = 3600.0
     # 浏览器沙箱空闲驱逐（秒）：浏览器子沙箱是**全局共用一个**（跨会话），懒加载启动、复用，
     # 超过此时长无抓取才销毁（下次用再重建）；进程关停时一并关闭。默认 24 小时。<=0 关闭空闲驱逐。
     browser_sandbox_idle_timeout: float = 86400.0

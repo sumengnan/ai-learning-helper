@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import re
@@ -45,7 +44,8 @@ from ..orchestration.orchestrator import VERIFY_TRACE_KEY
 from ..orchestration.executor import CLARIFY_GUIDE
 from ..profile import render_profile_block
 from ..side_effects import SideEffectPurger
-from ..sandbox_manager import reset_sandbox_conv, sandbox_guide, set_sandbox_conv
+from ..sandbox_manager import (
+    reset_sandbox_conv, sandbox_guide, set_sandbox_conv, tool_container_image)
 from ..summaries import SummaryStore
 from ..summarizer import RollingSummarizer
 from ..sources import SOURCE_GUIDE, SourceSink, wrap_tool
@@ -72,16 +72,18 @@ from ..tools.validating import ValidatingTool, relevance_check
 from ..tools.save_download import SaveDownloadTool
 from ..quiz_service import _strip_fence
 from ..logging_setup import set_log_context
-from ..verify import Verdict, _tool_exec_summary, failed_layers_zh
+from ..verify import CHECK_ZH, _tool_exec_summary
 
 log = logging.getLogger("app.chat")
 
 # 交付门缓冲后补发终稿时，把文本切成小片以保留打字机效果
 _DELIVER_CHUNK = 40
 
-# 「本轮开了校验门」信号的固定 key（前端 VerifyBadge.tsx 有同名常量，改这里必须同时改那里）。
+# 「本轮开了结果校验」信号的固定 key（前端 VerifyBadge.tsx 有同名常量，改这里必须同时改那里）。
 # 借 scope=verify 通道下发，但它不是校验进展，前端不得把它渲染成校验徽章。详见发出处的注释。
-GATE_OPEN_KEY = "verify:gate-open"
+# 字面值保留 verify:gate-open：历史消息的 progress 列里存的就是这个串（gate 已无对应物，
+# 但改字面值会让老消息里这条信号被当成一条真校验事件、徽章永远转圈）。
+VERIFY_OPEN_KEY = "verify:gate-open"
 
 
 def _chunks(text: str, size: int = _DELIVER_CHUNK):
@@ -145,6 +147,20 @@ _EXAM_TOOLS = frozenset({
     "delete_questions", "delete_wrong_answers"})
 _EXAM_HISTORY_WINDOW = 16   # 覆盖一次批量抽题后逐题问答的往返（每题约 2 条消息）
 
+# 「出题入库」豁免：生成/出题并保存到题库，不是考试——它不让用户答题。误判成考试会让终局校验
+# 按考试规则要求「讲解上一题 + 呈现当前题」，把正常的出题总结判成失败（实测：「生成5道题保存到
+# 题库」被裁判判「未遵循考试规则」）。判据：有「存/入库」意图，且没有「考我/测/答题」这类答题意图。
+_SAVE_TO_BANK = re.compile(
+    "入库|存起来|(保存|存到|存入|存进|加入|录入|导入|放进|放入|收进|收录).{0,8}(题库|库)")
+_QUIZ_ME = re.compile(
+    "考试|考我|考考|考核|模拟考|测验|测测|测一下|测下|小测|刷题|练题|做题|答题|背题|默写|开考")
+
+
+def _is_gen_to_bank(msg: str) -> bool:
+    """『生成/出题 → 保存到题库』这类出题入库请求（不是考试：不让用户答题）。"""
+    m = msg or ""
+    return bool(_SAVE_TO_BANK.search(m)) and not _QUIZ_ME.search(m)
+
 
 def _needs_exam_guide(message: str, history, exam_active: bool) -> bool:
     """本轮是否处于考试/练习语境，需注入 EXAM_GUIDE。任一信号命中即注入：
@@ -155,13 +171,13 @@ def _needs_exam_guide(message: str, history, exam_active: bool) -> bool:
     """
     if exam_active:
         return True
-    if _EXAM_TRIGGER.search(message or ""):
+    if _EXAM_TRIGGER.search(message or "") and not _is_gen_to_bank(message or ""):
         return True
     for m in (history or [])[-_EXAM_HISTORY_WINDOW:]:
         if any(tc.name in _EXAM_TOOLS for tc in (m.tool_calls or [])):
             return True
         if m.role == Role.USER and isinstance(m.content, str) \
-                and _EXAM_TRIGGER.search(m.content):
+                and _EXAM_TRIGGER.search(m.content) and not _is_gen_to_bank(m.content):
             return True
     return False
 
@@ -242,38 +258,16 @@ def _plan_from_orchestrator(progress: list[dict]) -> bool:
     return isinstance(steps, list) and any(isinstance(s, dict) and s.get("id") for s in steps)
 
 
-def _side_effect_ids(steps: list[dict]) -> dict[str, list[str]]:
-    """提取本轮各副作用工具成功产物的 id（下载/知识/题目），供失败轮清理。
+def _gate_verdict_ok(progress: list[dict]) -> bool:
+    """本轮结果校验（交付门）是否通过——从编排器发的 VERIFY_TRACE 事件取 detail.ok。
 
-    工具在结果里带机读标记：save_download→〔下载ID:x〕、save_to_knowledge→〔知识ID:x〕、
-    add_questions/generate_questions→〔题目ID:x,y〕。失败步（is_error）不计。"""
-    out: dict[str, list[str]] = {"download": [], "knowledge": [], "questions": []}
-    for s in steps or []:
-        if s.get("is_error"):
-            continue
-        r = s.get("result") or ""
-        tool = s.get("tool")
-        if tool == "save_download":
-            out["download"] += _DL_ID_RE.findall(r)
-        elif tool == "save_to_knowledge":
-            out["knowledge"] += _KB_ID_RE.findall(r)
-        elif tool in ("add_questions", "generate_questions"):
-            for grp in _Q_ID_RE.findall(r):
-                out["questions"] += [x for x in grp.split(",") if x]
-    return out
-
-
-@contextlib.contextmanager
-def _redo_temperature(config, attempt: int):
-    """整轮重答的升温档；关闭动态温度或首次尝试时是空操作（零开销、行为不变）。"""
-    if not getattr(config, "enable_dynamic_temperature", True) or attempt <= 0:
-        yield
-        return
-    from harness.llm.sampling import temperature_delta
-
-    from ..sampling_policy import retry_delta
-    with temperature_delta(retry_delta(attempt)):
-        yield
+    没有该事件（本轮没跑校验，如关了校验开关）→ 视作 True，不据此拦别的东西。
+    用途：结果校验未通过（ok=False）时不再跑轨迹评分——答复本身都没过关，再打质量分没意义。
+    """
+    for p in reversed(progress or []):
+        if p.get("key") == VERIFY_TRACE_KEY and p.get("detail"):
+            return bool(p["detail"].get("ok"))
+    return True
 
 
 # 副作用工具 → 产物的说法（供重答提示点名，让模型知道要重做什么）
@@ -283,32 +277,6 @@ _FX_KIND = {
     "add_questions": "题库题目",
     "generate_questions": "题库题目",
 }
-
-
-def _redo_fx_note(steps: list[dict]) -> str:
-    """重答提示的附注：点名上一版产生的副作用产物，要求重新调用工具再存一次。
-
-    每次 attempt 都是全新 RunState，context 只含系统提示 + 会话历史 + 纠正指令——模型
-    看不到上一版自己调过哪些工具。而上一版存下的文件/知识/题目会在交付时被
-    _purge_side_effects 删掉（它们属于未通过的那版）。两件事一叠加：模型不知道该重存、
-    旧产物又被删，用户最终一个文件都拿不到。故必须在纠正指令里明说。
-    """
-    made: list[str] = []
-    for s in steps or []:
-        if s.get("is_error"):
-            continue
-        kind = _FX_KIND.get(s.get("tool") or "")
-        if not kind:
-            continue
-        args = s.get("args") if isinstance(s.get("args"), dict) else {}
-        name = str(args.get("filename") or "").strip()
-        made.append(f"{s['tool']}（{kind}{f'《{name}》' if name else ''}）")
-    if not made:
-        return ""
-    return ("\n注意：你上一版曾调用 " + "、".join(dict.fromkeys(made))
-            + "，这些产物已随未通过的那一版一并作废删除。本次回答若仍应产出它们，"
-              "【必须重新调用相应工具再存一次】——上一版存过不算数，不重新调用就真的"
-              "什么都没留下，用户会以为文件已保存却找不到。")
 
 
 def _drop_purged_marks(steps: list[dict], fx: dict[str, list[str]]) -> None:
@@ -328,73 +296,6 @@ def _drop_purged_marks(steps: list[dict], fx: dict[str, list[str]]) -> None:
         for m in hit:
             r = r.replace(m, "")
         s["result"] = r.rstrip() + "\n（该版本未通过校验，此产物已作废删除）"
-
-
-def _split_stale_fx(stale: dict[str, list[str]], cur: dict[str, list[str]]
-                    ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """把未通过轮的产物按类分成「该删的」与「该留的」。
-
-    删：交付的那一版自己产出了同类产物 → 旧的已被它取代，留着就是指向废内容的死按钮。
-    留：交付的那一版一件同类产物都没有 → 这是唯一的一份，删了用户就彻底空手。
-
-    后者是 _redo_fx_note 的确定性兜底：那条纠正指令只是「告诉」模型重做，管不住它照不照
-    做；真没照做时，宁可留下上一版的产物（并在步骤里标明出处），也不能让用户什么都拿不到。
-
-    铁律：**交付版正在用的 id 一个都不能删**。产物按内容判重（见 DownloadStore.create），
-    重答时若文件内容与上一版逐字节相同，重存拿回的就是同一条记录——此时 stale 与 cur 里是
-    同一个 id，照「cur 非空就把 stale 全删」的老写法会把交付版自己的文件删掉：校验通过了、
-    答案交付了，用户却既没有下载按钮，点在途界面的旧按钮还是 404。而「校验挂在正文措辞、
-    文件内容原样重生成」正是最常见的重答形态，故这不是边角情况。
-    """
-    purge = {k: ([i for i in v if i not in set(cur.get(k) or ())] if cur.get(k) else [])
-             for k, v in stale.items()}
-    keep = {k: ([] if cur.get(k) else v) for k, v in stale.items()}
-    return purge, keep
-
-
-def _mark_carried_over(steps: list[dict], fx: dict[str, list[str]]) -> None:
-    """给保留下来的上一版产物在步骤结果里标明出处（机读标记留着，下载按钮仍可用）。
-
-    产物出自未通过校验的那一版，而最终答案是另一版写的——不说清楚，用户会默认二者一致。
-    """
-    marks = [f"〔下载ID:{i}〕" for i in fx["download"]]
-    marks += [f"〔知识ID:{i}〕" for i in fx["knowledge"]]
-    if not marks:
-        return
-    for s in steps or []:
-        r = s.get("result") or ""
-        if not any(m in r for m in marks):
-            continue
-        s["result"] = (r.rstrip()
-                       + "\n（此产物由未通过校验的那一版生成；最终回答未重新生成它，"
-                         "已为你保留，请对照最终回答确认后再用）")
-
-
-def emit_gate_span(tracer, vt: dict, t0_ns: int) -> None:
-    """把交付门判定补发成一个 answer_gate span（每次尝试一个 verify.attempt event）。
-
-    循环跑完后据 t0_ns 显式补发，而非用 start_as_current_span 包住循环：产出这些判定的是个
-    async generator，其中的 yield 会把 span 的 contextvar 泄漏进消费者上下文。
-    未装 OTel provider 时 tracer 为 no-op，全是空操作。
-    """
-    sp = tracer.start_span("answer_gate", start_time=t0_ns)
-    try:
-        sp.set_attribute("app.gate.attempts", vt["attempts"])
-        sp.set_attribute("app.gate.retries", vt["retries"])
-        sp.set_attribute("app.gate.ok", vt["ok"])
-        sp.set_attribute("app.gate.degraded", vt["degraded"])
-        if vt.get("gate_error"):   # 校验器故障 → 本轮的「通过」不代表真校验过，须显形
-            sp.set_attribute("app.gate.error", vt["gate_error"])
-        for h in vt["history"]:
-            sp.add_event("verify.attempt", {
-                "attempt": h["attempt"], "run_id": h["run_id"], "ok": h["ok"],
-                "failed": h["failed"], "hard_failed": h["hard_failed"],
-                "critique": h["critique"][:200]})
-        if vt["degraded"]:      # 用尽重答次数仍未过 → 标红，便于在追踪后端筛出来
-            last = vt["history"][-1]["summary"] if vt["history"] else "未知"
-            sp.set_status(Status(StatusCode.ERROR, f"交付门未通过：{last}"))
-    finally:
-        sp.end()
 
 
 def _is_retrieval_tool(name: str) -> bool:
@@ -491,7 +392,7 @@ async def _finalize_stale_plan(complete, progress: list[dict], steps: list[dict]
 
 
 def make_chat_router(harness, store, config, question_store=None, wrong_store=None,
-                     verifier=None, attachment_store=None, run_manager=None,
+                     delivery_checker=None, attachment_store=None, run_manager=None,
                      knowledge_service=None, quiz_service=None,
                      profile_store=None, trajectory_judge=None,
                      exam_session_store=None, pending_store=None,
@@ -700,8 +601,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         registry, source_sink = _build_registry(user_id, req.conversation_id,
                                                  has_attachments, exam_active,
                                                  created_downloads=created_downloads)
-        # 交付门开启需三者皆备：装配了 verifier + 服务端总开关 + 本轮用户开关（默认开，可手动关）
-        gate_on = verifier is not None and config.enable_answer_gate and req.verify
+        # 交付后机械检查（提醒型）：装配了 checker + 本轮用户开关（关掉「结果校验」就整轮不提醒）
+        checks_on = delivery_checker is not None and req.verify
         # 喂给模型的消息：带附件时追加只含文件名的名单提示（不含内容），入库仍用原文
         model_message = req.message
         if attachment_metas:
@@ -822,18 +723,21 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     tiers=config.model_price_tiers,
                     tiers_by_model=config.model_price_tiers_by_model)
                 try:
-                    # 本轮附件播种进会话沙箱 /workspace/uploads/，供模型直接执行（写盘≠给模型）
+                    # 本轮附件登记给沙箱：供各语言容器（按需创建时）在 /workspace/uploads/ 播种，
+                    # 让模型可直接执行/读取（写盘≠给模型）。累积语义由 manager.set_uploads 保证。
                     if attachment_metas and harness.sandbox is not None:
+                        _ups = []
                         for meta in attachment_metas:
                             try:
-                                data = attachment_store.bytes(meta["id"])
-                                await harness.sandbox.write_bytes(
-                                    f"uploads/{meta['filename']}", data)
-                            except Exception as e:  # 播种失败不应打断本轮对话
+                                _ups.append((f"uploads/{meta['filename']}",
+                                             attachment_store.bytes(meta["id"])))
+                            except Exception as e:  # 取字节失败不应打断本轮对话
                                 queue.put_nowait(Progress(
                                     scope="sandbox",
                                     text=f"附件 {meta['filename']} 载入沙箱失败：{e}",
                                     status="error"))
+                        if _ups:
+                            await harness.sandbox.set_uploads(_ups)
                     async for ev in harness.sink.wrap(_merged(loop_obj.run(message))):
                         queue.put_nowait(ev)
                 except Exception as e:  # 兜底成 RunError，避免流卡死
@@ -871,6 +775,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     elif isinstance(ev, ToolStarted):
                         tc = ev.tool_call
                         st = {"tool": tc.name, "args": tc.arguments}
+                        _img0 = tool_container_image(config, tc.name, tc.arguments)  # 执行中就标镜像
+                        if _img0:
+                            st["image"] = _img0
                         collect["steps"].append(st)
                         step_by_id[tc.id] = st
                         tool_t0[tc.id] = time.time()
@@ -880,6 +787,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         if st is not None:
                             st["result"] = ev.result.content
                             st["is_error"] = ev.result.is_error
+                            _img = (ev.result.meta or {}).get("image")   # 容器工具用的镜像名（前端展示）
+                            if _img:
+                                st["image"] = _img
                             _t0 = tool_t0.pop(ev.result.tool_call_id, None)
                             _dur = round((time.time() - _t0) * 1000) if _t0 else -1
                             log.info("工具完成 %s 耗时%dms error=%s 输出%d字",
@@ -963,8 +873,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             set_log_context(conv_id=req.conversation_id, run_id=turn_run_id)
             # 思考模式按请求透传，但设在 pump() 里、只包主循环（见那里的注释）：设在此处会
             # 一路漏给交付门校验、记忆调和、记忆整合——它们与「我这个问题不用想那么久」无关。
-            log.info("聊天开始 msg=%d字 附件=%d 交付门=%s 思考=%s",
-                     len(req.message or ""), len(attachment_metas), gate_on, req.think)
+            log.info("聊天开始 msg=%d字 附件=%d 交付检查=%s 思考=%s",
+                     len(req.message or ""), len(attachment_metas), checks_on, req.think)
             question = req.message
             # 最近几轮对话：交给 judge 解读本轮简短回复（如「A」是从刚给的菜单里选的）。
             # 没有它，judge 会把「A」当成含义不明、反过来怪 AI 没澄清就动手（真实误判）。
@@ -972,6 +882,17 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             delivered = None
             delivered_sources: list[dict] = []   # 交付那次尝试的权威来源
             errored = False
+            # 答案交付时刻的墙钟耗时（毫秒）。在此冻结、并即刻把消息翻成终态（mark_delivered），
+            # 使其后的旁路后处理（轨迹 judge/交付检查/清单收尾）期间刷新不会把消息误当在途
+            # 重新计时。末尾 finish_turn 复用它，故落库耗时=答案交付耗时，不被后处理拉长。
+            deliver_ms: int | None = None
+
+            def _mark_delivered() -> None:
+                nonlocal deliver_ms
+                if deliver_ms is None:
+                    deliver_ms = round((time.time() - turn_start) * 1000)
+                store.mark_delivered(req.conversation_id, turn_run_id, delivered or "",
+                                     "error" if errored else "done", deliver_ms)
             used_orchestrator = False    # 本轮是否走编排器路径（其计划终态自洽，不需清单收尾 shim）
             # 交付门结构化判定轨迹（门未开则保持 None，不落库）：progress 列只存渲染用中文，
             # 统计「哪层失败率高/平均重答几次」要的是这里未拍扁的 failed[]/hard_failed[]。
@@ -987,9 +908,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     parts.append(ev.text)
                     if len(parts) % 25 == 0:   # 去抖 flush：仅为服务重启后能看到断点前部分
                         store.flush_partial(req.conversation_id, turn_run_id, "".join(parts))
-                # 编排器校验未过、重答前会发 scope=reset 让前端清屏（考试轮）：落库缓冲必须
-                # 跟着清，否则最终存的是「被否那版 + 新版」的拼接，与用户屏幕所见不一致。
-                # 交付门那条路径由调用方自己 clear（见下方 gate 分支），此处只管编排器发的。
+                # 编排器校验未过、重答前会发 scope=reset 让前端清屏（考试轮/1步回退）：落库
+                # 缓冲必须跟着清，否则最终存的是「被否那版 + 新版」的拼接，与用户屏幕所见不一致。
                 elif isinstance(ev, Progress) and ev.scope == "reset":
                     parts.clear()
                     store.flush_partial(req.conversation_id, turn_run_id, "")
@@ -1026,6 +946,18 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                                  "status": ev.status, "key": ev.key, "agent": ev.agent})
                 return ev
 
+            def _emit_notice(notice):
+                """交付提醒 → 前端徽章（scope=notice）。**不是校验结论**：它不影响本轮
+                成败、不触发重答，只是「这里值得你扫一眼」。故 status 恒为 warn，不用
+                error——后者会让徽章整条标红，等于把提醒冒充成失败。"""
+                ev = Progress("notice", notice.text, status="warn",
+                              key=f"notice:{notice.kind}",
+                              detail={"kind": notice.kind,
+                                      "label": CHECK_ZH.get(notice.kind, notice.kind)})
+                progress.append({"scope": ev.scope, "text": ev.text, "status": ev.status,
+                                 "key": ev.key, "agent": ev.agent, "detail": ev.detail})
+                return ev
+
             def _emit_sources(items):
                 # 借 Progress 通道把来源即时推给在途客户端（scope=sources，前端特判、不入 progress 列）
                 return Progress("sources", json.dumps(items, ensure_ascii=False))
@@ -1040,7 +972,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     # （registry，含用户级工具）、最近对话注入 run()——否则多轮对话/附件/考试/引用/
                     # 个性化/用户工具全丢。context 只喂给编排器的简单直答（与 ReAct 主路径同源，故也
                     # 同样包一层技能上下文）；registry 喂给简单直答与各执行子步。
-                    # 下方 ReAct/交付门两分支仅在 orchestrator 缺失时作惰性兜底（如精简测试注入 None）。
+                    # 下方 else（ReAct 直通）分支仅在 orchestrator 缺失时作惰性兜底（如精简测试注入 None）。
                     used_orchestrator = True
                     collect = {"final": None, "error": None, "steps": steps,
                                "grounding": [], "progress": progress, "usage": None,
@@ -1080,17 +1012,15 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             in_stateful_exam=in_stateful_exam,
                             purge_side_effects=_purge_step_fx,
                             run_id=run_id_a))   # 事件归到 conversation_runs 登记的 run_id，统计才认
-                    # 告诉在途客户端「本轮开了校验门」。必须赶在编排器跑之前发：执行子步的
+                    # 告诉在途客户端「本轮开了结果校验」。必须赶在编排器跑之前发：执行子步的
                     # save_download 远早于编排器那条「结果校验中…」（后者要等所有步骤跑完），
                     # 不先发这条，前端就会在校验还没开始时把生成的文件显示出来。
-                    # 这条信号原先只在下方 ReAct+交付门分支里发，而编排器已是唯一主流程，
-                    # 于是整套「交付前盖住文件」的机制形同虚设——前端遮挡条件本身是对的。
                     # 仅 req.verify 时发：关校验的轮次编排器一条 verify 事件都不发，前端
                     # 见不到信号即照常显示，不会出现「永远不显示」。
                     # 刻意不落库（不走 _emit_verify）：刷新后由已存的终态记录决定展示即可；
                     # 落库反而会在用户中途停止时留下一条永远转圈的「生成中…」。
                     if req.verify:
-                        yield Progress("verify", "生成中…", status="running", key=GATE_OPEN_KEY)
+                        yield Progress("verify", "生成中…", status="running", key=VERIFY_OPEN_KEY)
                     async for s in _drain(_orch_src, run_id_a, model_message, True, collect):
                         yield _acc(s)
                     errored = collect["final"] is None
@@ -1105,6 +1035,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         delivered = f"[出错] {empty_text}"
                         yield RunError(error=empty_text)
                     delivered_sources = source_sink.snapshot()
+                    # 先翻终态、冻结耗时，再跑轨迹 judge/交付检查等旁路——见 _mark_delivered
+                    _mark_delivered()
                     # 回答质量分（轨迹 judge）：编排器已有自己的终局 Critic 把关，这里仅额外打一次
                     # 分层质量分，落 progress 列供「AI 运行统计 · 回答质量」展示，不据此驱动重答。
                     # 仅多步任务（工具步 > 1）才评：单步/无工具无「拆分/多步」可评，跳过省 token
@@ -1115,9 +1047,11 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     # 发——前端 VerifyBadge 的 kind 判据是「有 verify 事件 **或** 有 quality」，
                     # 被 quality 命中，主行照样显示「结果校验通过」。用户关掉了校验，却被告知
                     # 结果校验通过了。质量分只是打分、不驱动重答，冒充不了「把过关」。
+                    # 结果校验未通过（交付门 ok=False）→ 不打质量分：答复都没过关，再评轨迹没意义、白烧 token
                     if (not errored and req.verify and trajectory_judge is not None
                             and config.enable_trajectory_judge and delivered
-                            and len(collect["steps"]) > 1):
+                            and len(collect["steps"]) > 1
+                            and _gate_verdict_ok(progress)):
                         try:
                             tscore = await trajectory_judge.score(
                                 question, _plan_text(progress),
@@ -1125,8 +1059,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             yield _emit_quality(tscore)
                         except Exception as e:   # 质量分是附加统计，失败绝不影响正常交付
                             log.warning("轨迹 judge 打分失败（不影响交付）：%s", e, exc_info=True)
-                elif not gate_on:
-                    # 直通路径：单次尝试、逐字流式（与开门前行为一致）
+                else:
+                    # 兜底直通路径：仅当装配层没给 orchestrator 时才走到（精简测试注入 None）
                     collect = {"final": None, "error": None, "steps": steps,
                                "grounding": [], "progress": progress, "usage": None,
                                "reasoning": ""}
@@ -1154,198 +1088,26 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         delivered = f"[出错] {empty_text}"
                         yield RunError(error=empty_text)
                     delivered_sources = source_sink.snapshot()
-                else:
-                    # 交付门：缓冲 → 校验 → 不过则回灌重答，最多 answer_gate_max_retries 次
-                    corrective = None
-                    max_attempts = config.answer_gate_max_retries + 1
-                    verify_trace = {"attempts": 0, "retries": 0, "ok": False,
-                                    "degraded": False, "gate_error": None, "history": []}
-                    gate_t0 = time.time_ns()     # span 起点：循环跑完后据此补发（见 _emit_gate_span）
-                    # 未通过轮生成的副作用产物（下载/知识/题目），交付/降级时清理掉
-                    stale_fx: dict[str, list[str]] = {"download": [], "knowledge": [], "questions": []}
-
-                    def _purge_side_effects(fx) -> list[str]:
-                        """删掉未通过轮的产物，返回被删的下载 id（供告知在途客户端）。"""
-                        _dl = getattr(harness, "download_store", None)
-                        for _did in fx["download"]:
-                            try:
-                                if _dl is not None:
-                                    _dl.delete(user_id, _did)
-                            except Exception:   # 清理失败不阻断交付
-                                pass
-                        for _kid in fx["knowledge"]:
-                            try:
-                                if knowledge_service is not None:
-                                    knowledge_service.delete(user_id, _kid)
-                            except Exception:
-                                pass
-                        if fx["questions"] and question_store is not None:
-                            try:
-                                question_store.delete_many(user_id, fx["questions"])
-                            except Exception:
-                                pass
-                        # 产物没了，落库的步骤结果里那些机读标记也不能留 —— 否则前端照样
-                        # 渲染出下载按钮，点开是已删的文件（steps 累积了本轮全部尝试）
-                        _drop_purged_marks(steps, fx)
-                        return list(fx["download"])
-
-                    def _settle_stale_fx(stale, cur) -> list[str]:
-                        """交付时结算未通过轮的产物：被本版取代的删掉，本版没重做的留下。
-
-                        返回被删的下载 id（供 _emit_purged 告知在途客户端）。
-                        """
-                        _purge, _keep = _split_stale_fx(stale, cur)
-                        _mark_carried_over(steps, _keep)
-                        if any(_keep.values()):
-                            # 模型没照 _redo_fx_note 的指令重做 —— 提示词管不住的那种情况。
-                            # 兜底已保住产物，但这条日志是唯一能统计其发生频率的地方。
-                            log.warning(
-                                "交付版未重做上一版的副作用产物，已保留旧产物 conv=%s 保留=%s",
-                                req.conversation_id,
-                                {k: len(v) for k, v in _keep.items() if v})
-                        return _purge_side_effects(_purge)
-
-                    # 告诉在途客户端「本轮开了校验门」。必须赶在 agent 跑之前发：工具执行
-                    # 先于首个「校验中…」，前端要据此在交付前一直不显示生成的文件——未通过会
-                    # 重答、届时这些产物被 _purge_side_effects 清掉，提前显示等于给用户一个
-                    # 马上失效的下载按钮。
-                    # key 固定为 GATE_OPEN_KEY（前端 VerifyBadge.tsx 同名常量）：这只是个门已开
-                    # 的信号，不是一条校验进展——此刻模型连初稿都还没生成，没有任何东西可校验。
-                    # 前端据此把它排除在校验徽章之外，否则回答刚起头就转圈谎称「正在校验」。
-                    # 刻意不落库（不走 _emit_verify）：刷新后由已存的终态记录决定展示即可；
-                    # 落库反而会在用户中途停止时留下一条永远转圈的「生成中…」。
-                    yield Progress("verify", "生成中…", status="running", key=GATE_OPEN_KEY)
-
-                    for attempt in range(max_attempts):
-                        msg = model_message if corrective is None else corrective
-                        collect = {"final": None, "error": None, "steps": [],
-                                   "grounding": [], "progress": progress, "usage": None,
-                                   "reasoning": ""}
-                        run_id_a = uuid4().hex
-                        store.add_run(req.conversation_id, run_id_a)
-                        source_sink.reset()   # 每次尝试重置，交付时快照该次来源
-                        # 门内 TextDelta 现在实时流式：经 _acc 累积进 parts（供刷新还原本轮已见文本）
-                        # 重答升温（attempt>0 才生效）：上一版被门拦下后，纠正指令 + 同一个温度
-                        # 很容易把同样的毛病再写一遍；换条采样路径才有「重答」的意义。校验/判分
-                        # 不受影响——它们各自钉死了温度，见 app/sampling_policy.py。
-                        with _redo_temperature(config, attempt):
-                            async for s in _drain(_new_loop(run_id_a), run_id_a, msg,
-                                                  False, collect):
-                                yield _acc(s)
-                        steps.extend(collect["steps"])
-                        draft = (collect["final"] or "").strip()
-                        cur_fx = _side_effect_ids(collect["steps"])   # 本轮生成的副作用产物
-
-                        ekey = uuid4().hex
-                        # 文案须自报层级：徽章原样显示它，而终态行都写明了是哪层（「结果校验
-                        # 通过」/「步骤校验未通过」）——唯独进行中只说「校验中…」，用户就看不出
-                        # 转圈的是交付门还是每步校验。交付门属结果层，故这里明写「结果校验中…」。
-                        yield _emit_verify("结果校验中…", status="running", key=ekey)
-                        if not draft:
-                            verdict = Verdict(ok=False, failed=["empty"],
-                                              critique=collect["error"] or "本轮未产出答案",
-                                              summary="未产出答案")
-                        else:
-                            stoken = set_sandbox_conv(req.conversation_id)
-                            try:
-                                # 记源暂停：校验器跑答案里的代码块、核对引用链接，用的是同一个
-                                # 已包记源层的 registry，否则这些后台调用会冒充成模型的「参考
-                                # 来源」——用户从没看见 AI 执行过它们。
-                                with source_sink.paused():
-                                    verdict = await verifier.verify(
-                                        question, draft, collect["grounding"], registry,
-                                        steps=collect["steps"], recent_dialogue=recent_dialogue)
-                            except Exception as e:   # noqa: BLE001
-                                # 校验器自身故障（非回答质量问题）→ fail-open：跳过校验照常交付。
-                                # 交付门是质量增强，它坏了不该连累用户丢掉一份好答案；且门本就
-                                # 默认关闭，「无门」是受支持的状态。但绝不能无声无息：打日志 +
-                                # 记进 verify 列的 gate_error，stats 能统计到「多少轮没真校验过」。
-                                # 与轨迹 judge 的既有行为一致（verify.py 亦是失败即跳过）。
-                                log.warning("交付门校验器故障，本轮跳过校验直接交付：%s", e,
-                                            exc_info=True)
-                                gate_error = f"{type(e).__name__}: {e}"[:200]
-                                verify_trace["gate_error"] = gate_error
-                                verdict = Verdict(ok=True)
-                            finally:
-                                reset_sandbox_conv(stoken)
-
-                        # 轨迹 judge：仅当其它校验项已通过时才花一次独立模型调用，
-                        # 回看整轨迹（拆分/关键步/最终）分层打分；final 偏低则并入软门重答。
-                        # 按复杂度自动开启：仅当本轮工具步骤 > 1（多步任务）才跑——单步/无工具的
-                        # 简单任务无「拆分/多步」可评，跳过省 token 与延迟（前提仍是 config 开了开关）。
-                        if (verdict.ok and trajectory_judge is not None
-                                and config.enable_trajectory_judge and draft
-                                and len(collect["steps"]) > 1):
-                            tscore = await trajectory_judge.score(
-                                question, _plan_text(progress),
-                                _tool_exec_summary(collect["steps"]), draft)
-                            yield _emit_quality(tscore)
-                            if (tscore.final is not None
-                                    and tscore.final < config.trajectory_pass_score):
-                                verdict = Verdict(
-                                    ok=False, failed=["trajectory"],
-                                    critique=tscore.feedback or f"整体质量 {tscore.final} 偏低",
-                                    summary="trajectory")
-
-                        # 结构化记这次判定（须在轨迹 judge 可能改写 verdict 之后）。run_id 是与
-                        # harness 库 trajectory_events 的接缝：据此可捞出该次尝试（含被否草稿）
-                        # 的逐字原始输出——此前每次重答虽各有 run_id，却无处得知它是第几次、被谁否的。
-                        verify_trace["history"].append(
-                            {"attempt": attempt + 1, "run_id": run_id_a, "ok": verdict.ok,
-                             "failed": list(verdict.failed),
-                             "hard_failed": list(verdict.hard_failed),
-                             "summary": verdict.summary, "critique": verdict.critique})
-                        verify_trace["attempts"] = attempt + 1
-                        verify_trace["retries"] = attempt      # 重答次数 = 尝试数 - 1
-                        verify_trace["ok"] = verdict.ok
-
-                        if verdict.ok:
-                            yield _emit_verify("校验通过", status="ok", key=ekey)
-                            delivered = draft
-                            delivered_sources = source_sink.snapshot()
-                            # 交付本轮：只删被本版取代的旧产物，本版没重做的那类予以保留
-                            for _ev in _emit_purged(_settle_stale_fx(stale_fx, cur_fx)):
-                                yield _ev
-                            break
-                        # error 事件的 text 携带完整原因（critique），供前端展开显示
-                        # error 事件 text：中文层名 + 完整原因，供前端展示「哪层没过 + 为什么」
-                        layers = failed_layers_zh(verdict.failed) or "校验"
-                        reason = (f"{layers}未通过"
-                                  + (f"：{verdict.critique}" if verdict.critique else ""))
-                        yield _emit_verify(reason, status="error", key=ekey)
-                        if attempt == max_attempts - 1:      # 用尽次数 → 降级交付
-                            verify_trace["degraded"] = True
-                            # 最后一版已流式显示给用户，保留原样、不再在正文前拼 ⚠️ 告示
-                            # （那会导致同一段文字清屏重打）——未过由红色「结果校验未通过」徽章表达。
-                            delivered = draft or "（本轮未完成）"
-                            delivered_sources = source_sink.snapshot()
-                            errored = not draft
-                            # 降级交付本轮：同样只删被本版取代的那类旧产物
-                            for _ev in _emit_purged(_settle_stale_fx(stale_fx, cur_fx)):
-                                yield _ev
-                            break
-                        for _k in stale_fx:   # 本轮未通过、将重答，其副作用产物作废待清理
-                            stale_fx[_k] += cur_fx[_k]
-                        yield _emit_verify("重答中…", status="running")
-                        # 清屏：上一版正文已流式显示给用户，重答前清空，让新版从头打字机输出。
-                        # 同步重置 parts 与落库占位——否则刷新恰好落在重答间隙时会看到旧版残留。
-                        parts.clear()
-                        store.flush_partial(req.conversation_id, turn_run_id, "")
-                        yield Progress("reset", "")
-                        corrective = (f"你上一版回答未通过自动校验。问题：{verdict.critique}。"
-                                      f"请针对性修正后，重新完整回答原问题：{question}"
-                                      + _redo_fx_note(collect["steps"]))
-
-                    emit_gate_span(_tracer, verify_trace, gate_t0)
-                    # 交付：正文已在生成时逐字流式给用户，无需重发（避免清屏重打同一段）。
-                    # 仅当屏上确实空白（降级且本轮空产出）才补一句兜底文案，再合成 RunFinished。
-                    delivered = delivered or "（本轮未完成）"
-                    if not "".join(parts).strip():
-                        for chunk in _chunks(delivered):
-                            yield _acc(TextDelta(text=chunk))
-                    yield RunFinished(message=Message(role=Role.ASSISTANT, content=delivered))
-
-                # 清单收尾：交付门开与不开两条路径都会漏，故放在二者汇合处。仅当模型真的
+                    _mark_delivered()   # 同编排器分支：先翻终态冻结耗时，再跑交付检查等旁路
+                # 交付后的机械检查（完整性/检索依据/代码可运行/引用链接）。放在两条路径的
+                # 汇合处，理由同下方清单收尾：挂在任一分支里另一条就会漏。
+                #
+                # 只提醒、不重答、不判本轮失败——答复此刻已经逐字流给用户了，为一条提醒
+                # 把整轮推倒重来，用户白等一次不说，重答未必更好。四项都是 Critic.review
+                # 结构上做不到的（确定性检测、沙箱执行、网络探测、检索原文比对），故与它
+                # 互补而非重复；「答复够不够格」仍由 review 一家说了算。
+                if not errored and checks_on and delivered:
+                    try:
+                        _notices = await delivery_checker.run(
+                            delivered, collect["grounding"], registry)
+                        for _n in _notices:
+                            yield _emit_notice(_n)
+                        if _notices:
+                            log.info("交付提醒 %d 条：%s", len(_notices),
+                                     "、".join(n.kind for n in _notices))
+                    except Exception as e:   # 检查本身崩了绝不能影响已交付的答复
+                        log.warning("交付检查失败（不影响交付）：%s", e, exc_info=True)
+                # 清单收尾：两条路径都会漏，故放在二者汇合处。仅当模型真的
                 # 没把清单更新完才会花那一次调用（实测约 1/6 的多步任务会）。答案已定稿，
                 # 这里只动清单。errored 时不补：运行都没跑完，那些步骤本就该显示为未完成。
                 # 只有**编排器发的**计划才跳过：其状态机保证每步有终态（done/failed/skipped），
@@ -1368,15 +1130,26 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 status = "error" if errored else "done"
                 final_content = delivered or "".join(parts) or "（本轮未完成）"
                 _usage = collect.get("usage") or {}
-                _elapsed = round((time.time() - turn_start) * 1000)
+                # 复用交付时刻冻结的耗时：落库耗时 = 答案交付耗时，不含其后旁路后处理
+                # （轨迹 judge/交付检查/清单收尾）的时间。deliver_ms 为空（未走到交付点，
+                # 如极早异常）才回退到此刻。
+                _elapsed = deliver_ms if deliver_ms is not None else round(
+                    (time.time() - turn_start) * 1000)
                 # 编排器的终局校验结论（结构化）：Progress 里只有给人看的中文，统计侧解不出
-                # 「过没过 / 重答几次 / 拦在哪层」。放在落库前提取，不依赖上游分支的执行顺序。
-                # 交付门分支若已自行填过 verify_trace，则不覆盖（那条路有更细的逐层记录）。
+                # 「过没过 / 重答几次」。放在落库前从编排器发的 VERIFY_TRACE_KEY 事件里提取。
                 if verify_trace is None:
                     for _p in progress or []:
                         if _p.get("key") == VERIFY_TRACE_KEY and _p.get("detail"):
                             verify_trace = _p["detail"]
                             break
+                # 交付提醒一并记进 verify 列：它是结果层留痕的一部分，统计页据此看
+                # 「哪一项最常提醒」。没有提醒也记空列表，好把「跑过检查」与「没跑」区分开。
+                # 即便本轮没有 review 轨迹（兜底直通路径）也要记——统计侧按字段有无区分二者，
+                # 不会把「只有提醒的轮」算进结果校验的一次过率。
+                if checks_on:
+                    verify_trace = {**(verify_trace or {}), "notices": [
+                        _p["detail"]["kind"] for _p in progress or []
+                        if _p.get("scope") == "notice" and (_p.get("detail") or {}).get("kind")]}
                 store.finish_turn(req.conversation_id, turn_run_id, final_content,
                                   steps=steps or None, progress=progress or None,
                                   status=status, sources=delivered_sources or None,
@@ -1389,7 +1162,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 log.info("聊天完成 status=%s 耗时%dms tokens=%s 工具%d次 来源%d条 重答%s次",
                          status, _elapsed, _usage.get("tokens"), len(steps),
                          len(delivered_sources),
-                         verify_trace["retries"] if verify_trace else "-")
+                         (verify_trace or {}).get("retries", "-"))
                 # L3 记忆写入 + 整合：挪到后台，不阻塞本轮完成（status=done 已在上面落库、
                 # 流随 gen() 返回即刻关闭）。此前在此 await 记忆写入会让「校验通过」后仍转圈半天。
                 if not errored and final_content:

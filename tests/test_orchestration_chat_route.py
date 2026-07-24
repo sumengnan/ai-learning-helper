@@ -47,7 +47,7 @@ def _client(make_mock, monkeypatch, *, orchestrator):
                       trajectory_store=traj, sink=TrajectorySink(traj),
                       system_prompt="你是助手", orchestrator=orchestrator)
     cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,
-                    enable_answer_gate=False, sandbox_approval_timeout=0.3)
+                    sandbox_approval_timeout=0.3)
     store = ConversationStore(":memory:")
     app = create_app(config=cfg, harness=harness, store=store,
                      doc_store=DocumentStore(":memory:"))
@@ -140,7 +140,7 @@ def test_orchestrator_events_recorded_under_registered_run_id(make_mock, monkeyp
                       checkpoint_store=CheckpointStore(":memory:"),
                       trajectory_store=traj, sink=TrajectorySink(traj),
                       system_prompt="你是助手", orchestrator=RunIdToolOrchestrator())
-    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None, enable_answer_gate=False)
+    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None)
     store = ConversationStore(":memory:")
     c = TestClient(create_app(config=cfg, harness=harness, store=store,
                               doc_store=DocumentStore(":memory:")))
@@ -179,7 +179,7 @@ def test_emit_model_usage_reaches_sse_and_trajectory(make_mock, monkeypatch):
                       checkpoint_store=CheckpointStore(":memory:"),
                       trajectory_store=traj, sink=TrajectorySink(traj),
                       system_prompt="你是助手", orchestrator=EmbeddingUsageOrchestrator())
-    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None, enable_answer_gate=False)
+    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None)
     store = ConversationStore(":memory:")
     c = TestClient(create_app(config=cfg, harness=harness, store=store,
                               doc_store=DocumentStore(":memory:")))
@@ -230,7 +230,7 @@ def test_gate_open_precedes_any_tool_event(make_mock, monkeypatch):
 
     信号必须早于**任何**工具事件：save_download 远早于编排器那条「结果校验中…」
     （后者要等所有步骤跑完），只断言「发过了」不足以保证不闪一下。"""
-    from app.api.chat import GATE_OPEN_KEY
+    from app.api.chat import VERIFY_OPEN_KEY
     c, _ = _client(make_mock, monkeypatch, orchestrator=FileToolOrchestrator())
     events = _chat_verify(c, _auth(c), True)
     kinds = _kinds(events)
@@ -243,7 +243,7 @@ def test_gate_open_precedes_any_tool_event(make_mock, monkeypatch):
 
     sig = next(e for e in events
                if e["type"] == "Progress" and e["data"]["scope"] == "verify")
-    assert sig["data"]["key"] == GATE_OPEN_KEY      # 前端靠这个 key 认出它
+    assert sig["data"]["key"] == VERIFY_OPEN_KEY      # 前端靠这个 key 认出它
     assert sig["data"]["status"] == "running"
 
 
@@ -436,7 +436,7 @@ def _quality_client(make_mock, monkeypatch, scored: list):
                       trajectory_store=traj, sink=TrajectorySink(traj),
                       system_prompt="你是助手", orchestrator=_QualityOrchestrator())
     cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,
-                    enable_answer_gate=False, enable_trajectory_judge=True,
+                    enable_trajectory_judge=True,
                     sandbox_approval_timeout=0.3)
     store = ConversationStore(":memory:")
     app = create_app(config=cfg, harness=harness, store=store,
@@ -545,3 +545,18 @@ def test_purged_control_event_not_persisted(make_mock, monkeypatch):
     kept = [p for m in store.ui_messages(cid) if m["role"] == "assistant"
             for p in (m.get("progress") or []) if p.get("scope") == "purged"]
     assert kept == [], "控制事件不该落库"
+
+
+def test_gate_verdict_ok_reads_verify_trace():
+    """_gate_verdict_ok：结果校验通过/未通过据 VERIFY_TRACE 的 ok；无该事件→True（没跑校验不拦）。
+
+    用途：结果校验不通过（ok=False）时不再跑轨迹评分（质量分）。
+    """
+    from app.api.chat import _gate_verdict_ok
+    from app.orchestration.orchestrator import VERIFY_TRACE_KEY
+    passed = [{"scope": "verify", "key": VERIFY_TRACE_KEY, "detail": {"ok": True}}]
+    failed = [{"scope": "verify", "key": VERIFY_TRACE_KEY, "detail": {"ok": False}}]
+    assert _gate_verdict_ok(passed) is True
+    assert _gate_verdict_ok(failed) is False
+    assert _gate_verdict_ok([{"scope": "route", "text": "x"}]) is True   # 无 verify_trace → 不拦
+    assert _gate_verdict_ok([]) is True

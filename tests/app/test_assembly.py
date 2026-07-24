@@ -44,22 +44,23 @@ def test_browser_gated_on():
 
 
 def test_lang_images_expose_multilang_code_tools():
-    # 配了 sandbox_lang_images（语言/版本子沙箱）即注册 run_node/run_java；
+    # run_node/run_java 按 sandbox_lang_images 是否含该语言镜像注册（数据驱动，前缀匹配）；
+    # 只配 java8 → 暴露 run_java（java 前缀），但无 node → 不暴露 run_node。
     # SandboxManager/SandboxProxy 惰性建容器，构建期不连 daemon。
     h = build_harness(_cfg(enable_sandbox=True, sandbox_backend="docker",
                            sandbox_docker_host="tcp://stub:2376",
                            sandbox_lang_images={"java8": "eclipse-temurin:8-jdk"}))
     assert h.registry.get("run_python") is not None
-    assert h.registry.get("run_java") is not None
-    assert h.registry.get("run_node") is not None
+    assert h.registry.get("run_java") is not None      # java8 命中 java 前缀
+    assert h.registry.get("run_node") is None          # 无 node 镜像 → 不暴露
 
 
 def test_no_lang_images_no_multilang_code_tools():
-    # 未配 sandbox_lang_images 且未配路由（sandbox_images 空）→ 只有 run_python，无 run_java/run_node。
-    # 显式清空两者：config 默认已预置多语言镜像映射，这里要测的是「操作者未配置」的场景。
+    # 未配 sandbox_lang_images → 只有 run_python，无 run_java/run_node。
+    # 显式清空：config 默认已预置多语言镜像映射，这里要测「操作者未配置」的场景。
     h = build_harness(_cfg(enable_sandbox=True, sandbox_backend="docker",
                            sandbox_docker_host="tcp://stub:2376",
-                           sandbox_images={}, sandbox_lang_images={}))
+                           sandbox_lang_images={}))
     assert h.registry.get("run_python") is not None
     assert h.registry.get("run_java") is None
     assert h.registry.get("run_node") is None

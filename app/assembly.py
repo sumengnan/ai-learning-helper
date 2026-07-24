@@ -59,10 +59,6 @@ def build_harness(config) -> Harness:
         reg.register(tool)
         pool[tool.name] = tool
 
-    def _reg_exec(tool):
-        # 代码/命令类：套每步校验（捕 ToolError 标记执行未通过），可整体关闭
-        _reg(ValidatingTool(tool, exec_mode=True) if config.enable_step_check else tool)
-
     _reg(CalculatorTool())
     _reg(UpdatePlanTool())
 
@@ -216,12 +212,17 @@ def build_harness(config) -> Harness:
         _reg(WriteFileTool(sandbox))
         _reg(ReadFileTool(sandbox, config.sandbox_output_max_chars))
         _reg(ListFilesTool(sandbox))
-        _reg_exec(RunShellTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
-        _reg_exec(RunPythonTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
-        # 配了多镜像路由（sandbox_images）或语言/版本子沙箱（sandbox_lang_images）时暴露多语言代码工具
-        if getattr(sandbox, "sandbox_for", None) is not None or config.sandbox_lang_images:
-            _reg_exec(RunNodeTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
-            _reg_exec(RunJavaTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
+        # 代码/命令执行工具不套每步校验：执行失败（非零退出）是正常的迭代过程，不该标「执行未通过」。
+        # 工具仍在非零退出时 raise ToolError → is_error，编排器照常据此自纠正，语义不变。
+        _reg(RunShellTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
+        _reg(RunPythonTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
+        # run_node / run_java 按 sandbox_lang_images 是否含该语言镜像注册（数据驱动）。
+        # java 多版本键为 java/java8/java17…，故按前缀判断（配了 java8 也应暴露 run_java）。
+        _lang_images = config.sandbox_lang_images or {}
+        if any(k.startswith("node") for k in _lang_images):
+            _reg(RunNodeTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
+        if any(k.startswith("java") for k in _lang_images):
+            _reg(RunJavaTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
 
     if config.enable_dispatch:
         from harness.orchestration.roster_loader import load_roster
@@ -278,7 +279,7 @@ def build_harness(config) -> Harness:
     from app.orchestration.critic import Critic
     from app.orchestration.executor import Executor, HidingRegistry
     from harness.skills.matcher import SkillMatcher
-    from app.sandbox_manager import sandbox_guide
+    from app.sandbox_manager import sandbox_guide, tool_container_image
     from app.sampling_policy import intent_temperature, role_temperature
     from harness.reliability.budget import BudgetTracker
     # 规划用主模型（判断质量要求高）；温度 0.2 而非 0——拆 DAG 要一点组合能力
@@ -317,7 +318,10 @@ def build_harness(config) -> Harness:
                           temperature=role_temperature(config, "executor"),
                           # 有沙箱才按配置预渲染指引（工作目录/镜像/联网）；无沙箱这些工具没注册，提了反误导
                           sandbox_guide_text=(sandbox_guide(config)
-                                              if sandbox is not None else "")),
+                                              if sandbox is not None else ""),
+                          # 容器工具将用的镜像映射：让任务步骤里「执行中」的 run_python 等就标出镜像
+                          tool_image_for=(lambda name, args: tool_container_image(config, name, args)
+                                          if sandbox is not None else None)),
         fast_complete=_fast_complete,
         # 简单直答走快速档模型/端点（省钱提速）；未配 fast_model 时 _exec_* 即回退主 client/主模型
         fast_client=_exec_client, fast_model=_exec_model,

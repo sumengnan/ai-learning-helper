@@ -159,6 +159,17 @@ def test_planner_system_forbids_unrequested_side_effects():
     assert "持久副作用" in PLANNER_SYSTEM
 
 
+def test_planner_system_keeps_code_gen_and_run_as_one_step():
+    """「生成一段代码并执行」不得拆成生成、执行两步——run_python 一次即生成并运行。
+
+    覆盖 Bug：「随机生成一段 Python 代码，沙箱执行」被拆成「生成代码」「执行代码」两步，
+    每步的执行体各跑一遍 run_python（实测第一步跑了 2 次、第二步 1 次），冗余。
+    """
+    from app.orchestration.planner import PLANNER_SYSTEM
+    assert "生成并运行代码是一步" in PLANNER_SYSTEM
+    assert "不要拆成" in PLANNER_SYSTEM and "run_python" in PLANNER_SYSTEM
+
+
 def test_planner_system_does_not_upgrade_content_request_to_file():
     """「整理成笔记」不得被规划成文件产出。
 

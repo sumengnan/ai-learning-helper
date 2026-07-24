@@ -48,8 +48,7 @@ def _client(client_obj):
                       checkpoint_store=CheckpointStore(":memory:"),
                       trajectory_store=traj, sink=TrajectorySink(traj), system_prompt="你是助手")
     store = ConversationStore(":memory:")
-    app = create_app(config=AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,
-                                      enable_answer_gate=False),
+    app = create_app(config=AppConfig(api_key="k", app_db_path=":memory:", _env_file=None),
                      harness=harness, store=store, doc_store=DocumentStore(":memory:"))
     return TestClient(app), store
 

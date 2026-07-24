@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 from app.config import AppConfig
 from app.exam_grader import grade_objective, grade_short, parse_choice
-from app.verify import AnswerVerifier
+from app.verify import DeliveryChecker
 from harness.context.manager import ContextManager
 from harness.events import (RunError, RunFinished, TextDelta, ToolFinished, ToolStarted)
 from harness.loop.agent_loop import AgentLoop
@@ -162,12 +162,13 @@ class _StubRegistry:
         return self._t.get(name)
 
 
-class GateDriver:
-    """驱动 app/verify.py::AnswerVerifier.verify。
+class ChecksDriver:
+    """驱动 app/verify.py::DeliveryChecker.run（交付后机械检查，只提醒不拦截）。
 
-    注意「LLM 失败即放行」是 SUT 刻意的线上约定，不是 bug —— 数据集里有专门的 case
-    （judge_returns 用 RAISE / BAD_JSON）把它钉成回归测试。这与 evals 自己的 judge
-    打分器必须显式报错并不矛盾：那是打分器，这是被测对象。
+    注意「LLM/基建失败即静默跳过该项」是 SUT 刻意的线上约定，不是 bug —— 数据集里有专门
+    的 case（judge_returns 用 RAISE / BAD_JSON）把它钉成回归测试：假提醒比不提醒更糟，
+    它会训练用户忽略所有提醒。这与 evals 自己的 judge 打分器必须显式报错并不矛盾：
+    那是打分器，这是被测对象。
     """
 
     def __init__(self, *, base_config: AppConfig | None = None) -> None:
@@ -180,10 +181,8 @@ class GateDriver:
         stubs = {name: _StubCodeTool(fail=(mode == "fail"))
                  for name, mode in case.input.stub_tools.items()}
         registry = _StubRegistry(stubs) if stubs else None
-        verifier = AnswerVerifier(scripted_complete(case.input.judge_returns), cfg)
-        return await verifier.verify(case.input.question, case.input.answer,
-                                     case.input.grounding, registry,
-                                     steps=case.input.steps)
+        checker = DeliveryChecker(scripted_complete(case.input.judge_returns), cfg)
+        return await checker.run(case.input.answer, case.input.grounding, registry)
 
 
 class RetrievalDriver:

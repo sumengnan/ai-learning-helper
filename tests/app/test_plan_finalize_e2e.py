@@ -43,8 +43,7 @@ def _client(make_mock, tool_turn, text_turn, monkeypatch, finalizer):
     harness = Harness(client=make_mock(turns), registry=reg,
                       checkpoint_store=CheckpointStore(":memory:"),
                       trajectory_store=traj, sink=TrajectorySink(traj), system_prompt="你是助手")
-    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,
-                    enable_answer_gate=False)
+    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None)
     store = ConversationStore(":memory:")
     app = create_app(config=cfg, harness=harness, store=store,
                      doc_store=DocumentStore(":memory:"))
@@ -110,8 +109,7 @@ def test_clean_plan_costs_no_extra_call(make_mock, tool_turn, text_turn, monkeyp
                                         text_turn("好了。")]),
                       registry=reg, checkpoint_store=CheckpointStore(":memory:"),
                       trajectory_store=traj, sink=TrajectorySink(traj), system_prompt="你是助手")
-    app = create_app(config=AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,
-                                      enable_answer_gate=False),
+    app = create_app(config=AppConfig(api_key="k", app_db_path=":memory:", _env_file=None),
                      harness=harness, store=ConversationStore(":memory:"),
                      doc_store=DocumentStore(":memory:"))
     c = TestClient(app)

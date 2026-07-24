@@ -148,7 +148,7 @@ class AddQuestionsTool(Tool):
         skipped = len(params.questions) - added
         if added == 0:
             return f"没有新题入库（跳过 {skipped} 道：无效或与题库重复）。"
-        # 末尾带机读标记〔题目ID:id,id〕：交付门据此在校验不通过时清理该轮误入库的题（前端剥离不展示）
+        # 末尾带机读标记〔题目ID:id,id〕：编排器单步重试时据此清理该轮误入库的题（前端剥离不展示）
         return (f"已入库 {added} 道，跳过 {skipped} 道（无效或重复）：\n{_stem_list(stems)}\n"
                 f"{_ID_HINT}〔题目ID:{','.join(added_ids)}〕")
 
@@ -185,7 +185,7 @@ class GenerateQuestionsTool(Tool):
         # 就会把一串对用户毫无意义的哈希写进学习计划里。
         msg = (f"已从知识库生成并入库 {len(qs)} 道题（主题：{params.topic}）：\n"
                f"{_stem_list([q.get('stem', '') for q in qs])}")
-        # 末尾带机读标记〔题目ID:id,id〕：交付门据此清理失败轮误入库的题（前端剥离不展示）；
+        # 末尾带机读标记〔题目ID:id,id〕：编排器单步重试时据此清理失败轮误入库的题（前端剥离不展示）；
         # 也让后续「就考刚才这几道」能用 start_exam(source=ids) 精确取到这批题
         return f"{msg}\n{_ID_HINT}〔题目ID:{','.join(ids)}〕" if ids else msg
 
@@ -309,8 +309,11 @@ class StartExamTool(Tool):
         "开始一场由系统托管的模拟考试。开考后，每题的判分与「答错自动入错题集」都由系统"
         "在后台确定性完成——你【无需也不要】再调用 save_wrong_answer。你只负责呈现题目、"
         "并在系统给出判定后讲解。\n"
-        "source：题源，bank=从题库随机抽题、ids=只考指定的题库题目、"
+        "source：题源，bank=从题库抽题、ids=只考指定的题库题目、"
         "wrong=从错题集抽题重考、adhoc=你现编题目考。\n"
+        "用户指名要考某主题（如「考我 AI 相关的题」「抽几道 Java 题」）时，source=bank 【必须】"
+        "把该主题填进 topic（按题干关键词筛），否则会全库随机抽、考出不相关的题；无匹配时会明确报错，"
+        "别再无 topic 硬抽冒充。\n"
         "当用户指名要考某几道题（如「刚才生成的那几道」「就考这几题」）时【必须】用 "
         "source=ids 并在 question_ids 传入那些题的 id，按传入顺序出题；"
         "此时 count 与 types 忽略。题目 id 来自 add_questions/generate_questions 返回的"
@@ -328,6 +331,7 @@ class StartExamTool(Tool):
         mode: str = "instant"
         questions: _QuestionList | None = None
         question_ids: _OptIdList = None
+        topic: str | None = None      # source=bank 时按题干关键词筛主题（如「AI」「Java」）
 
     def __init__(self, exam_store, user_id: str, conv_id: str,
                  question_store=None, wrong_store=None) -> None:
@@ -378,8 +382,13 @@ class StartExamTool(Tool):
         else:  # bank
             if self._qs is None:
                 return "题库不可用。"
-            questions = self._qs.sample(self._uid, count, params.types)
+            topic = (params.topic or "").strip() or None
+            questions = self._qs.sample(self._uid, count, params.types, keyword=topic)
             if not questions:
+                if topic:
+                    return (f"题库里没有匹配『{topic}』的题（按题干关键词筛）。不要改用无主题的全库随机抽"
+                            f"冒充——那会考出不相关的题。可先用 generate_questions 生成『{topic}』的题入库，"
+                            f"或换个主题，或用 source=adhoc 现编『{topic}』的题考用户。")
                 return ("题库为空，无法抽题考试。可先到「题库」生成题目，"
                         "或让我用 add_questions 整理入库、或用 source=adhoc 现编题考你。")
 
