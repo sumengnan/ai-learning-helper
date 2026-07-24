@@ -88,6 +88,15 @@ def sandbox_guide(config) -> str:
         f"\n**要让某语言的代码读到你写的数据文件**：给 write_file/read_file/list_files 传 language 参数"
         f"（如 write_file(path, content, language=\"python\") 之后 run_python 就能读到）；"
         f"不传 language 则落 shell 容器，run_python 等**看不到**。跨语言之间文件也不共享。")
+    # 用户实测踩坑：AI 在 python 容器 pip 装好依赖后，切去 run_shell 想接着用/继续 pip，结果
+    # 到了独立的 shell 容器（没 python/pip、也看不到 pylibs），pip 一直报错、回不来。讲死这条。
+    lines.append(
+        f"\n**run_shell 是独立的 shell 容器**（{shell_img}），与 run_python/run_node/run_java 的容器"
+        f"**完全隔开**：它看不到你在那些语言容器里装的包或写的文件，通常也**没有 python/pip/node**。"
+        f"所以：**你在 run_python 里 pip 装的包、写的文件，只有 run_python 能用**；想在这套 python 环境里"
+        f"执行 shell 命令（跑脚本、装包、看文件等），一律用 run_python 里的 `subprocess`/`os.system`"
+        f"（同一容器），**不要切去 run_shell**——那是另一个容器，你装的东西它一概没有。run_shell 只用于"
+        f"与语言环境无关的纯 shell 操作。")
     # 装依赖：先讲权限硬约束（防止照旧文案去 apt 白撞），再按网络讲可行路径
     if online:
         lines.append(
