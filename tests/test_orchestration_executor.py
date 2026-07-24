@@ -267,26 +267,38 @@ def test_sandbox_guide_local_only_workdir_and_forbids_host_paths():
 
 
 def test_sandbox_guide_docker_reports_images_and_network():
-    """docker 后端：如实报告基础容器/语言子沙箱的镜像与联网，并据网络说明能否装依赖。"""
+    """docker 后端：如实报告 shell 容器与各语言容器的镜像、联网，并据网络说明能否装依赖。"""
     from app.sandbox_manager import sandbox_guide
     g = sandbox_guide(_sbx_cfg(
-        sandbox_backend="docker", sandbox_image="quay.io/centos/centos:stream9",
-        sandbox_network="bridge", sandbox_sub_network="none"))
-    assert "quay.io/centos/centos:stream9" in g   # 基础容器镜像
-    assert "python:3.12-slim" in g                # 语言子沙箱镜像（默认 lang_images）
-    assert "可联网" in g and "禁止联网" in g        # base=bridge 可联网、子沙箱=none 禁网
+        sandbox_backend="docker", sandbox_shell_image="quay.io/centos/centos:stream9",
+        sandbox_network="bridge"))
+    assert "quay.io/centos/centos:stream9" in g   # shell 容器镜像
+    assert "python:3.12-slim" in g                # 语言容器镜像（默认 lang_images）
+    assert "shell 容器" in g and "语言" in g       # 按语言各自独立容器
+    assert "可联网" in g                          # bridge → 可联网
     assert "pip install" in g                     # 联网环境可自行装包的指引
+    assert "language" in g                        # 文件工具 language 参数落对应容器的说明
     # 权限硬约束：加固沙箱非 root，apt/全局装会 Permission denied——必须如实告知，否则模型照旧文案去 apt 白撞
     assert "非 root" in g and "apt" in g
     assert "--target" in g                        # 给出唯一可行路径：装到可写工作目录
 
 
-def test_sandbox_guide_docker_reflects_sub_network_online():
-    """子沙箱放开网络（bridge）时，指引里子沙箱也应体现「可联网」。"""
+def test_sandbox_guide_reports_resource_limits():
+    """提示词须如实告知每容器的 CPU/内存/磁盘上限，并点明 tmpfs 工作区占内存。"""
     from app.sandbox_manager import sandbox_guide
-    g = sandbox_guide(_sbx_cfg(
-        sandbox_backend="docker", sandbox_network="none", sandbox_sub_network="bridge"))
-    assert "可联网" in g and "禁止联网" in g        # 基础禁网、子沙箱可联网都如实出现
+    g = sandbox_guide(_sbx_cfg(sandbox_backend="docker", sandbox_cpus=2.0,
+                               sandbox_mem_limit="200m", sandbox_disk_limit="500m"))
+    assert "资源上限" in g
+    assert "2.0 核" in g and "200m" in g and "500m" in g
+    assert "tmpfs" in g and "内存" in g          # 点明工作区是内存盘、占内存
+
+
+def test_sandbox_guide_docker_offline_says_cannot_install():
+    """禁网（sandbox_network=none）时，指引应说明装不了包、只能用预装。"""
+    from app.sandbox_manager import sandbox_guide
+    g = sandbox_guide(_sbx_cfg(sandbox_backend="docker", sandbox_network="none"))
+    assert "禁止联网" in g
+    assert "预装" in g and "apt" in g             # 禁网 + 非 root，一律装不了
 
 
 def test_build_prompt_does_not_glue_step_id_to_content():
