@@ -66,8 +66,11 @@ def sandbox_guide(config) -> str:
     cpus = getattr(config, "sandbox_cpus", 1.0)
     mem = getattr(config, "sandbox_mem_limit", "") or "（未限）"
     disk = getattr(config, "sandbox_disk_limit", "") or "（未限）"
+    exec_to = getattr(config, "sandbox_exec_timeout", 30)
     lines = [
-        f"\n\n【资源上限】每个容器：CPU {cpus} 核、内存 {mem}、工作区磁盘 {disk}。"
+        f"\n\n【资源上限】每个容器：CPU {cpus} 核、内存 {mem}、工作区磁盘 {disk}、单次执行超时 {exec_to} 秒。"
+        f"单次执行超时罩住整条命令——**包括你在代码里起的 pip/子进程**，到点强杀（exit 124）；"
+        f"在 subprocess 里设更长的 timeout 没用，外层这个才算数。"
         f"注意工作区 {ws} 是内存盘（tmpfs），其占用**算进内存额度**——所以别在沙箱里生成/下载超过内存额度的"
         f"大文件（大文件会先触内存上限被 OOM，而非磁盘上限）；CPU/内存吃满会被限流或直接杀掉进程。"
         f"要处理大数据就分块流式处理，不要一次性全load 进内存或落一个大文件。",
@@ -85,6 +88,15 @@ def sandbox_guide(config) -> str:
         f"\n**要让某语言的代码读到你写的数据文件**：给 write_file/read_file/list_files 传 language 参数"
         f"（如 write_file(path, content, language=\"python\") 之后 run_python 就能读到）；"
         f"不传 language 则落 shell 容器，run_python 等**看不到**。跨语言之间文件也不共享。")
+    # 用户实测踩坑：AI 在 python 容器 pip 装好依赖后，切去 run_shell 想接着用/继续 pip，结果
+    # 到了独立的 shell 容器（没 python/pip、也看不到 pylibs），pip 一直报错、回不来。讲死这条。
+    lines.append(
+        f"\n**run_shell 是独立的 shell 容器**（{shell_img}），与 run_python/run_node/run_java 的容器"
+        f"**完全隔开**：它看不到你在那些语言容器里装的包或写的文件，通常也**没有 python/pip/node**。"
+        f"所以：**你在 run_python 里 pip 装的包、写的文件，只有 run_python 能用**；想在这套 python 环境里"
+        f"执行 shell 命令（跑脚本、装包、看文件等），一律用 run_python 里的 `subprocess`/`os.system`"
+        f"（同一容器），**不要切去 run_shell**——那是另一个容器，你装的东西它一概没有。run_shell 只用于"
+        f"与语言环境无关的纯 shell 操作。")
     # 装依赖：先讲权限硬约束（防止照旧文案去 apt 白撞），再按网络讲可行路径
     if online:
         lines.append(
@@ -94,12 +106,43 @@ def sandbox_guide(config) -> str:
             f"确需额外的语言包时，只能装到可写的工作目录 {ws} 内："
             f"Python 用 `pip install --no-cache-dir --target=<{ws} 下的子目录> 包名`，再把该目录加入 sys.path；"
             f"Node 在 {ws} 里 `npm i 包名` 装到本地 node_modules。"
-            "任何情况下都优先使用镜像预装的库与命令；装包失败就改用预装的等价物，别反复重试。")
+            # 用户实测：AI 去 pip install llama-index，30s 执行超时被杀（exit 124）。大框架依赖成百上千、
+            # 还常带 C 扩展，slim 镜像又没编译器，给再多时间也装不完。必须把这条讲死，否则 AI 白撞。
+            f"**但装包受上面那条『单次执行超时 {exec_to}s』严格限制**：只有体量小、纯 Python、依赖少的包"
+            f"才可能在预算内装完；镜像通常不带编译器，带 C/C++ 扩展的包（numpy 之外多数科学库、需编译的）装不了；"
+            f"**大型框架（如 llama-index、langchain、torch、tensorflow、transformers 等）依赖极多、体量巨大，"
+            f"必然超时/OOM/编译失败——不要尝试**，直接改用镜像预装的库，或如实告诉用户「该库在沙箱里装不了」并给替代思路。"
+            f"任何情况下都优先使用镜像预装的库与命令；装包失败就改用预装的等价物，别反复重试。")
     else:
         lines.append(
             "关于装依赖：容器禁止联网，且非 root、系统目录不可写——apt/dnf、pip、npm 一律装不了，"
             "只能使用镜像已自带的标准库与预装命令，不要尝试联网安装（必然失败），改用镜像已有的等价命令。")
     return guide + "".join(lines)
+
+
+# 工具名 → 语言（用于把 run_python 等映射到它将用的容器镜像）
+_TOOL_LANG = {"run_python": "python", "run_node": "node", "run_java": "java", "run_shell": "shell"}
+
+
+def tool_container_image(config, tool_name: str, args: dict | None = None) -> str | None:
+    """容器工具（run_python/run_node/run_java/run_shell）**将要**用的镜像名。
+
+    确定性映射（语言[+version]→镜像），故在工具开始执行时就能算出、无需等它跑完——
+    让前端在「执行中」就能标出用的哪个镜像（run_python 可能跑很久，如 pip 装依赖）。
+    非容器工具或非 docker 后端返回 None（前端不显示）。
+    """
+    if getattr(config, "sandbox_backend", "") != "docker":
+        return None
+    lang = _TOOL_LANG.get(tool_name)
+    if lang is None:
+        return None
+    if lang == "shell":
+        return getattr(config, "sandbox_shell_image", "") or None
+    images = getattr(config, "sandbox_lang_images", None) or {}
+    version = (args or {}).get("version")
+    if version and f"{lang}{version}" in images:
+        return images[f"{lang}{version}"]
+    return images.get(lang) or getattr(config, "sandbox_shell_image", "") or None
 
 
 # 当前请求所属会话；由 chat 处理器在 pump() 内 set，工具执行都在此上下文内。

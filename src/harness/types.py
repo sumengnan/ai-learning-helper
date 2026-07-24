@@ -28,6 +28,8 @@ class ToolResult:
     follow_up: list["Message"] = field(default_factory=list)
     # 回给模型的正文（不含 marker）。None 表示与 content 相同。
     model_content: str | None = None
+    # 仅供前端展示的元信息（如容器工具用的镜像名），**不进模型上下文**。None=无。
+    meta: dict | None = None
 
     def for_model(self) -> str:
         """喂进模型上下文的那份结果：剥掉只给机器看的 marker 尾巴。"""
@@ -45,6 +47,8 @@ class ToolOutput:
     text: str
     follow_up: list["Message"] = field(default_factory=list)
     marker: str = ""
+    # 仅供前端展示的元信息（如容器工具用的镜像名），**不进模型上下文**。None=无。
+    meta: dict | None = None
 
 
 @dataclass

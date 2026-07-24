@@ -159,6 +159,38 @@ async def test_executor_passes_through_raw_tool_events_for_stats(make_mock):
     assert any(isinstance(e, StepStarted) for e in events)    # StepStarted 透传（供步数统计）
 
 
+async def test_executor_tool_detail_carries_image(make_mock):
+    """任务步骤：容器工具（run_python 等）的执行明细 detail 要带镜像名（前端旁边显示用哪个镜像）。"""
+    from pydantic import BaseModel
+    from harness.llm.base import ToolCallDelta
+    from harness.tools.base import Tool
+    from harness.types import ToolOutput
+
+    class _P(BaseModel):
+        code: str = ""
+
+    class _FakePy(Tool):
+        name = "run_python"; description = "d"; Params = _P
+        async def run(self, params):
+            return ToolOutput(text="exit_code=0", meta={"image": "python:3.12-slim"})
+
+    reg = ToolRegistry(); reg.register(_FakePy())
+    turns = [
+        [StreamChunk(type="tool_call", tool_call_delta=ToolCallDelta(
+            index=0, id="c1", name="run_python", arguments='{"code":"print(1)"}')),
+         StreamChunk(type="done")],
+        [StreamChunk(type="text", text="done"), StreamChunk(type="done")]]
+    # tool_image_for：让「执行中」的开始行也带镜像（run_python 可能跑很久，不必等它跑完才显示）
+    ex = Executor(client=make_mock(turns), registry=reg, system_prompt="sp", model="m", max_steps=3,
+                  tool_image_for=lambda name, args: "python:3.12-slim" if name == "run_python" else None)
+    events, _ = await _collect(ex.execute(_step(), {}))
+    progs = [e for e in events if isinstance(e, Progress)]
+    started = [p for p in progs if p.status == "running" and p.detail and p.detail.get("tool") == "run_python"]
+    assert started and started[-1].detail.get("image") == "python:3.12-slim"   # 执行中就带镜像
+    finished = [p for p in progs if p.status in ("ok", "error") and p.detail and "result" in p.detail]
+    assert finished and finished[-1].detail.get("image") == "python:3.12-slim"  # 完成也带（来自 r.meta）
+
+
 def _always_tool_turns():
     from harness.llm.base import ToolCallDelta
     return [[StreamChunk(type="tool_call", tool_call_delta=ToolCallDelta(
@@ -284,13 +316,23 @@ def test_sandbox_guide_docker_reports_images_and_network():
 
 
 def test_sandbox_guide_reports_resource_limits():
-    """提示词须如实告知每容器的 CPU/内存/磁盘上限，并点明 tmpfs 工作区占内存。"""
+    """提示词须如实告知每容器的 CPU/内存/磁盘/执行超时上限，并点明 tmpfs 工作区占内存。"""
     from app.sandbox_manager import sandbox_guide
     g = sandbox_guide(_sbx_cfg(sandbox_backend="docker", sandbox_cpus=2.0,
-                               sandbox_mem_limit="200m", sandbox_disk_limit="500m"))
+                               sandbox_mem_limit="200m", sandbox_disk_limit="500m",
+                               sandbox_exec_timeout=600.0))
     assert "资源上限" in g
     assert "2.0 核" in g and "200m" in g and "500m" in g
+    assert "600" in g and "执行超时" in g        # 执行超时也要写进去（罩住 pip 子进程）
     assert "tmpfs" in g and "内存" in g          # 点明工作区是内存盘、占内存
+
+
+def test_sandbox_guide_warns_heavy_pip_installs_time_out():
+    """回归：AI 曾 pip install llama-index 撞执行超时。提示词须点明大框架装不了、别试。"""
+    from app.sandbox_manager import sandbox_guide
+    g = sandbox_guide(_sbx_cfg(sandbox_backend="docker", sandbox_network="bridge"))
+    assert "llama-index" in g and "不要尝试" in g
+    assert "执行超时" in g and "pip" in g         # 装包受执行超时约束，罩住 pip 子进程
 
 
 def test_sandbox_guide_docker_offline_says_cannot_install():

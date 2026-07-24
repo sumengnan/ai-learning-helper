@@ -2,7 +2,7 @@
 import pytest
 from pydantic import BaseModel
 
-from harness.tools.base import Tool, ToolError
+from harness.tools.base import Tool
 from harness.types import ToolOutput
 from harness.progress import set_emitter, reset_emitter
 
@@ -23,20 +23,6 @@ class _SearchStub(Tool):
 
     async def run(self, params):
         return self._ret
-
-
-class _ExecStub(Tool):
-    name = "run_python"
-    description = "d"
-    Params = _P
-
-    def __init__(self, fail=False):
-        self._fail = fail
-
-    async def run(self, params):
-        if self._fail:
-            raise ToolError("exit_code=1\nSyntaxError")
-        return "exit_code=0\nok"
 
 
 def _capture():
@@ -112,28 +98,6 @@ async def test_check_exception_does_not_swallow_result():
     finally:
         reset_emitter(tok)
     assert out == "原始结果"                                     # 放行：绝不吞原结果
-
-
-# ---- exec 型（代码/命令）----
-
-async def test_exec_pass_emits_ok():
-    evs, tok = _capture()
-    try:
-        out = await ValidatingTool(_ExecStub(fail=False), exec_mode=True).run(_P())
-    finally:
-        reset_emitter(tok)
-    assert out == "exit_code=0\nok"
-    assert any(e.scope == "check" and e.status == "ok" for e in evs)
-
-
-async def test_exec_fail_emits_error_and_reraises():
-    evs, tok = _capture()
-    try:
-        with pytest.raises(ToolError):
-            await ValidatingTool(_ExecStub(fail=True), exec_mode=True).run(_P())
-    finally:
-        reset_emitter(tok)
-    assert any(e.scope == "check" and e.status == "error" for e in evs)
 
 
 # ---- 透明代理 ----

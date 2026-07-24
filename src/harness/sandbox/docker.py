@@ -31,6 +31,7 @@ class DockerSandbox:
                  tls_client_key: str = "", tls_verify: bool = True,
                  labels: dict | None = None, display_name: str = "沙箱") -> None:
         self.workspace = workspace
+        self.image = image                  # 公开：供工具在结果 meta 里标注「用的哪个镜像」
         self._display_name = display_name   # 前端进度里区分基础沙箱/子沙箱
         self._docker_host = docker_host
         self._image = image

@@ -44,7 +44,8 @@ from ..orchestration.orchestrator import VERIFY_TRACE_KEY
 from ..orchestration.executor import CLARIFY_GUIDE
 from ..profile import render_profile_block
 from ..side_effects import SideEffectPurger
-from ..sandbox_manager import reset_sandbox_conv, sandbox_guide, set_sandbox_conv
+from ..sandbox_manager import (
+    reset_sandbox_conv, sandbox_guide, set_sandbox_conv, tool_container_image)
 from ..summaries import SummaryStore
 from ..summarizer import RollingSummarizer
 from ..sources import SOURCE_GUIDE, SourceSink, wrap_tool
@@ -696,18 +697,21 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     tiers=config.model_price_tiers,
                     tiers_by_model=config.model_price_tiers_by_model)
                 try:
-                    # 本轮附件播种进会话沙箱 /workspace/uploads/，供模型直接执行（写盘≠给模型）
+                    # 本轮附件登记给沙箱：供各语言容器（按需创建时）在 /workspace/uploads/ 播种，
+                    # 让模型可直接执行/读取（写盘≠给模型）。累积语义由 manager.set_uploads 保证。
                     if attachment_metas and harness.sandbox is not None:
+                        _ups = []
                         for meta in attachment_metas:
                             try:
-                                data = attachment_store.bytes(meta["id"])
-                                await harness.sandbox.write_bytes(
-                                    f"uploads/{meta['filename']}", data)
-                            except Exception as e:  # 播种失败不应打断本轮对话
+                                _ups.append((f"uploads/{meta['filename']}",
+                                             attachment_store.bytes(meta["id"])))
+                            except Exception as e:  # 取字节失败不应打断本轮对话
                                 queue.put_nowait(Progress(
                                     scope="sandbox",
                                     text=f"附件 {meta['filename']} 载入沙箱失败：{e}",
                                     status="error"))
+                        if _ups:
+                            await harness.sandbox.set_uploads(_ups)
                     async for ev in harness.sink.wrap(_merged(loop_obj.run(message))):
                         queue.put_nowait(ev)
                 except Exception as e:  # 兜底成 RunError，避免流卡死
@@ -745,6 +749,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     elif isinstance(ev, ToolStarted):
                         tc = ev.tool_call
                         st = {"tool": tc.name, "args": tc.arguments}
+                        _img0 = tool_container_image(config, tc.name, tc.arguments)  # 执行中就标镜像
+                        if _img0:
+                            st["image"] = _img0
                         collect["steps"].append(st)
                         step_by_id[tc.id] = st
                         tool_t0[tc.id] = time.time()
@@ -754,6 +761,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         if st is not None:
                             st["result"] = ev.result.content
                             st["is_error"] = ev.result.is_error
+                            _img = (ev.result.meta or {}).get("image")   # 容器工具用的镜像名（前端展示）
+                            if _img:
+                                st["image"] = _img
                             _t0 = tool_t0.pop(ev.result.tool_call_id, None)
                             _dur = round((time.time() - _t0) * 1000) if _t0 else -1
                             log.info("工具完成 %s 耗时%dms error=%s 输出%d字",

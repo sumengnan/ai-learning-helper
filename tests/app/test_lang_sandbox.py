@@ -1,4 +1,10 @@
-"""语言/版本一次性子沙箱（SandboxProxy.run_code）——不碰 Docker，用 stub 子沙箱。"""
+"""按语言容器（SandboxProxy.for_language / SandboxManager.get_lang）——不碰 Docker，用 stub 容器。
+
+新模型：AI 要跑哪种语言就自动起哪种语言的容器（run_python→python 容器、run_shell→shell 容器…），
+各 (会话,语言) 一个独立容器、缓存复用、1h 空闲销毁；文件工具带 language 落对应容器、缺省 shell。
+"""
+import time as _t
+
 import pytest
 
 import app.sandbox_manager as sm
@@ -8,6 +14,7 @@ from app.sandbox_manager import (
 from harness.sandbox.base import ExecResult, SandboxError
 from harness.tools.base import ToolExecutor, ToolRegistry
 from harness.tools.builtins.code_tool import RunJavaTool, RunPythonTool
+from harness.tools.builtins.fs_tools import ReadFileTool, WriteFileTool
 from harness.types import ToolCall
 
 _LANG_IMAGES = {"python": "python:3.12-slim", "java": "eclipse-temurin:21-jdk",
@@ -15,23 +22,25 @@ _LANG_IMAGES = {"python": "python:3.12-slim", "java": "eclipse-temurin:21-jdk",
 
 
 def _cfg(**kw):
-    return AppConfig(api_key="k", sandbox_backend="local", app_db_path=":memory:",
-                     sandbox_lang_images=_LANG_IMAGES, **kw)
+    # docker 后端：语言容器经 build_sandbox 造（下面 fixture 打桩），不连真实 daemon
+    return AppConfig(api_key="k", sandbox_backend="docker", app_db_path=":memory:",
+                     sandbox_docker_host="tcp://stub:2376", sandbox_shell_image="debian:12-slim",
+                     sandbox_lang_images=_LANG_IMAGES, _env_file=None, **kw)
 
 
-class _StubSub:
-    """假的一次性子沙箱：记录镜像/生命周期/执行；exec 时可产出产物文件。"""
-    made: list["_StubSub"] = []
+class _StubBox:
+    """假容器：记录镜像/label/生命周期/执行与文件。for_language 返回自身（供直连用例）。"""
+    made: list["_StubBox"] = []
 
-    def __init__(self, image, produce=None):
+    def __init__(self, image=None, label=None):
         self.image = image
+        self.label = label
         self.workspace = "/workspace"
         self.started = 0
         self.closed = 0
-        self.execs = []
-        self.files: dict[str, str] = {}
-        self._produce = produce or {}
-        _StubSub.made.append(self)
+        self.execs: list = []
+        self.files: dict = {}
+        _StubBox.made.append(self)
 
     async def start(self):
         self.started += 1
@@ -39,18 +48,25 @@ class _StubSub:
     async def close(self):
         self.closed += 1
 
-    async def exec(self, command, timeout):
+    async def for_language(self, language=None, version=None):
+        await self.start()
+        return self
+
+    async def exec(self, command, timeout, *, quiet=False):
         self.execs.append(command)
-        self.files.update(self._produce)      # 模拟执行产出文件
-        return ExecResult("sub-out", "", 0)
+        return ExecResult("out", "", 0)
 
     async def write_file(self, path, content):
         self.files[path] = content
 
+    async def write_bytes(self, path, data):
+        self.files[path] = data
+
     async def read_file(self, path):
         if path not in self.files:
             raise SandboxError(path)
-        return self.files[path]
+        v = self.files[path]
+        return v if isinstance(v, str) else v.decode()
 
     async def list_files(self, path="."):
         return sorted(self.files)
@@ -64,142 +80,197 @@ def _conv():
 
 
 @pytest.fixture
-def _stub_docker(monkeypatch):
-    _StubSub.made = []
-    captured = {}
+def _stub(monkeypatch):
+    """打桩 build_sandbox（语言容器）与 _docker_for（浏览器容器），都造 _StubBox。"""
+    _StubBox.made = []
+    calls: list = []
+    captured: dict = {}
+
+    def fake_build(config, labels=None, *, image=None, network=None,
+                   display_name="沙箱", mem_limit=None):
+        calls.append({"image": image, "labels": labels or {}, "display_name": display_name})
+        return _StubBox(image=image, label=(labels or {}).get("lang"))
 
     def fake_docker_for(config, image, labels=None, network=None,
-                        display_name="基础沙箱", mem_limit=None):
-        captured["image"] = image
-        captured["labels"] = labels
-        captured["network"] = network
-        captured["display_name"] = display_name
-        captured["mem_limit"] = mem_limit
-        return _StubSub(image, produce=captured.get("produce"))
+                        display_name="沙箱", mem_limit=None):
+        captured.update(image=image, labels=labels, network=network,
+                        display_name=display_name, mem_limit=mem_limit)
+        return _StubBox(image=image, label=(labels or {}).get("role"))
+
+    monkeypatch.setattr(sm, "build_sandbox", fake_build)
     monkeypatch.setattr(sm, "_docker_for", fake_docker_for)
-    return captured
+    return {"calls": calls, "browser": captured}
 
 
-async def test_run_code_routes_version_to_cached_sub(_conv, _stub_docker):
+def _lang_boxes():
+    """本次建的语言/ shell 容器（排除浏览器 role=browser-global）。"""
+    return [b for b in _StubBox.made if b.label != "browser-global"]
+
+
+# ---- for_language / get_lang：按语言起容器 ----
+
+async def test_for_language_routes_version_to_image(_conv, _stub):
     proxy = SandboxProxy(SandboxManager(_cfg()))
-    res = await proxy.run_code("java", "8", "Main.java", "class Main{}",
-                               None, "javac Main.java && java Main", timeout=5)
-    assert res.exit_code == 0
-    assert _stub_docker["image"] == "eclipse-temurin:8-jdk"     # version=8 → java8 镜像
-    assert _stub_docker["network"] == "none"                    # 子沙箱默认禁网
-    assert _stub_docker["labels"]["role"] == "lang"             # 缓存复用（非一次性）
-    sub = _StubSub.made[0]
-    assert sub.started == 1 and sub.closed == 0                 # 用完不销毁（缓存复用）
-    assert sub.execs == [["sh", "-c", "javac Main.java && java Main"]]
+    box = await proxy.for_language("java", "8")           # version=8 → java8 镜像
+    assert box.image == "eclipse-temurin:8-jdk"
+    assert box.label == "java8" and box.started == 1
+    assert _stub["calls"][-1]["labels"]["lang"] == "java8"
 
 
-async def test_cached_sub_reused_across_runs_not_rebuilt(_conv, _stub_docker):
-    """同会话同语言连续执行：复用同一子沙箱，不重建、不销毁（避免反复重建镜像容器）。"""
+async def test_same_conv_lang_reused_across_runs(_conv, _stub):
+    """同会话同语言连续 run_python：复用同一容器，不重建、不销毁。"""
     proxy = SandboxProxy(SandboxManager(_cfg()))
-    await proxy.run_code("python", None, "a.py", "print(1)", ["python3", "a.py"], None, timeout=5)
-    await proxy.run_code("python", None, "b.py", "print(2)", ["python3", "b.py"], None, timeout=5)
-    assert len(_StubSub.made) == 1                              # 只建了一个容器
-    assert _StubSub.made[0].closed == 0                         # 期间从未销毁
-    assert len(_StubSub.made[0].execs) == 2                     # 两次执行落在同一容器
+    reg = ToolRegistry(); reg.register(RunPythonTool(proxy, timeout=5))
+    ex = ToolExecutor(reg)
+    await ex.execute(ToolCall(id="1", name="run_python", arguments={"code": "print(1)"}))
+    await ex.execute(ToolCall(id="2", name="run_python", arguments={"code": "print(2)"}))
+    boxes = _lang_boxes()
+    assert len(boxes) == 1                                # 只建了一个 python 容器
+    assert boxes[0].closed == 0                           # 期间从未销毁
+    assert len(boxes[0].execs) == 2                       # 两次执行落同一容器
+    assert boxes[0].image == "python:3.12-slim"
 
 
-async def test_different_langs_get_separate_cached_subs(_conv, _stub_docker):
+async def test_different_langs_get_separate_containers(_conv, _stub):
     proxy = SandboxProxy(SandboxManager(_cfg()))
-    await proxy.run_code("python", None, "a.py", "print(1)", ["python3", "a.py"], None, timeout=5)
-    await proxy.run_code("java", "21", "Main.java", "class Main{}", None, "true", timeout=5)
-    assert len(_StubSub.made) == 2                              # 不同语言各自一个子沙箱
-    assert {s.image for s in _StubSub.made} == {"python:3.12-slim", "eclipse-temurin:21-jdk"}
+    await proxy.for_language("python")
+    await proxy.for_language("java", "21")
+    boxes = _lang_boxes()
+    assert len(boxes) == 2
+    assert {b.image for b in boxes} == {"python:3.12-slim", "eclipse-temurin:21-jdk"}
 
 
-async def test_destroy_conv_also_closes_its_cached_subs(_conv, _stub_docker):
-    mgr = SandboxManager(_cfg())
-    proxy = SandboxProxy(mgr)
-    await proxy.run_code("python", None, "a.py", "print(1)", ["python3", "a.py"], None, timeout=5)
-    sub = _StubSub.made[0]
-    assert sub.closed == 0
-    await mgr.destroy("conv-x")                                 # 删除会话 → 连同子沙箱一并销毁
-    assert sub.closed == 1
-    assert mgr._subs == {}
-
-
-async def test_idle_cached_sub_evicted_after_timeout(_conv, _stub_docker):
-    import time as _t
-    mgr = SandboxManager(_cfg())
-    proxy = SandboxProxy(mgr)
-    await proxy.run_code("python", None, "a.py", "print(1)", ["python3", "a.py"], None, timeout=5)
-    sub = _StubSub.made[0]
-    # 假装该子沙箱早已空闲超时。必须相对当前时钟回拨，不能直接填 0.0：monotonic() 是开机
-    # 以来的秒数，填 0 等价于假设「开机已超过 sub_idle_timeout（默认 1h）」——开发机常年
-    # 满足，刚拉起的 CI 容器不满足，于是同一份代码本地绿、CI 红。
-    mgr._subs[("conv-x", "python")].last_used = _t.monotonic() - (mgr._sub_idle_timeout + 1)
-    await mgr.get("other-conv")                                 # 别的会话活动触发惰性驱逐
-    assert sub.closed == 1                                      # 空闲超时 → 自动销毁
-    assert ("conv-x", "python") not in mgr._subs
-
-
-async def test_close_all_closes_cached_subs(_conv, _stub_docker):
-    mgr = SandboxManager(_cfg())
-    proxy = SandboxProxy(mgr)
-    await proxy.run_code("python", None, "a.py", "print(1)", ["python3", "a.py"], None, timeout=5)
-    sub = _StubSub.made[0]
-    await mgr.close_all()
-    assert sub.closed == 1 and mgr._subs == {}
-
-
-async def test_caching_off_restores_ephemeral_behavior(_conv, _stub_docker):
-    """sandbox_sub_idle_timeout<=0：退回「用完即销毁」旧语义（role=ephemeral、closed=1）。"""
-    proxy = SandboxProxy(SandboxManager(_cfg(sandbox_sub_idle_timeout=0)))
-    await proxy.run_code("python", None, "a.py", "print(1)", ["python3", "a.py"], None, timeout=5)
-    assert _stub_docker["labels"]["role"] == "ephemeral"
-    sub = _StubSub.made[0]
-    assert sub.closed == 1                                      # 关缓存：用完即销毁
-    # 再跑一次应新建一个（不复用）
-    await proxy.run_code("python", None, "b.py", "print(2)", ["python3", "b.py"], None, timeout=5)
-    assert len(_StubSub.made) == 2
-
-
-async def test_run_code_copies_artifacts_back_to_base(_conv, _stub_docker):
-    _stub_docker["produce"] = {"out.txt": "done"}               # 子沙箱执行时产出 out.txt
-    mgr = SandboxManager(_cfg())
-    proxy = SandboxProxy(mgr)
-    base = await mgr.get("conv-x")
-    await base.write_file("in.txt", "hi")                       # 基础工作区先有输入
-    await proxy.run_code("python", None, "_run.py", "print(1)",
-                         ["python3", "_run.py"], None, timeout=5)
-    sub = _StubSub.made[0]
-    assert sub.files.get("in.txt") == "hi"                      # 执行前：输入拷进子沙箱
-    assert await base.read_file("out.txt") == "done"            # 执行后：产物拷回基础容器
-
-
-async def test_run_code_explicit_unknown_version_errors(_conv, _stub_docker):
+async def test_unknown_version_errors(_conv, _stub):
     proxy = SandboxProxy(SandboxManager(_cfg()))
     with pytest.raises(SandboxError):
-        await proxy.run_code("java", "99", "Main.java", "x", None, "true", timeout=5)
-    assert _StubSub.made == []                                  # 未知版本：不起子沙箱
+        await proxy.for_language("java", "99")            # 无 java99 镜像
+    assert _lang_boxes() == []                            # 未起任何容器
 
 
-async def test_run_code_falls_back_to_base_when_lang_not_configured(_conv, _stub_docker):
-    # lang_images 里没有 ruby、也没给 version → 回退到会话基础容器（真 LocalSandbox）执行
+async def test_unknown_language_falls_back_to_shell(_conv, _stub):
+    # lang_images 里没有 ruby、也没给 version → 落 shell 容器（debian:12-slim）
     proxy = SandboxProxy(SandboxManager(_cfg()))
-    res = await proxy.run_code("ruby", None, "s.sh", "echo hi",
-                               ["sh", "-c", "echo hi"], None, timeout=5)
-    assert "hi" in res.stdout
-    assert _StubSub.made == []                                  # 未起子沙箱
+    box = await proxy.for_language("ruby")
+    assert box.label == "shell" and box.image == "debian:12-slim"
 
 
-async def test_run_java_tool_end_to_end_via_proxy(_conv, _stub_docker):
+async def test_container_tool_result_carries_image_meta(_conv, _stub):
+    """run_python 的结果 meta 带上用的镜像名（供前端在工具日志里标注）。"""
+    proxy = SandboxProxy(SandboxManager(_cfg()))
+    reg = ToolRegistry(); reg.register(RunPythonTool(proxy, timeout=5))
+    r = await ToolExecutor(reg).execute(ToolCall(
+        id="c1", name="run_python", arguments={"code": "print(1)"}))
+    assert r.is_error is False
+    assert r.meta and r.meta.get("image") == "python:3.12-slim"
+
+
+async def test_container_tool_image_meta_on_failure():
+    """无论成功失败都带镜像 meta：非零退出、以及容器级异常（exec 抛错）两种失败都要带上。"""
+    class _NonZero:
+        image = "python:3.12-slim"; workspace = "/workspace"
+        async def start(self): pass
+        async def for_language(self, language=None, version=None): return self
+        async def write_file(self, p, c): pass
+        async def exec(self, cmd, timeout, *, quiet=False):
+            return ExecResult("SyntaxError", "", 1)          # 非零退出
+    class _Boom(_NonZero):
+        async def exec(self, cmd, timeout, *, quiet=False):
+            raise SandboxError("容器起不来")                  # 容器级异常
+    for box in (_NonZero(), _Boom()):
+        reg = ToolRegistry(); reg.register(RunPythonTool(box, timeout=5))
+        r = await ToolExecutor(reg).execute(ToolCall(
+            id="c1", name="run_python", arguments={"code": "x="}))
+        assert r.is_error is True
+        assert r.meta and r.meta.get("image") == "python:3.12-slim"
+
+
+async def test_run_java_tool_end_to_end_via_proxy(_conv, _stub):
+    proxy = SandboxProxy(SandboxManager(_cfg()))
+    reg = ToolRegistry(); reg.register(RunJavaTool(proxy, timeout=5))
+    r = await ToolExecutor(reg).execute(ToolCall(
+        id="c1", name="run_java", arguments={"code": "class Main{}", "version": "21"}))
+    assert r.is_error is False and "out" in r.content
+    assert _lang_boxes()[0].image == "eclipse-temurin:21-jdk"
+
+
+# ---- 文件工具按 language 路由 ----
+
+async def test_write_file_language_routes_to_that_container(_conv, _stub):
+    """write_file 带 language=python → 落 python 容器；随后 run_python 能在同容器读到。"""
     proxy = SandboxProxy(SandboxManager(_cfg()))
     reg = ToolRegistry()
-    reg.register(RunJavaTool(proxy, timeout=5))
+    reg.register(WriteFileTool(proxy)); reg.register(ReadFileTool(proxy))
     ex = ToolExecutor(reg)
-    r = await ex.execute(ToolCall(id="c1", name="run_java",
-                                  arguments={"code": "class Main{}", "version": "21"}))
-    assert r.is_error is False and "sub-out" in r.content
-    assert _StubSub.made[0].image == "eclipse-temurin:21-jdk"
+    await ex.execute(ToolCall(id="1", name="write_file",
+                              arguments={"path": "d.txt", "content": "hi", "language": "python"}))
+    r = await ex.execute(ToolCall(id="2", name="read_file",
+                                  arguments={"path": "d.txt", "language": "python"}))
+    assert r.is_error is False and "hi" in r.content
+    py = [b for b in _lang_boxes() if b.label == "python"]
+    assert len(py) == 1 and py[0].files.get("d.txt") == "hi"   # 落在 python 容器
+    assert not any(b.label == "shell" for b in _lang_boxes())  # 未落 shell
 
 
-async def test_run_python_tool_without_proxy_runs_in_base_sandbox():
-    # 直接注入普通 LocalSandbox（无 run_code）→ 保留原直连逻辑
+async def test_write_file_default_goes_to_shell(_conv, _stub):
+    proxy = SandboxProxy(SandboxManager(_cfg()))
+    reg = ToolRegistry(); reg.register(WriteFileTool(proxy))
+    await ToolExecutor(reg).execute(ToolCall(
+        id="1", name="write_file", arguments={"path": "d.txt", "content": "hi"}))
+    boxes = _lang_boxes()
+    assert len(boxes) == 1 and boxes[0].label == "shell"
+
+
+# ---- 生命周期：destroy / 空闲驱逐 / close_all ----
+
+async def test_destroy_closes_all_lang_containers(_conv, _stub):
+    mgr = SandboxManager(_cfg()); proxy = SandboxProxy(mgr)
+    await proxy.for_language("python")
+    await proxy.for_language("java", "8")
+    boxes = _lang_boxes()
+    await mgr.destroy("conv-x")
+    assert all(b.closed == 1 for b in boxes)
+    assert mgr._boxes == {}
+
+
+async def test_idle_container_evicted_after_timeout(_conv, _stub):
+    mgr = SandboxManager(_cfg()); proxy = SandboxProxy(mgr)
+    box = await proxy.for_language("python")
+    mgr._boxes[("conv-x", "python")].last_used = _t.monotonic() - (mgr._idle_timeout + 1)
+    await mgr.get_lang("other-conv", "python")            # 别的会话活动触发惰性驱逐
+    assert box.closed == 1
+    assert ("conv-x", "python") not in mgr._boxes
+
+
+async def test_close_all_closes_lang_containers(_conv, _stub):
+    mgr = SandboxManager(_cfg()); proxy = SandboxProxy(mgr)
+    box = await proxy.for_language("python")
+    await mgr.close_all()
+    assert box.closed == 1 and mgr._boxes == {}
+
+
+# ---- 上传附件：每个（新建/已存在）容器都播种 ----
+
+async def test_set_uploads_seeds_new_and_existing_containers(_conv, _stub):
+    mgr = SandboxManager(_cfg()); proxy = SandboxProxy(mgr)
+    py = await proxy.for_language("python")               # 已存在的容器
+    await proxy.set_uploads([("uploads/a.csv", b"1,2,3")])
+    assert py.files.get("uploads/a.csv") == b"1,2,3"      # 补进已存在的容器
+    node = await proxy.for_language("node")               # 之后新建的容器
+    assert node.files.get("uploads/a.csv") == b"1,2,3"    # 新容器建时也播种
+
+
+async def test_uploads_accumulate_across_turns(_conv, _stub):
+    mgr = SandboxManager(_cfg()); proxy = SandboxProxy(mgr)
+    await proxy.set_uploads([("uploads/a.txt", b"A")])    # 第一轮
+    await proxy.set_uploads([("uploads/b.txt", b"B")])    # 第二轮（累加，不覆盖）
+    box = await proxy.for_language("python")              # 之后建的容器两份都有
+    assert box.files.get("uploads/a.txt") == b"A"
+    assert box.files.get("uploads/b.txt") == b"B"
+
+
+# ---- 直连普通 Sandbox（无会话管理）：for_language 返回自身 ----
+
+async def test_run_python_tool_direct_local_sandbox():
     from harness.sandbox.local import LocalSandbox
     sb = LocalSandbox(); await sb.start()
     try:
@@ -215,50 +286,45 @@ async def test_run_python_tool_without_proxy_runs_in_base_sandbox():
 
 def _bcfg(**kw):
     return _cfg(browser_sandbox_image="playwright:pw",
-                browser_sandbox_mem_limit="512m", **kw)
+               browser_sandbox_mem_limit="512m", **kw)
 
 
-async def test_browser_is_global_singleton_reused(_stub_docker):
+async def test_browser_is_global_singleton_reused(_stub):
     mgr = SandboxManager(_bcfg())
     box1, c1 = await mgr.get_browser()
     box2, c2 = await mgr.get_browser()
     assert box1 is box2                     # 全局一个，跨调用复用
     assert c1 is True and c2 is True        # 恒 cached=True：浏览器不得销毁它
-    assert len(_StubSub.made) == 1          # 只建了一个容器
-    assert _stub_docker["labels"]["role"] == "browser-global"
-    assert _stub_docker["network"] == "bridge"      # 浏览器用真实网络（sandbox_network）
-    assert _stub_docker["mem_limit"] == "512m"      # 更大内存防 Chromium OOM
+    assert _stub["browser"]["labels"]["role"] == "browser-global"
+    assert _stub["browser"]["network"] == "bridge"      # 浏览器用真实网络（sandbox_network）
+    assert _stub["browser"]["mem_limit"] == "512m"      # 更大内存防 Chromium OOM
 
 
-async def test_browser_closed_on_close_all(_stub_docker):
+async def test_browser_closed_on_close_all(_stub):
     mgr = SandboxManager(_bcfg())
     box, _ = await mgr.get_browser()
     await mgr.close_all()
-    assert box.closed == 1 and mgr._browser is None   # 关停销毁
+    assert box.closed == 1 and mgr._browser is None
 
 
-async def test_browser_idle_evicted_and_recreated(_stub_docker):
-    import time as _t
+async def test_browser_idle_evicted_and_recreated(_stub):
     mgr = SandboxManager(_bcfg())
     box1, _ = await mgr.get_browser()
-    mgr._browser.last_used = _t.monotonic() - (mgr._browser_idle + 1)   # 假装已空闲超时（24h）
-    box2, _ = await mgr.get_browser()        # 触发驱逐 + 懒加载重建
-    assert box1.closed == 1                  # 旧容器被销毁
-    assert box2 is not box1 and len(_StubSub.made) == 2
+    mgr._browser.last_used = _t.monotonic() - (mgr._browser_idle + 1)
+    box2, _ = await mgr.get_browser()
+    assert box1.closed == 1
+    assert box2 is not box1
 
 
-async def test_browser_idle_off_keeps_forever(_stub_docker):
-    import time as _t
+async def test_browser_idle_off_keeps_forever(_stub):
     mgr = SandboxManager(_bcfg(browser_sandbox_idle_timeout=0))
     box1, _ = await mgr.get_browser()
     mgr._browser.last_used = _t.monotonic() - 999999
     box2, _ = await mgr.get_browser()
-    assert box1 is box2                      # 关空闲驱逐 → 永久复用
-    assert box1.closed == 0
+    assert box1 is box2 and box1.closed == 0
 
 
-async def test_browser_not_touched_by_conv_destroy(_stub_docker):
-    """全局浏览器不属于任何会话：删除会话不应销毁它。"""
+async def test_browser_not_touched_by_conv_destroy(_stub):
     mgr = SandboxManager(_bcfg())
     box, _ = await mgr.get_browser()
     await mgr.destroy("conv-x")

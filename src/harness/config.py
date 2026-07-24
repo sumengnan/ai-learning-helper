@@ -158,7 +158,10 @@ class HarnessConfig(BaseSettings):
     sandbox_disk_limit: str = "500m"
     sandbox_pids_limit: int = 128                # 每个容器进程数上限
     sandbox_read_only: bool = False         # 容器根文件系统是否只读（默认可写）
-    sandbox_exec_timeout: float = 30.0
+    # 单次 run_python/run_node/run_java/run_shell 的执行超时（秒）。容器内用 `timeout` 命令强制，
+    # 到点即杀（exit 124）——**也罩住你在代码里起的 pip/子进程**，故 pip install 也吃这个预算。
+    # 默认 600（10 分钟，给 pip --target 装依赖留足时间）；调小可让失控代码更早被杀。
+    sandbox_exec_timeout: float = 600.0
     # 沙箱输出上限（字符）：read_file 读文件、run_shell/run_python 等执行输出共用此上限，
     # 超出截断。放到 1M 以支持读大文件（之前 8000 太小）。注意还受全局 tool_result_max_chars
     # 二次截断，故那个也需 ≥ 此值才真正生效。

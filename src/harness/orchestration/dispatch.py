@@ -92,7 +92,8 @@ class DispatchTool(Tool):
                     emit(Progress(scope, f"调用工具 {name}",
                                   status="error" if r.is_error else "ok", key=r.tool_call_id,
                                   detail={"tool": name, "args": tool_args.get(r.tool_call_id),
-                                          "result": r.content, "is_error": r.is_error}))
+                                          "result": r.content, "is_error": r.is_error,
+                                          "image": (r.meta or {}).get("image")}))
                 elif isinstance(ev, RunFinished):
                     final = ev.message.content
                 elif isinstance(ev, RunError):

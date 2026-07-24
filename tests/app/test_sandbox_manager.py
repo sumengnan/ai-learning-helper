@@ -15,48 +15,48 @@ def _cfg(**kw):
 
 async def test_get_caches_per_conversation():
     m = SandboxManager(_cfg())
-    a1 = await m.get("conv-a")
-    a2 = await m.get("conv-a")
-    b1 = await m.get("conv-b")
-    assert a1 is a2                 # 同会话复用同一容器
+    a1 = await m.get_lang("conv-a")
+    a2 = await m.get_lang("conv-a")
+    b1 = await m.get_lang("conv-b")
+    assert a1 is a2                 # 同会话同语言复用同一容器
     assert a1 is not b1             # 不同会话相互隔离
 
 
 async def test_destroy_removes_and_recreates():
     m = SandboxManager(_cfg())
-    a1 = await m.get("conv-a")
+    a1 = await m.get_lang("conv-a")
     await m.destroy("conv-a")
-    assert "conv-a" not in m._boxes
-    a2 = await m.get("conv-a")      # 删后再取是全新实例
+    assert not any(k[0] == "conv-a" for k in m._boxes)
+    a2 = await m.get_lang("conv-a")      # 删后再取是全新实例
     assert a2 is not a1
     await m.destroy("nope")         # 不存在的会话静默
 
 
 async def test_close_all_clears():
     m = SandboxManager(_cfg())
-    await m.get("conv-a")
-    await m.get("conv-b")
+    await m.get_lang("conv-a")
+    await m.get_lang("conv-b")
     await m.close_all()
     assert m._boxes == {}
 
 
 async def test_idle_eviction_drops_stale_only():
     m = SandboxManager(_cfg(sandbox_idle_timeout=100.0))
-    await m.get("stale")
-    fresh = await m.get("fresh")
-    m._boxes["stale"].last_used = time.monotonic() - 1000   # 把 stale 手动置为超时
-    # 触碰任一会话即惰性驱逐超时者；fresh 不受影响
-    again = await m.get("fresh")
-    assert "stale" not in m._boxes
+    await m.get_lang("stale")
+    fresh = await m.get_lang("fresh")
+    # 本地后端所有语言共用 label "local"；把 stale 手动置为超时
+    m._boxes[("stale", "local")].last_used = time.monotonic() - 1000
+    again = await m.get_lang("fresh")    # 触碰任一会话即惰性驱逐超时者；fresh 不受影响
+    assert not any(k[0] == "stale" for k in m._boxes)
     assert again is fresh
 
 
 async def test_idle_eviction_disabled_when_zero():
     m = SandboxManager(_cfg(sandbox_idle_timeout=0))
-    await m.get("a")
-    m._boxes["a"].last_used = time.monotonic() - 10_000
-    await m.get("b")
-    assert "a" in m._boxes           # 关闭空闲驱逐时不清理
+    await m.get_lang("a")
+    m._boxes[("a", "local")].last_used = time.monotonic() - 10_000
+    await m.get_lang("b")
+    assert any(k[0] == "a" for k in m._boxes)   # 关闭空闲驱逐时不清理
 
 
 async def test_proxy_delegates_to_current_conversation():
@@ -98,15 +98,46 @@ async def test_proxy_without_context_raises():
         await proxy.write_file("x", "y")
 
 
-def test_proxy_exposes_sandbox_for_only_when_routing():
-    # 单镜像（sandbox_images 空）：不暴露 sandbox_for（保持 assembly 多语言工具注册判定不变）。
-    # 显式 _env_file=None + sandbox_images={}：config 默认已预置多镜像映射，且不依赖 .env，
-    # 否则在无 .env 的环境（如 worktree）下会读到非空默认导致本测试假阴/假阳。
-    assert getattr(SandboxProxy(SandboxManager(
-        _cfg(_env_file=None, sandbox_images={}))), "sandbox_for", None) is None
-    routed = _cfg(_env_file=None,
-                  sandbox_images={"python": "python:3.12-slim", "node": "node:20-slim"})
-    assert getattr(SandboxProxy(SandboxManager(routed)), "sandbox_for", None) is not None
+def test_tool_container_image_maps_tool_to_image():
+    from app.config import AppConfig
+    from app.sandbox_manager import tool_container_image
+    cfg = AppConfig(api_key="k", sandbox_backend="docker", app_db_path=":memory:", _env_file=None,
+                    sandbox_shell_image="debian:12-slim",
+                    sandbox_lang_images={"python": "python:3.12-slim", "java": "eclipse-temurin:21-jdk",
+                                         "java8": "eclipse-temurin:8-jdk"})
+    assert tool_container_image(cfg, "run_python", {}) == "python:3.12-slim"
+    assert tool_container_image(cfg, "run_java", {"version": "8"}) == "eclipse-temurin:8-jdk"
+    assert tool_container_image(cfg, "run_shell", {}) == "debian:12-slim"
+    assert tool_container_image(cfg, "calculator", {}) is None      # 非容器工具
+    # 本地后端无镜像概念 → None
+    assert tool_container_image(_cfg(), "run_python", {}) is None
+
+
+async def test_proxy_for_language_and_shell_default_share_local_box():
+    # 本地后端：所有语言共用一个 local 沙箱。for_language(任意) 与协议方法（→shell）取到同一个。
+    m = SandboxManager(_cfg())
+    proxy = SandboxProxy(m)
+    t = set_sandbox_conv("conv-a")
+    try:
+        via_lang = await proxy.for_language("python")
+        via_shell = await proxy.for_language()          # 缺省 → shell（本地共用 local）
+        assert via_lang is via_shell
+    finally:
+        reset_sandbox_conv(t)
+    await m.close_all()
+
+
+async def test_proxy_set_uploads_seeds_into_container():
+    m = SandboxManager(_cfg())
+    proxy = SandboxProxy(m)
+    t = set_sandbox_conv("conv-a")
+    try:
+        await proxy.set_uploads([("uploads/x.txt", b"hi")])
+        box = await proxy.for_language("python")
+        assert "x.txt" in await box.list_files("uploads")
+    finally:
+        reset_sandbox_conv(t)
+    await m.close_all()
 
 
 def test_guide_tells_model_to_use_save_download_for_deliverables():

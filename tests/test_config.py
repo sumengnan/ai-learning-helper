@@ -51,8 +51,8 @@ def test_sandbox_defaults():
     assert cfg.sandbox_cpus == 1.0                       # 资源上限：CPU 1 核
     assert cfg.sandbox_mem_limit == "200m"               # 内存 200m（容纳 tmpfs 工作区）
     assert cfg.sandbox_disk_limit == "500m"              # 工作区磁盘（tmpfs）500m
-    assert cfg.sandbox_exec_timeout == 30.0
-    assert cfg.sandbox_output_max_chars == 1_000_000
+    assert cfg.sandbox_exec_timeout == 600.0             # 单次执行超时 10min（罩住 pip 子进程）
+    assert cfg.sandbox_output_max_chars == 1_000_000     # read_file 读大文件用
     assert cfg.http_allowed_domains == []
     assert cfg.http_block_private is True
     assert cfg.http_max_response_bytes == 10_000_000
