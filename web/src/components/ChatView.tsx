@@ -659,6 +659,17 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                   </>
                 );
               })()}
+              {/* 扁平工具步骤列表（工具调用块）：放在沙箱执行块**上面**——工具调用是主动作，
+                  沙箱执行（起容器/跑代码）是它的执行细节，理应排在其下。
+                  只有**编排器**的计划树才隐藏它（工具明细已挂在计划步下，再平铺一份是重复）。
+                  简单直答里模型调 update_plan 发的 ReAct 清单没有 id、挂不了明细，此时必须保留
+                  本列表——否则工具调用会凭空消失且无处可看。*/}
+              {showTools && m.role === "assistant" && m.steps && m.steps.length > 0
+                && !isOrchestratorPlan(lastPlanText(m.progress)) && (
+                <AgentProgress steps={m.steps}
+                  live={busy && i === messages.length - 1 && m.status === "streaming"}
+                  stopped={m.status === "stopped"} />
+              )}
               {showTools && m.role === "assistant" && m.progress && m.progress.length > 0 && (() => {
                 const sandbox = m.progress.filter((p) => p.scope === "sandbox");
                 // executor 子代理已并入 PlanBlock 的计划树；这里只留 dispatch 派发的子代理，避免与顶部计划步重复
@@ -686,15 +697,6 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                   </>
                 );
               })()}
-              {/* 扁平工具步骤列表：只有**编排器**的计划树才隐藏它（工具明细已挂在计划步下，
-                  再平铺一份是重复）。简单直答里模型调 update_plan 发的 ReAct 清单没有 id、
-                  挂不了明细，此时必须保留本列表——否则工具调用会凭空消失且无处可看。*/}
-              {showTools && m.role === "assistant" && m.steps && m.steps.length > 0
-                && !isOrchestratorPlan(lastPlanText(m.progress)) && (
-                <AgentProgress steps={m.steps}
-                  live={busy && i === messages.length - 1 && m.status === "streaming"}
-                  stopped={m.status === "stopped"} />
-              )}
               {m.content ? (
                 m.role === "assistant" ? (
                   <Markdown onCitationClick={(n) => scrollToCite(String(i), n)}>
