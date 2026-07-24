@@ -18,7 +18,7 @@
 
 ## 已确认的决策
 
-1. **保留 `run_shell`**：按需起一个 shell 容器（镜像 `debian:12-slim`）。
+1. **保留 `run_shell`**：按需起一个 shell 容器（镜像须自带 curl+getent，默认 `quay.io/centos/centos:stream9`）。
 2. **工作区不跨语言共享**：每种语言容器各自独立 tmpfs 工作区（沿用现有 uid 挂载技巧，非 root 可写，无需自定义镜像）。
 3. **容器有效期**：1 小时空闲后销毁（有操作即续期），按 (会话,语言) 缓存复用。
 4. **联网**：所有语言容器默认联网（`sandbox_network=bridge`），下载内容落工作区；禁 `apt/dnf install`（非 root + cap_drop 天然拦住，提示词已如实说明）。
@@ -33,7 +33,7 @@
   run_python                       → python 容器
   run_node                         → node 容器
   run_java(+version)               → java / javaN 容器
-  run_shell                        → shell 容器（debian:12-slim）
+  run_shell                        → shell 容器（centos:stream9，自带 curl+getent）
   write_file/read_file/list_files  → 按 language 参数落对应容器；缺省 → shell 容器
 所有容器：联网(bridge)、非 root、cap_drop=ALL、启动时播种本会话 uploads
 浏览器容器：不动（全局、24h）
@@ -47,7 +47,7 @@ save_download：app 侧写库，与容器无关
 ### 配置（`src/harness/config.py` + `app/config.py`）
 
 - **删**：`sandbox_image`、`sandbox_images`、`sandbox_default_language`、`sandbox_sub_network`、`sandbox_sub_idle_timeout`。
-- **加**：`sandbox_shell_image = "debian:12-slim"`（run_shell + 缺省 fs 落点）。
+- **加**：`sandbox_shell_image = "quay.io/centos/centos:stream9"`（run_shell + 缺省 fs；沙箱内 curl/getent 也在此）。
 - **改**：`sandbox_lang_images` 成为唯一语言→镜像表；`sandbox_network` 默认 `bridge`（统一所有容器）；`sandbox_idle_timeout = 3600`（1h，统一所有容器）。
 
 ### 沙箱协议与实现（`src/harness/sandbox/`）
