@@ -233,7 +233,7 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
           value={ctx.summary_errors ? `${ctx.summary_ok} / ${ctx.summary_ok + ctx.summary_errors}` : String(ctx.summary_ok)}
           hint={ctx.summary_errors > 0
             ? `压缩接住的轮数：${ctx.summary_errors} 轮没接住（即「L2摘要失败」）`
-            : "把挤出的历史压缩成摘要接住的轮数"}
+            : "把挤出的历史压缩成摘要的轮数"}
           stripe={ctx.summary_errors > 0 ? theme.palette.warning.main : theme.palette.success.main} />
         {/* ③ L2 摘要失败：头号告警——挤出的历史没被摘要接住，AI 真丢了一段还不自知（＝上下文失忆）。
             >0 一律标红，不设「少量可接受」的黄档：一次失忆就是一次事故。 */}
