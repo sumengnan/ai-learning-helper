@@ -59,10 +59,6 @@ def build_harness(config) -> Harness:
         reg.register(tool)
         pool[tool.name] = tool
 
-    def _reg_exec(tool):
-        # 代码/命令类：套每步校验（捕 ToolError 标记执行未通过），可整体关闭
-        _reg(ValidatingTool(tool, exec_mode=True) if config.enable_step_check else tool)
-
     _reg(CalculatorTool())
     _reg(UpdatePlanTool())
 
@@ -216,15 +212,17 @@ def build_harness(config) -> Harness:
         _reg(WriteFileTool(sandbox))
         _reg(ReadFileTool(sandbox, config.sandbox_output_max_chars))
         _reg(ListFilesTool(sandbox))
-        _reg_exec(RunShellTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
-        _reg_exec(RunPythonTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
+        # 代码/命令执行工具不套每步校验：执行失败（非零退出）是正常的迭代过程，不该标「执行未通过」。
+        # 工具仍在非零退出时 raise ToolError → is_error，编排器照常据此自纠正，语义不变。
+        _reg(RunShellTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
+        _reg(RunPythonTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
         # run_node / run_java 按 sandbox_lang_images 是否含该语言镜像注册（数据驱动）。
         # java 多版本键为 java/java8/java17…，故按前缀判断（配了 java8 也应暴露 run_java）。
         _lang_images = config.sandbox_lang_images or {}
         if any(k.startswith("node") for k in _lang_images):
-            _reg_exec(RunNodeTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
+            _reg(RunNodeTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
         if any(k.startswith("java") for k in _lang_images):
-            _reg_exec(RunJavaTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
+            _reg(RunJavaTool(sandbox, config.sandbox_exec_timeout, config.sandbox_output_max_chars))
 
     if config.enable_dispatch:
         from harness.orchestration.roster_loader import load_roster
