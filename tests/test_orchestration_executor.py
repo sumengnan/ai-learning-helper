@@ -283,6 +283,16 @@ def test_sandbox_guide_docker_reports_images_and_network():
     assert "--target" in g                        # 给出唯一可行路径：装到可写工作目录
 
 
+def test_sandbox_guide_reports_resource_limits():
+    """提示词须如实告知每容器的 CPU/内存/磁盘上限，并点明 tmpfs 工作区占内存。"""
+    from app.sandbox_manager import sandbox_guide
+    g = sandbox_guide(_sbx_cfg(sandbox_backend="docker", sandbox_cpus=2.0,
+                               sandbox_mem_limit="200m", sandbox_disk_limit="500m"))
+    assert "资源上限" in g
+    assert "2.0 核" in g and "200m" in g and "500m" in g
+    assert "tmpfs" in g and "内存" in g          # 点明工作区是内存盘、占内存
+
+
 def test_sandbox_guide_docker_offline_says_cannot_install():
     """禁网（sandbox_network=none）时，指引应说明装不了包、只能用预装。"""
     from app.sandbox_manager import sandbox_guide

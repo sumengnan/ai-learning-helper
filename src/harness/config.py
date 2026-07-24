@@ -149,9 +149,12 @@ class HarnessConfig(BaseSettings):
     sandbox_workspace: str = "/workspace"
     sandbox_user: str = "1000:1000"
     sandbox_network: str = "bridge"              # 所有语言容器统一的网络（bridge=联网，下载落工作区；none=禁网）
-    sandbox_mem_limit: str = "100m"
-    sandbox_cpus: float = 1.0
-    sandbox_pids_limit: int = 128
+    sandbox_mem_limit: str = "200m"              # 每个容器内存上限
+    sandbox_cpus: float = 1.0                    # 每个容器 CPU 上限（核）
+    # 工作区磁盘上限（/workspace tmpfs 大小）。注意：tmpfs 是内存盘，其占用**算进 mem_limit**——
+    # 故实际可写 ≈ min(disk_limit, mem_limit - 进程开销)。默认 500m 是天花板，mem_limit 才是更紧的实际卡口。
+    sandbox_disk_limit: str = "500m"
+    sandbox_pids_limit: int = 128                # 每个容器进程数上限
     sandbox_read_only: bool = False         # 容器根文件系统是否只读（默认可写）
     sandbox_exec_timeout: float = 30.0
     sandbox_output_max_chars: int = 8000

@@ -48,6 +48,9 @@ def test_sandbox_defaults():
     assert cfg.sandbox_lang_images["python"] == "python:3.12-slim"
     assert cfg.sandbox_network == "bridge"               # 所有语言容器统一网络
     assert cfg.sandbox_idle_timeout == 3600.0            # 语言容器空闲驱逐 1h
+    assert cfg.sandbox_cpus == 1.0                       # 资源上限：CPU 1 核
+    assert cfg.sandbox_mem_limit == "200m"               # 内存 200m（容纳 tmpfs 工作区）
+    assert cfg.sandbox_disk_limit == "500m"              # 工作区磁盘（tmpfs）500m
     assert cfg.sandbox_exec_timeout == 30.0
     assert cfg.sandbox_output_max_chars == 8000
     assert cfg.http_allowed_domains == []

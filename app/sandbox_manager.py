@@ -1,17 +1,25 @@
 # app/sandbox_manager.py
-"""会话级沙箱：把「全进程共享单容器」改为「按会话隔离容器」。
+"""会话级沙箱：按「会话 + 语言」隔离容器。
 
-装配期仍然只把一个 sandbox 对象绑进所有工具，但这个对象是 SandboxProxy——它按
-「当前会话」（contextvar）解析出真实的 Sandbox 实例，真实实例由 SandboxManager
-按 conv_id 惰性创建/缓存/销毁。于是所有沙箱工具（write_file/read_file/list_files/
-run_shell/run_python/... 及浏览器）零改动即获得会话隔离。
+装配期只把一个 sandbox 对象绑进所有工具，但这个对象是 SandboxProxy——它按「当前会话」
+（contextvar）+「要执行的语言」解析出真实的 Sandbox 容器，真实容器由 SandboxManager
+按 (conv_id, 语言) 惰性创建/缓存/销毁。AI 要跑哪种语言的代码，就自动起哪种语言的容器。
+
+设计要点：
+- 没有「基础容器 / 子沙箱」之分。每个 (会话,语言) 就是一个独立容器、各自独立 /workspace，
+  互不可见（跨语言不共享文件，已知取舍）。
+- run_shell 与「未指定 language 的 write_file/read_file/list_files」落 shell 容器
+  （镜像 sandbox_shell_image）；run_python/run_node/run_java 落对应语言容器
+  （sandbox_lang_images）；write_file 等带 language 参数时落该语言容器。
+- 上传附件按会话登记（set_uploads），每个新建容器启动时播种进 /workspace/uploads/。
+- 所有容器统一 sandbox_network（默认 bridge 联网）；非 root + cap_drop=ALL，装不了系统包。
 
 生命周期：
-- 首次在某会话内执行沙箱操作时惰性创建容器（沿用 DockerSandbox 的惰性 start）。
-- 删除会话 → SandboxManager.destroy(conv_id) 销毁其容器（含 /workspace tmpfs）。
+- 首次在某会话内用到某语言时惰性创建其容器（沿用 DockerSandbox 的惰性 start）。
+- 删除会话 → destroy(conv_id) 销毁该会话的**全部**语言容器。
 - app 关停 → close_all()。
-- 安全阀：空闲驱逐（sandbox_idle_timeout），防止会话容器无限期驻留。
-- 容器打标签 mcp_sandbox=true + conv_id，供进程重启后 sweep_orphans() 回收孤儿。
+- 安全阀：空闲驱逐（sandbox_idle_timeout，默认 1h），每个容器各自计时。
+- 容器打标签 mcp_sandbox=true + conv_id + lang，供进程重启后 sweep_orphans() 回收孤儿。
 """
 from __future__ import annotations
 
@@ -21,8 +29,6 @@ import time
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
-from harness.events import Progress
-from harness.progress import emit
 from harness.sandbox.base import SandboxError
 from harness.sandbox.factory import _docker_for, build_sandbox
 
@@ -35,55 +41,66 @@ def _is_online(net) -> bool:
 
 
 def sandbox_guide(config) -> str:
-    """按配置如实告诉模型沙箱的工作目录、镜像与联网情况，避免它用宿主机路径、或在禁网环境里
-    执意联网装包、选错命令。
+    """按配置如实告诉模型沙箱的工作目录、按语言的容器与联网情况，避免它用宿主机路径、
+    在禁网/非 root 环境里执意联网装系统包、或以为跨语言能共享文件。
 
-    关键区别（按配置渲染）：run_shell 在**基础容器**执行（镜像 sandbox_image、网络 sandbox_network），
-    run_python/run_node/run_java 在**语言子沙箱**执行（镜像 sandbox_lang_images、网络 sandbox_sub_network）——
-    两者的镜像和联网可不同，模型据此才知道「能否自行安装依赖、该用哪个工具」。
     主聊天路径（chat.py）与编排器执行子步（executor.py）共用同一段文案，DRY。
     """
     ws = getattr(config, "sandbox_workspace", "/workspace")
     guide = (
-        f"\n\n【沙箱工作目录】run_shell / run_python / run_shell / run_node 等沙箱工具的当前工作目录（cwd）"
+        f"\n\n【沙箱工作目录】run_shell / run_python / run_node / run_java 等沙箱工具的当前工作目录（cwd）"
         f"就是 {ws}。读写文件用相对路径（相对 {ws}），或以 {ws}/ 开头的绝对路径；"
         f"生成的文件也放在这里。用户上传的附件在 {ws}/uploads/ 下。"
         f"不要使用宿主机路径（如 /Users、/home、/tmp）或其它臆想的目录——那些在沙箱里并不存在。"
-        # write_file 写的是沙箱临时文件，随沙箱销毁；save_download 才产出用户拿得到的成品。
-        # 模型常把两者当一条流水线用（先 write_file 再 save_download），白跑一次往返；
-        # 更糟的是子步一旦重试，这套组合会整个再来一遍。
+        # write_file 写的是沙箱临时文件，随容器销毁；save_download 才产出用户拿得到的成品。
         f"\n【成品文件直接用 save_download】要交给用户下载/查看的最终产物（笔记、总结、报告、"
         f"导出文件等），直接调 save_download 生成即可，**不需要**先 write_file 落到沙箱再转存——"
-        f"沙箱里的文件是过程中间物、随沙箱销毁，用户拿不到。"
+        f"沙箱里的文件是过程中间物、随容器销毁，用户拿不到。"
         f"只有当后续步骤还要在沙箱里读取/处理该文件时，才先 write_file。")
     if getattr(config, "sandbox_backend", "") != "docker":
         return guide   # 本地后端跑在宿主机，无镜像/网络隔离概念，只给工作目录提醒
-    base_img = getattr(config, "sandbox_image", "") or "（未配置）"
-    base_online = _is_online(getattr(config, "sandbox_network", "none"))
+    online = _is_online(getattr(config, "sandbox_network", "none"))
+    net = "可联网" if online else "禁止联网"
+    shell_img = getattr(config, "sandbox_shell_image", "") or "（未配置）"
     lang = getattr(config, "sandbox_lang_images", None) or {}
-    sub_online = _is_online(getattr(config, "sandbox_sub_network", "none"))
-    net = lambda ok: "可联网" if ok else "禁止联网"   # noqa: E731
-    lines = [f"\n\n【沙箱镜像与联网】run_shell 在基础容器执行：镜像 {base_img}，{net(base_online)}。"]
+    cpus = getattr(config, "sandbox_cpus", 1.0)
+    mem = getattr(config, "sandbox_mem_limit", "") or "（未限）"
+    disk = getattr(config, "sandbox_disk_limit", "") or "（未限）"
+    lines = [
+        f"\n\n【资源上限】每个容器：CPU {cpus} 核、内存 {mem}、工作区磁盘 {disk}。"
+        f"注意工作区 {ws} 是内存盘（tmpfs），其占用**算进内存额度**——所以别在沙箱里生成/下载超过内存额度的"
+        f"大文件（大文件会先触内存上限被 OOM，而非磁盘上限）；CPU/内存吃满会被限流或直接杀掉进程。"
+        f"要处理大数据就分块流式处理，不要一次性全load 进内存或落一个大文件。",
+        f"\n\n【按语言各自独立的容器】每种语言在**自己的容器**内执行，各容器 {ws} **相互独立**、"
+        f"互不可见（{net}）：",
+        f"\n- run_shell、以及未指定 language 的 write_file/read_file/list_files → shell 容器（镜像 {shell_img}）"]
     if lang:
         primary = {k: lang[k] for k in ("python", "node", "java") if k in lang}
         shown = primary or dict(list(lang.items())[:3])
         imgs = "、".join(f"{k}→{v}" for k, v in shown.items())
         jvers = sorted(k for k in lang if k not in ("python", "node", "java"))
-        ver = f"（Java 另有 {', '.join(jvers)}，可传 version 指定）" if jvers else ""
-        lines.append(
-            f"run_python / run_node / run_java 各在对应语言子沙箱执行（{imgs}）{ver}，{net(sub_online)}。")
-    # 装依赖：先讲权限硬约束（防止照着旧文案去 apt 白撞 Permission denied），再按网络讲可行路径
+        ver = f"（run_java 可传 version 选 {', '.join(jvers)}）" if jvers else ""
+        lines.append(f"\n- run_python / run_node / run_java → 对应语言容器（{imgs}）{ver}")
     lines.append(
-        "关于装依赖：沙箱是加固环境——**非 root 用户、禁止提权、系统目录不可写**。因此"
-        "apt/dnf/apk 装系统包、以及 pip 全局装、npm -g 全局装一律会 Permission denied，不要尝试"
-        "（即便【可联网】也一样，这是权限问题、不是网络问题）。"
-        f"确需额外的语言包、且所在环境【可联网】时，只能装到可写的工作目录 {ws} 内："
-        f"Python 用 `pip install --no-cache-dir --target=<{ws} 下的子目录> 包名`，再把该目录加入 sys.path；"
-        f"Node 在 {ws} 里 `npm i 包名` 装到本地 node_modules。"
-        "【禁止联网】的环境连下载都做不到，只能用镜像已自带的标准库与预装命令，"
-        "或改用可联网的那个工具（如基础容器里的 run_shell）来完成需要联网的步骤。"
-        "任何情况下都优先使用镜像预装的库与命令；装包失败就改用预装的等价物，别反复重试。")
+        f"\n**要让某语言的代码读到你写的数据文件**：给 write_file/read_file/list_files 传 language 参数"
+        f"（如 write_file(path, content, language=\"python\") 之后 run_python 就能读到）；"
+        f"不传 language 则落 shell 容器，run_python 等**看不到**。跨语言之间文件也不共享。")
+    # 装依赖：先讲权限硬约束（防止照旧文案去 apt 白撞），再按网络讲可行路径
+    if online:
+        lines.append(
+            "关于装依赖：沙箱是加固环境——**非 root 用户、禁止提权、系统目录不可写**。因此"
+            "apt/dnf/apk 装系统包、以及 pip 全局装、npm -g 全局装一律会 Permission denied，不要尝试"
+            "（即便可联网也一样，这是权限问题、不是网络问题）。"
+            f"确需额外的语言包时，只能装到可写的工作目录 {ws} 内："
+            f"Python 用 `pip install --no-cache-dir --target=<{ws} 下的子目录> 包名`，再把该目录加入 sys.path；"
+            f"Node 在 {ws} 里 `npm i 包名` 装到本地 node_modules。"
+            "任何情况下都优先使用镜像预装的库与命令；装包失败就改用预装的等价物，别反复重试。")
+    else:
+        lines.append(
+            "关于装依赖：容器禁止联网，且非 root、系统目录不可写——apt/dnf、pip、npm 一律装不了，"
+            "只能使用镜像已自带的标准库与预装命令，不要尝试联网安装（必然失败），改用镜像已有的等价命令。")
     return guide + "".join(lines)
+
 
 # 当前请求所属会话；由 chat 处理器在 pump() 内 set，工具执行都在此上下文内。
 _current_conv: ContextVar[str | None] = ContextVar("sandbox_conv", default=None)
@@ -107,72 +124,102 @@ class _Entry:
 
 
 class SandboxManager:
-    """按 conv_id 管理真实 Sandbox 实例的生命周期。"""
+    """按 (conv_id, 语言) 管理真实 Sandbox 容器的生命周期。"""
 
     def __init__(self, config) -> None:
         self._config = config
-        self._boxes: dict[str, _Entry] = {}
-        # 语言子沙箱缓存：键 (conv_id, label)，label 形如 "python"/"java17"。用完不即销毁，
-        # 复用同一容器，避免反复重建；按空闲超时/会话销毁/关停统一回收。
-        self._subs: dict[tuple[str, str], _Entry] = {}
+        # 语言容器缓存：键 (conv_id, label)，label 形如 "python"/"shell"/"java17"/"local"。
+        self._boxes: dict[tuple[str, str], _Entry] = {}
         # 浏览器沙箱：全局共用一个（跨会话），懒加载创建/启动、复用，24h 空闲或关停时销毁。
         self._browser: _Entry | None = None
+        # 每会话上传附件清单 [(相对路径, bytes)]，新建语言容器时播种进 /workspace/uploads/。
+        self._uploads: dict[str, list[tuple[str, bytes]]] = {}
         self._lock = asyncio.Lock()
         self._idle_timeout = float(getattr(config, "sandbox_idle_timeout", 0) or 0)
-        self._sub_idle_timeout = float(getattr(config, "sandbox_sub_idle_timeout", 0) or 0)
         self._browser_idle = float(getattr(config, "browser_sandbox_idle_timeout", 0) or 0)
 
-    async def get(self, conv_id: str):
-        """取（或惰性创建）该会话的 Sandbox，并刷新其空闲计时。"""
+    def _resolve_image(self, language: str | None, version: str | None) -> tuple[str, str | None]:
+        """解析 (label, image)。
+
+        本地后端：所有语言共用一个本地沙箱（label 恒 "local"，无镜像）。
+        docker：language=None/"shell"/未知 → shell 容器；否则查 sandbox_lang_images
+        （显式 version 但 f"{lang}{version}" 无镜像 → 报错，让模型换版本）。
+        """
+        cfg = self._config
+        if getattr(cfg, "sandbox_backend", "") != "docker":
+            return "local", None
+        lang = language or "shell"
+        if lang == "shell":
+            return "shell", getattr(cfg, "sandbox_shell_image", "")
+        images = getattr(cfg, "sandbox_lang_images", None) or {}
+        if version:
+            key = f"{lang}{version}"
+            if key not in images:
+                avail = ", ".join(sorted(images)) or "（无）"
+                raise SandboxError(f"没有可用的语言/版本镜像：{key}。可用：{avail}")
+            return key, images[key]
+        if lang in images:
+            return lang, images[lang]
+        return "shell", getattr(cfg, "sandbox_shell_image", "")   # 未知语言 → 回退 shell 容器
+
+    def _make_box(self, conv_id: str, label: str, image: str | None):
+        labels = {_SANDBOX_LABEL: "true", "conv_id": conv_id, "lang": label}
+        display = f"{label} 容器（{image}）" if image else f"{label} 沙箱"
+        return build_sandbox(self._config, labels=labels, image=image, display_name=display)
+
+    async def get_lang(self, conv_id: str, language: str | None = None,
+                       version: str | None = None):
+        """取（或惰性创建/复用）该会话某语言的容器，刷新空闲计时，播种上传附件后返回。"""
         if not conv_id:
             raise SandboxError("无当前会话上下文，无法解析沙箱")
+        label, image = self._resolve_image(language, version)   # SandboxError→is_error
         async with self._lock:
             await self._evict_idle(keep=conv_id)
-            entry = self._boxes.get(conv_id)
-            if entry is None:
-                labels = {_SANDBOX_LABEL: "true", "conv_id": conv_id}
-                entry = _Entry(box=build_sandbox(self._config, labels=labels))
-                self._boxes[conv_id] = entry
+            key = (conv_id, label)
+            entry = self._boxes.get(key)
+            is_new = entry is None
+            if is_new:
+                entry = _Entry(box=self._make_box(conv_id, label, image))
+                self._boxes[key] = entry
             entry.last_used = time.monotonic()
-            return entry.box
+            box = entry.box
+        await box.start()
+        if is_new:                                  # 新容器：播种本会话已登记的上传附件
+            await self._seed_into(box, self._uploads.get(conv_id, []))
+        return box
 
-    async def _cached_or_new(self, key: tuple, box_factory) -> tuple[object, bool]:
-        """子沙箱缓存的通用取用（语言子沙箱、浏览器子沙箱共用）。
+    async def set_uploads(self, conv_id: str, uploads) -> None:
+        """累加登记本会话新上传的附件（按路径去重合并），并把**这批新附件**播种进该会话
+        已存在的所有容器；合并后的全量清单供之后新建的容器播种。
 
-        缓存开启（_sub_idle_timeout>0）时：复用 key 对应的、否则惰性创建并入缓存，刷新空闲计时，
-        返回 (box, True)——调用方**不要**销毁它，生命周期归 manager（空闲/会话销毁/关停回收）。
-        缓存关闭时：新建一个临时子沙箱，返回 (box, False)——调用方 finally 里自行销毁（旧行为）。
-        box_factory(cached: bool)->box 由调用方按各自镜像/网络/内存/角色标签创建；只在锁内创建
-        容器对象（不启动，start 惰性且幂等），启动交调用方。"""
-        if self._sub_idle_timeout <= 0:      # 不缓存：保持「用完即销毁」旧语义
-            return box_factory(False), False
+        累加而非覆盖：容器按语言惰性创建，后建的容器也要能看到之前几轮上传的附件
+        （对齐旧「基础容器跨轮累积」的语义）。本轮无新附件则原样保留。"""
+        if not conv_id:
+            return
+        new = list(uploads or [])
+        if not new:
+            return
         async with self._lock:
-            await self._evict_idle(keep=key[0])
-            entry = self._subs.get(key)
-            if entry is None:
-                entry = _Entry(box=box_factory(True))
-                self._subs[key] = entry
-            entry.last_used = time.monotonic()
-            return entry.box, True
+            merged = dict(self._uploads.get(conv_id, []))   # path -> data
+            merged.update(new)
+            self._uploads[conv_id] = list(merged.items())
+            boxes = [e.box for (cid, _), e in self._boxes.items() if cid == conv_id]
+        for box in boxes:                                   # 已存在的容器只需补这批新附件
+            await self._seed_into(box, new)
 
-    async def get_sub(self, conv_id: str, label: str, image: str) -> tuple[object, bool]:
-        """取该会话某语言/版本子沙箱，返回 (子沙箱, 是否缓存复用)。见 _cached_or_new。"""
-        net = getattr(self._config, "sandbox_sub_network", "none")
-        display = f"{label} 子沙箱（{image}）"
-
-        def mk(cached):
-            labels = {_SANDBOX_LABEL: "true", "conv_id": conv_id,
-                      "role": "lang" if cached else "ephemeral", "lang": label}
-            return _docker_for(self._config, image, labels=labels,
-                               network=net, display_name=display)
-        return await self._cached_or_new((conv_id, label), mk)
+    @staticmethod
+    async def _seed_into(box, uploads) -> None:
+        for path, data in uploads:
+            try:
+                await box.write_bytes(path, data)
+            except Exception as e:   # 播种失败不应打断对话
+                _log.warning("附件播种进容器失败 %s：%s", path, e)
 
     async def get_browser(self) -> tuple[object, bool]:
         """取（或惰性创建）**全局共用**的浏览器沙箱（专用 playwright 镜像），返回 (box, True)。
 
-        全局一个、跨会话共用；懒加载创建容器对象（start 仍惰性且幂等），空闲超
-        browser_sandbox_idle_timeout（默认 24h）由 manager 回收、下次用再重建，关停时销毁。
-        返回 cached 恒为 True——调用方（浏览器）**不得**销毁它，生命周期归 manager。
+        全局一个、跨会话共用；空闲超 browser_sandbox_idle_timeout（默认 24h）由 manager 回收、
+        下次用再重建，关停时销毁。返回 cached 恒为 True——调用方不得销毁它，生命周期归 manager。
         浏览器需真实出网（用 sandbox_network）与更大内存（browser_sandbox_mem_limit，防 Chromium OOM）。"""
         cfg = self._config
         async with self._lock:
@@ -187,78 +234,54 @@ class SandboxManager:
             return self._browser.box, True
 
     async def destroy(self, conv_id: str) -> None:
-        """销毁某会话的容器（删除会话时调用）；连同其语言子沙箱一并销毁。不存在则静默。"""
+        """销毁某会话的**全部**语言容器（删除会话时调用）。不存在则静默。"""
         async with self._lock:
-            entry = self._boxes.pop(conv_id, None)
-            subs = self._pop_subs_of(conv_id)
-        if entry is not None:
-            await self._safe_close(entry.box, conv_id)
-        await self._close_subs(subs)
+            keys = [k for k in self._boxes if k[0] == conv_id]
+            entries = [(k, self._boxes.pop(k)) for k in keys]
+            self._uploads.pop(conv_id, None)
+        for (cid, label), entry in entries:
+            await self._safe_close(entry.box, f"{cid}/{label}")
 
     async def close_all(self) -> None:
-        """关停时销毁全部会话容器、子沙箱与全局浏览器沙箱。"""
+        """关停时销毁全部会话语言容器与全局浏览器沙箱。"""
         async with self._lock:
             items = list(self._boxes.items())
-            subs = list(self._subs.items())
             browser = self._browser
             self._boxes.clear()
-            self._subs.clear()
+            self._uploads.clear()
             self._browser = None
-        for conv_id, entry in items:
-            await self._safe_close(entry.box, conv_id)
-        await self._close_subs(subs)
+        for (cid, label), entry in items:
+            await self._safe_close(entry.box, f"{cid}/{label}")
         if browser is not None:
             await self._safe_close(browser.box, "浏览器")
 
-    def _pop_subs_of(self, conv_id: str) -> list:
-        """从缓存摘出某会话的全部子沙箱条目（在锁内调用），返回 [(key, entry)]。"""
-        keys = [k for k in self._subs if k[0] == conv_id]
-        return [(k, self._subs.pop(k)) for k in keys]
-
-    async def _close_subs(self, items: list) -> None:
-        """销毁一批子沙箱条目（在锁外调用，容器关停可能较慢）。"""
-        for key, entry in items:
-            await self._safe_close(entry.box, f"{key[0]}/{key[1]} 子沙箱")
-
     async def _evict_idle(self, keep: str) -> None:
-        """惰性驱逐空闲超时的会话容器与语言子沙箱（在锁内调用）。keep 为本次要用的会话，不驱逐。
-
-        基础容器被驱逐/销毁时，其子沙箱失去承载工作区的基础、复用价值归零，故一并销毁。
-        子沙箱另有独立的（更长的）空闲超时，与基础容器超时各自计。
-        """
+        """惰性驱逐空闲超时的语言容器与全局浏览器（在锁内调用）。keep 为本次要用的会话，不驱逐。"""
         now = time.monotonic()
-        dead_subs: list = []
+        dead: list = []
         if self._idle_timeout > 0:
-            stale = [cid for cid, e in self._boxes.items()
-                     if cid != keep and now - e.last_used > self._idle_timeout]
-            for cid in stale:
-                entry = self._boxes.pop(cid, None)
-                if entry is not None:
-                    await self._safe_close(entry.box, cid)
-                dead_subs += self._pop_subs_of(cid)   # 基础没了，其子沙箱一并回收
-        if self._sub_idle_timeout > 0:
-            stale_subs = [k for k, e in self._subs.items()
-                          if k[0] != keep and now - e.last_used > self._sub_idle_timeout]
-            dead_subs += [(k, self._subs.pop(k)) for k in stale_subs]
-        # 全局浏览器沙箱空闲超时（默认 24h）→ 销毁，下次抓取再懒加载重建
+            stale = [k for k, e in self._boxes.items()
+                     if k[0] != keep and now - e.last_used > self._idle_timeout]
+            dead = [(k, self._boxes.pop(k)) for k in stale]
         dead_browser = None
         if self._browser is not None and self._browser_idle > 0 \
                 and now - self._browser.last_used > self._browser_idle:
             dead_browser = self._browser.box
             self._browser = None
-        await self._close_subs(dead_subs)
+        for (cid, label), entry in dead:
+            await self._safe_close(entry.box, f"{cid}/{label}")
         if dead_browser is not None:
             await self._safe_close(dead_browser, "浏览器")
 
     @staticmethod
-    async def _safe_close(box, conv_id: str) -> None:
+    async def _safe_close(box, who: str) -> None:
         try:
             await box.close()
         except Exception as e:  # 清理失败不应打断删除/关停流程
-            _log.warning("销毁会话 %s 沙箱失败：%s", conv_id, e)
+            _log.warning("销毁 %s 沙箱失败：%s", who, e)
 
     def sweep_orphans(self) -> None:
-        """进程启动时回收上次遗留的会话沙箱容器（按标签）。best-effort，同步执行。
+        """进程启动时回收上次遗留的沙箱容器（按标签）。best-effort，同步执行。
 
         刚启动时内存映射为空，daemon 上带 mcp_sandbox 标签的容器必是上次遗留的孤儿。
         """
@@ -291,114 +314,47 @@ class SandboxManager:
             _log.warning("启动清扫沙箱孤儿容器失败：%s", e)
 
 
-def _resolve_lang_image(images: dict, language: str, version: str | None) -> str | None:
-    """按 语言[+版本] 解析一次性子沙箱镜像。
-
-    显式给了 version 但无对应镜像 → 报错（让模型换版本）；未给 version 且该语言无镜像
-    → 返回 None（调用方回退到会话基础容器/路由容器）。
-    """
-    if version:
-        key = f"{language}{version}"
-        if key not in images:
-            avail = ", ".join(sorted(images)) or "（无）"
-            raise SandboxError(f"没有可用的语言/版本镜像：{key}。可用：{avail}")
-        return images[key]
-    return images.get(language)
-
-
-async def _copy_workspace(src, dst) -> None:
-    """把 src 工作区整体搬到 dst 工作区。Docker 用整目录 tar；否则逐文件回退。"""
-    archive = getattr(src, "archive_workspace", None)
-    extract = getattr(dst, "extract_workspace", None)
-    if archive is not None and extract is not None:
-        await extract(await archive())
-        return
-    for name in await src.list_files("."):
-        try:
-            content = await src.read_file(name)
-        except SandboxError:
-            continue
-        await dst.write_file(name, content)
-
-
 class SandboxProxy:
-    """实现 Sandbox 协议：按当前会话上下文把调用委托给真实的会话容器。
+    """实现 Sandbox 协议：按当前会话上下文 + 语言把调用委托给真实的语言容器。
 
-    close() 为空实现——真实容器的生命周期归 SandboxManager（destroy/close_all/空闲驱逐）。
-    仅当配置了多镜像路由（sandbox_images）时才暴露 sandbox_for，以保持 assembly 里
-    「有 sandbox_for 才注册多语言代码工具」的判定不变。
+    - for_language(language, version)：取到该语言的容器（核心原语，代码/文件工具都用它）。
+    - 协议方法（exec/write_file/read_file/list_files）**缺省落 shell 容器**——供 run_shell、
+      未指定 language 的文件工具、以及 DNS 解析等内部调用。
+    - set_uploads：登记本会话上传附件，供各容器播种。
+    - close() 为空实现——真实容器生命周期归 SandboxManager（destroy/close_all/空闲驱逐）。
     """
 
     def __init__(self, manager: SandboxManager) -> None:
         self._m = manager
         self.workspace = manager._config.sandbox_workspace
-        if getattr(manager._config, "sandbox_images", None):
-            self.sandbox_for = self._sandbox_for  # 路由沙箱下才暴露
 
-    async def _box(self):
-        return await self._m.get(_current_conv.get())
+    async def for_language(self, language: str | None = None, version: str | None = None):
+        return await self._m.get_lang(_current_conv.get(), language, version)
+
+    async def _shell(self):
+        return await self._m.get_lang(_current_conv.get(), "shell")
 
     async def start(self) -> None:
-        await (await self._box()).start()
+        # 容器按需惰性创建（见 for_language / 各协议方法），无需在此预建
+        return None
 
     async def close(self) -> None:
-        # 生命周期归 manager；单容器的销毁走 destroy/close_all，这里不动。
         return None
 
     async def exec(self, command: list, timeout: float, *, quiet: bool = False):
-        return await (await self._box()).exec(command, timeout, quiet=quiet)
+        return await (await self._shell()).exec(command, timeout, quiet=quiet)
 
     async def write_file(self, path: str, content: str) -> None:
-        await (await self._box()).write_file(path, content)
+        await (await self._shell()).write_file(path, content)
 
     async def write_bytes(self, path: str, data: bytes) -> None:
-        await (await self._box()).write_bytes(path, data)
+        await (await self._shell()).write_bytes(path, data)
 
     async def read_file(self, path: str) -> str:
-        return await (await self._box()).read_file(path)
+        return await (await self._shell()).read_file(path)
 
     async def list_files(self, path: str = ".") -> list:
-        return await (await self._box()).list_files(path)
+        return await (await self._shell()).list_files(path)
 
-    async def _sandbox_for(self, language: str):
-        return await (await self._box()).sandbox_for(language)
-
-    async def run_code(self, language: str, version: str | None, filename: str,
-                       code: str, argv: list | None, shell: str | None, timeout: float):
-        """按语言[+版本]在（缓存复用的）语言子沙箱内跑代码，产物回传会话基础容器。
-
-        子沙箱按 (会话, 语言) 缓存，跑完不即销毁，同语言下次执行直接复用，避免反复重建镜像容器；
-        默认空闲 1h 由 manager 回收（sandbox_sub_idle_timeout<=0 则退回用完即销毁）。
-        未配置该语言/版本的子沙箱镜像时回退：会话基础容器（若配了多镜像路由则用其语言容器）。
-        """
-        base = await self._box()
-        cfg = self._m._config
-        images = getattr(cfg, "sandbox_lang_images", None) or {}
-        image = _resolve_lang_image(images, language, version)
-        cmd = argv if argv is not None else ["sh", "-c", shell]
-        if image is None:                       # 未配子沙箱镜像 → 回退基础/路由容器
-            route = getattr(base, "sandbox_for", None)
-            target = await route(language) if route is not None else base
-            await target.write_file(filename, code)
-            return await target.exec(cmd, timeout)
-        # 语言/版本子沙箱：按 (会话, label) 缓存复用，用完不即销毁（默认 1h 空闲由 manager 回收），
-        # 避免每次执行都重建镜像容器。缓存关闭时退回「用完即销毁」旧行为。
-        label = f"{language}{version}" if version else language
-        conv = _current_conv.get() or ""
-        # 先启动基础沙箱，让「启动 基础沙箱…」进度排在子沙箱之前（基础是承载会话工作区的容器）
-        await base.start()
-        # 取（或惰性创建/复用）该语言子沙箱；复用时 start() 幂等，不会重复上报「启动…」进度
-        sub, cached = await self._m.get_sub(conv, label, image)
-        try:
-            await sub.start()
-            await _copy_workspace(base, sub)    # 执行前：基础工作区 → 子沙箱（输入）
-            await sub.write_file(filename, code)
-            res = await sub.exec(cmd, timeout)
-            await _copy_workspace(sub, base)     # 执行后：子沙箱 → 基础工作区（产物回传）
-            return res
-        finally:
-            if not cached:
-                await sub.close()                # 未开缓存：用完即销毁
-            emit(Progress("sandbox",
-                          f"{label} 子沙箱执行完成" if cached else f"执行完成，回收 {label} 子沙箱",
-                          status="ok"))
+    async def set_uploads(self, uploads) -> None:
+        await self._m.set_uploads(_current_conv.get(), uploads)
