@@ -147,6 +147,20 @@ _EXAM_TOOLS = frozenset({
     "delete_questions", "delete_wrong_answers"})
 _EXAM_HISTORY_WINDOW = 16   # 覆盖一次批量抽题后逐题问答的往返（每题约 2 条消息）
 
+# 「出题入库」豁免：生成/出题并保存到题库，不是考试——它不让用户答题。误判成考试会让终局校验
+# 按考试规则要求「讲解上一题 + 呈现当前题」，把正常的出题总结判成失败（实测：「生成5道题保存到
+# 题库」被裁判判「未遵循考试规则」）。判据：有「存/入库」意图，且没有「考我/测/答题」这类答题意图。
+_SAVE_TO_BANK = re.compile(
+    "入库|存起来|(保存|存到|存入|存进|加入|录入|导入|放进|放入|收进|收录).{0,8}(题库|库)")
+_QUIZ_ME = re.compile(
+    "考试|考我|考考|考核|模拟考|测验|测测|测一下|测下|小测|刷题|练题|做题|答题|背题|默写|开考")
+
+
+def _is_gen_to_bank(msg: str) -> bool:
+    """『生成/出题 → 保存到题库』这类出题入库请求（不是考试：不让用户答题）。"""
+    m = msg or ""
+    return bool(_SAVE_TO_BANK.search(m)) and not _QUIZ_ME.search(m)
+
 
 def _needs_exam_guide(message: str, history, exam_active: bool) -> bool:
     """本轮是否处于考试/练习语境，需注入 EXAM_GUIDE。任一信号命中即注入：
@@ -157,13 +171,13 @@ def _needs_exam_guide(message: str, history, exam_active: bool) -> bool:
     """
     if exam_active:
         return True
-    if _EXAM_TRIGGER.search(message or ""):
+    if _EXAM_TRIGGER.search(message or "") and not _is_gen_to_bank(message or ""):
         return True
     for m in (history or [])[-_EXAM_HISTORY_WINDOW:]:
         if any(tc.name in _EXAM_TOOLS for tc in (m.tool_calls or [])):
             return True
         if m.role == Role.USER and isinstance(m.content, str) \
-                and _EXAM_TRIGGER.search(m.content):
+                and _EXAM_TRIGGER.search(m.content) and not _is_gen_to_bank(m.content):
             return True
     return False
 

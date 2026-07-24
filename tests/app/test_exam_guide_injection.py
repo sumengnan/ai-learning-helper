@@ -25,6 +25,19 @@ def test_plain_qa_no_guide():
     assert _needs_exam_guide("什么是 JVM 的逃逸分析", [_u("你好"), _u("讲讲多线程")], False) is False
 
 
+def test_generate_to_bank_is_not_exam():
+    # 出题入库不是考试：误判成考试会让裁判按「讲解上一题+呈现当前题」判失败（实测 bug）
+    for msg in ("生成 5 道 AI 相关的单选题，保存到题库", "出10道题存进题库",
+                "生成一批 Python 题目入库", "帮我出几道题收录到题库"):
+        assert _needs_exam_guide(msg, [], False) is False, msg
+
+
+def test_generate_then_quiz_is_still_exam():
+    # 出题+要考我：仍是考试（有明确答题意图，不豁免）
+    for msg in ("出5道题考我", "生成几道题然后测验我", "存到题库并考考我"):
+        assert _needs_exam_guide(msg, [], False) is True, msg
+
+
 # ---------- 该注入：三个信号各自 ----------
 
 def test_trigger_word_in_current_message():
