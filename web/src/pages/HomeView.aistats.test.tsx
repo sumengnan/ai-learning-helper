@@ -212,22 +212,22 @@ describe("HomeView · 回答质量", () => {
   });
 });
 
-describe("HomeView · 交付提醒", () => {
-  it("展示提醒轮数与各项次数——它只提示，不该被读成失败", async () => {
+describe("HomeView · 交付警告", () => {
+  it("展示警告轮数与各项次数——它只提示，不该被读成失败", async () => {
     (statsApi.overview as any).mockResolvedValue(OV);
     renderOps();
-    await waitFor(() => expect(screen.getByText("交付提醒")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("交付警告")).toBeTruthy());
     // 轮数与各项次数只出现在这块的 hint 里，比裸数字「2」更能唯一定位到这张卡
     expect(screen.getByText("2 轮触发交付后检查 · 代码可运行 3")).toBeTruthy();
   });
 
-  it("没有提醒时副标题说清查了什么、只提示不判失败，免得空值被当成没跑", async () => {
+  it("没有警告时副标题说清校验的是哪几项，免得空值被当成没跑", async () => {
     (statsApi.overview as any).mockResolvedValue({
       ...OV,
       ops: { ...OV.ops, gate: { ...OV.ops.gate, notice_turns: 0, notices: [] } },
     });
     renderOps();
     await waitFor(() =>
-      expect(screen.getByText("交付后查完整性·检索依据·代码可运行·引用链接 · 只提示不判失败")).toBeTruthy());
+      expect(screen.getByText("完整性、检索依据、代码运行或引用链接校验不达标")).toBeTruthy());
   });
 });
