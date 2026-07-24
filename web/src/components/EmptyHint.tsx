@@ -20,7 +20,7 @@ type Suggestion = { text: string; icon: ReactNode; color: string };
 export const SUGGESTIONS: Suggestion[] = [
   { text: "总结 AI 未来 2 年的发展情况", icon: <TrendingUpIcon />, color: "#059669" },
   { text: "帮我制定一份 7 天的 AI 学习计划", icon: <EventNoteIcon />, color: "#0891b2" },
-  { text: "搜索最新的 AI 资讯，保存到知识库", icon: <TravelExploreIcon />, color: "#2563eb" },
+  { text: "搜索最新的 AI 知识，保存到知识库", icon: <TravelExploreIcon />, color: "#2563eb" },
   { text: "把知识库里 AI 的内容整理成学习笔记", icon: <AutoStoriesIcon />, color: "#db2777" },
   { text: "生成 5 道 AI 相关的单选题，保存到题库", icon: <QuizIcon />, color: "#7c3aed" },
   { text: "从题库抽取 5 道 AI 题，考考我", icon: <SchoolIcon />, color: "#d97706" },
