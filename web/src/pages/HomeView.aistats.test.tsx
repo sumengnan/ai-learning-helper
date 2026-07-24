@@ -173,36 +173,42 @@ describe("HomeView · 回答质量", () => {
     renderOps();
     await waitFor(() => expect(screen.getByText("上下文健康度")).toBeTruthy());
     expect(screen.getByText("上下文失忆")).toBeTruthy();
-    expect(screen.getByText("这些轮丢了更早历史，且模型不自知")).toBeTruthy();
+    expect(screen.getByText("这些轮丢了更早历史、AI 却不自知，需排查")).toBeTruthy();
     // L2 失败要能看出「成功/总数」，而非只报一个成功数
     expect(screen.getByText("12 / 15")).toBeTruthy();
-    expect(screen.getByText("3 次失败（含无害的空挤出）")).toBeTruthy();
+    // 未接住的即「上下文失忆」，hint 点名二者是同一批，免得看着像重复计数
+    expect(screen.getByText("压缩接住的轮数：3 轮没接住（即「上下文失忆」）")).toBeTruthy();
   });
 
-  it("没失忆时不误报：full 策略（未启用分层）与「摘要都覆盖了」要分得开", async () => {
+  it("没失忆时不误报：还没移出历史 与 移出但都接住了 要分得开", async () => {
+    // evicted=0：对话都没超窗，一条历史都没移出 —— 不是「失忆已覆盖」，而是根本没发生
     (statsApi.overview as any).mockResolvedValue({
       ...OV,
-      ops: { ...OV.ops, context: { turns: 20, layered_turns: 0, evicted_total: 0,
+      ops: { ...OV.ops, context: { turns: 20, layered_turns: 20, evicted_total: 0,
                                    amnesia_turns: 0, summary_errors: 0,
                                    retrieval_errors: 0, summary_ok: 0 } },
     });
     renderOps();
     await waitFor(() =>
-      expect(screen.getByText("未启用分层上下文（full 策略）")).toBeTruthy());
-    expect(screen.queryByText("这些轮丢了更早历史，且模型不自知")).toBeNull();
+      expect(screen.getByText("还没有历史被移出，未发生丢失")).toBeTruthy());
+    expect(screen.queryByText("这些轮丢了更早历史、AI 却不自知，需排查")).toBeNull();
   });
 
-  it("L3 检索失败与 L2 失忆分开展示——前者只是少了增益，不该冲淡后者", async () => {
+  it("移出的历史与 L3 检索失败拆成两格——前者只是少了增益，不该冲淡失忆", async () => {
     (statsApi.overview as any).mockResolvedValue({
       ...OV,
       ops: { ...OV.ops, context: { ...OV.ops.context, retrieval_errors: 7,
                                    evicted_total: 42, amnesia_turns: 0 } },
     });
     renderOps();
-    await waitFor(() => expect(screen.getByText("挤出历史 / L3 失败")).toBeTruthy());
-    expect(screen.getByText("42 / 7")).toBeTruthy();
-    // L3 挂了 7 次，但没失忆 → 失忆格仍是 0，不被带跑
-    expect(screen.getByText("摘要均已覆盖挤出的历史")).toBeTruthy();
+    // 两格各自独立：移出的历史(42) 与 历史检索失败(7) 不再拼在一格里
+    await waitFor(() => expect(screen.getByText("移出的历史")).toBeTruthy());
+    expect(screen.getByText("42")).toBeTruthy();
+    expect(screen.getByText("历史检索失败")).toBeTruthy();
+    expect(screen.getByText(
+      "从更早历史捞相关片段失败的轮数（只是少层参考，非失忆）")).toBeTruthy();
+    // L3 挂了 7 次，但没失忆 → 失忆格仍是 0，hint 说清是「都接住了」而非「没移出」
+    expect(screen.getByText("移出的历史都被摘要接住了，未发生丢失")).toBeTruthy();
   });
 });
 
