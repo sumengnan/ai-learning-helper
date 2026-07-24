@@ -404,13 +404,15 @@ def test_no_verify_trace_when_verify_off(make_mock, monkeypatch):
 # ---------- 关掉结果校验开关就不该出现「结果校验通过」 ----------
 
 class _QualityOrchestrator:
-    """多步产出（工具步 > 1），满足轨迹 judge 的触发条件。"""
+    """多步规划路径（route=plan，工具步 > 1），满足轨迹 judge 的触发条件。"""
     async def run(self, message, verify=True, *, context=None, registry=None,
                   recent_dialogue="", force_simple=False, in_stateful_exam=False,
                   run_id=None, purge_side_effects=None):
-        from harness.events import RunStarted, RunFinished, ToolStarted, ToolFinished
+        from harness.events import RunStarted, RunFinished, ToolStarted, ToolFinished, Progress
         from harness.types import Message, Role, ToolCall, ToolResult
         yield RunStarted(run_id=run_id or "r1")
+        yield Progress(scope="route", text="多步规划", key="route",
+                       detail={"mode": "plan"}, status="ok")
         for i in (1, 2):
             yield ToolStarted(tool_call=ToolCall(id=f"t{i}", name="search_knowledge",
                                                  arguments={"query": "x"}))
@@ -419,7 +421,29 @@ class _QualityOrchestrator:
         yield RunFinished(message=Message(role=Role.ASSISTANT, content="答"))
 
 
-def _quality_client(make_mock, monkeypatch, scored: list):
+class _SimpleQualityOrchestrator:
+    """简单直答路径（route=simple），但单个 ReAct 循环里调了多个工具（工具步 > 1）。
+
+    没有 plan 拆分——轨迹质量分评的「拆分/每步/最终」无从谈起，故不该评它。
+    工具步数 > 1 不能当「多步任务」的判据，正是这个用例要证的。
+    """
+    async def run(self, message, verify=True, *, context=None, registry=None,
+                  recent_dialogue="", force_simple=False, in_stateful_exam=False,
+                  run_id=None, purge_side_effects=None):
+        from harness.events import RunStarted, RunFinished, ToolStarted, ToolFinished, Progress
+        from harness.types import Message, Role, ToolCall, ToolResult
+        yield RunStarted(run_id=run_id or "r1")
+        yield Progress(scope="route", text="简单直答", key="route",
+                       detail={"mode": "simple"}, status="ok")
+        for i in (1, 2):
+            yield ToolStarted(tool_call=ToolCall(id=f"t{i}", name="search_knowledge",
+                                                 arguments={"query": "x"}))
+            yield ToolFinished(result=ToolResult(tool_call_id=f"t{i}", content=f"结果{i}",
+                                                 is_error=False))
+        yield RunFinished(message=Message(role=Role.ASSISTANT, content="答"))
+
+
+def _quality_client(make_mock, monkeypatch, scored: list, orchestrator=None):
     class _Judge:
         def __init__(self, *a, **kw):
             pass
@@ -434,7 +458,8 @@ def _quality_client(make_mock, monkeypatch, scored: list):
     harness = Harness(client=make_mock([]), registry=ToolRegistry(),
                       checkpoint_store=CheckpointStore(":memory:"),
                       trajectory_store=traj, sink=TrajectorySink(traj),
-                      system_prompt="你是助手", orchestrator=_QualityOrchestrator())
+                      system_prompt="你是助手",
+                      orchestrator=orchestrator or _QualityOrchestrator())
     cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,
                     enable_trajectory_judge=True,
                     sandbox_approval_timeout=0.3)
@@ -469,11 +494,26 @@ async def test_quality_score_not_emitted_when_verify_off(make_mock, monkeypatch)
 
 
 async def test_quality_score_still_emitted_when_verify_on(make_mock, monkeypatch):
-    """反向：开着开关时质量分照常产出，别把这条修成「永远不打分」。"""
+    """反向：开着开关 + 多步规划路径时质量分照常产出，别把这条修成「永远不打分」。"""
     scored: list = []
     c, _ = _quality_client(make_mock, monkeypatch, scored)
     _run_turn(c, verify=True)
-    assert scored, "开着结果校验时轨迹 judge 应照常打分"
+    assert scored, "开着结果校验 + 多步规划时轨迹 judge 应照常打分"
+
+
+async def test_quality_score_not_emitted_in_simple_mode(make_mock, monkeypatch):
+    """简单直答路径不评轨迹质量分——即便工具步 > 1。
+
+    质量分评的是「拆分/每步/最终」，简单直答没有 plan 拆分，评它没意义。用工具步数
+    当「多步任务」的判据是错的：单个 ReAct 循环也可能调多个工具。据 route 徽章的
+    mode（simple/plan）判定才准。
+    """
+    scored: list = []
+    c, _ = _quality_client(make_mock, monkeypatch, scored,
+                           orchestrator=_SimpleQualityOrchestrator())
+    body = _run_turn(c, verify=True)
+    assert scored == [], "简单直答路径不该评轨迹质量分"
+    assert "quality" not in body
 
 
 class StepResetOrchestrator:

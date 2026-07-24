@@ -241,6 +241,20 @@ _KB_ID_RE = re.compile(r"〔知识ID:([^〕]+)〕")
 _Q_ID_RE = re.compile(r"〔题目ID:([^〕]+)〕")
 
 
+def _used_planning(progress: list[dict]) -> bool:
+    """本轮是否真的走了多步规划路径（plan-execute-synthesize），而非简单直答。
+
+    轨迹质量分评的是「拆分/每步/最终」三层，简单直答没有 plan 拆分，评它没有意义——
+    而工具步数 > 1 **不能**当「多步任务」的判据：简单直答里单个 ReAct 循环也可能调多个
+    工具。据编排器发的 route 徽章的 mode 判定：plan=多步规划，simple=简单直答。
+    无 route 事件（如兜底直通路径）同样没有规划，视作 False。
+    """
+    for p in reversed(progress or []):
+        if p.get("scope") == "route" and (p.get("detail") or {}).get("mode"):
+            return p["detail"]["mode"] == "plan"
+    return False
+
+
 def _plan_from_orchestrator(progress: list[dict]) -> bool:
     """本轮最后一条 plan 进度是不是编排器发的（其步骤带 id）。
 
@@ -1046,8 +1060,10 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     _mark_delivered()
                     # 回答质量分（轨迹 judge）：编排器已有自己的终局 Critic 把关，这里仅额外打一次
                     # 分层质量分，落 progress 列供「AI 运行统计 · 回答质量」展示，不据此驱动重答。
-                    # 仅多步任务（工具步 > 1）才评：单步/无工具无「拆分/多步」可评，跳过省 token
-                    # （与旧交付门口径一致）。轨迹 judge 默认关闭，需 enable_trajectory_judge 才生效。
+                    # 仅**多步规划路径**才评（_used_planning）：质量分评的是「拆分/每步/最终」，
+                    # 简单直答没有 plan 拆分，评它没意义。注意不能用「工具步 > 1」当判据——简单直答
+                    # 里单个 ReAct 循环也可能调多个工具，据 route 徽章的 mode 判定才准。轨迹 judge
+                    # 默认关闭，需 enable_trajectory_judge 才生效。
                     #
                     # 必须同时看 req.verify（本轮的结果校验开关）。此前只看服务端开关，于是用户
                     # 关掉开关后：后端确实不做终局 review、一条 scope=verify 都不发，但质量分照
@@ -1057,7 +1073,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     # 结果校验未通过（交付门 ok=False）→ 不打质量分：答复都没过关，再评轨迹没意义、白烧 token
                     if (not errored and req.verify and trajectory_judge is not None
                             and config.enable_trajectory_judge and delivered
-                            and len(collect["steps"]) > 1
+                            and _used_planning(progress)
                             and _gate_verdict_ok(progress)):
                         try:
                             tscore = await trajectory_judge.score(
