@@ -258,6 +258,18 @@ def _plan_from_orchestrator(progress: list[dict]) -> bool:
     return isinstance(steps, list) and any(isinstance(s, dict) and s.get("id") for s in steps)
 
 
+def _gate_verdict_ok(progress: list[dict]) -> bool:
+    """本轮结果校验（交付门）是否通过——从编排器发的 VERIFY_TRACE 事件取 detail.ok。
+
+    没有该事件（本轮没跑校验，如关了校验开关）→ 视作 True，不据此拦别的东西。
+    用途：结果校验未通过（ok=False）时不再跑轨迹评分——答复本身都没过关，再打质量分没意义。
+    """
+    for p in reversed(progress or []):
+        if p.get("key") == VERIFY_TRACE_KEY and p.get("detail"):
+            return bool(p["detail"].get("ok"))
+    return True
+
+
 # 副作用工具 → 产物的说法（供重答提示点名，让模型知道要重做什么）
 _FX_KIND = {
     "save_download": "文件",
@@ -1035,9 +1047,11 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     # 发——前端 VerifyBadge 的 kind 判据是「有 verify 事件 **或** 有 quality」，
                     # 被 quality 命中，主行照样显示「结果校验通过」。用户关掉了校验，却被告知
                     # 结果校验通过了。质量分只是打分、不驱动重答，冒充不了「把过关」。
+                    # 结果校验未通过（交付门 ok=False）→ 不打质量分：答复都没过关，再评轨迹没意义、白烧 token
                     if (not errored and req.verify and trajectory_judge is not None
                             and config.enable_trajectory_judge and delivered
-                            and len(collect["steps"]) > 1):
+                            and len(collect["steps"]) > 1
+                            and _gate_verdict_ok(progress)):
                         try:
                             tscore = await trajectory_judge.score(
                                 question, _plan_text(progress),

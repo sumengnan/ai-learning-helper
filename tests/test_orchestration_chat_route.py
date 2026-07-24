@@ -545,3 +545,18 @@ def test_purged_control_event_not_persisted(make_mock, monkeypatch):
     kept = [p for m in store.ui_messages(cid) if m["role"] == "assistant"
             for p in (m.get("progress") or []) if p.get("scope") == "purged"]
     assert kept == [], "控制事件不该落库"
+
+
+def test_gate_verdict_ok_reads_verify_trace():
+    """_gate_verdict_ok：结果校验通过/未通过据 VERIFY_TRACE 的 ok；无该事件→True（没跑校验不拦）。
+
+    用途：结果校验不通过（ok=False）时不再跑轨迹评分（质量分）。
+    """
+    from app.api.chat import _gate_verdict_ok
+    from app.orchestration.orchestrator import VERIFY_TRACE_KEY
+    passed = [{"scope": "verify", "key": VERIFY_TRACE_KEY, "detail": {"ok": True}}]
+    failed = [{"scope": "verify", "key": VERIFY_TRACE_KEY, "detail": {"ok": False}}]
+    assert _gate_verdict_ok(passed) is True
+    assert _gate_verdict_ok(failed) is False
+    assert _gate_verdict_ok([{"scope": "route", "text": "x"}]) is True   # 无 verify_trace → 不拦
+    assert _gate_verdict_ok([]) is True
