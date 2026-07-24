@@ -380,7 +380,7 @@ class Orchestrator:
 
     async def _simple_answer_verified(self, message: str, budget=None, *, context=None,
                                       registry=None, skill_hint: str = "",
-                                      in_exam: bool = True):
+                                      in_exam: bool = True, recent_dialogue: str = ""):
         """带终局校验的简单直答。用于考试轮（force_simple）与「1 步计划回退」（非考试）。
 
         与多步路径的区别是**不重规划**：考试是有状态流程，重新拆解会打乱逐题推进。
@@ -416,7 +416,8 @@ class Orchestrator:
         # 实质性内容遗漏」——而逐题呈现恰恰是对的。误判的代价不对称：它会触发整轮重答，
         # 用户白等一次，重答出来的还是同一道题。故把考试的推进规则明确告诉校验器。
         review = await self._critic.review(
-            (_EXAM_REVIEW_NOTE + message) if in_exam else message, plan, arts)
+            (_EXAM_REVIEW_NOTE + message) if in_exam else message, plan, arts,
+            recent_dialogue=recent_dialogue)
         if review.accept:
             yield Progress(scope="verify", text="结果校验通过", status="ok")
             if finished_ev is not None:
@@ -431,10 +432,13 @@ class Orchestrator:
         # 重答工具表：考试轮空表（防 start_exam 重置进度），非考试的 1 步回退给真实工具表
         # （否则「单步但需工具」的题重答只能空转、没法重做检索/生成）。
         redo_registry = ToolRegistry() if in_exam else registry
-        async for ev in self._simple_answer(_redo_message(message, review.feedback),
-                                            budget, context=context,
-                                            registry=redo_registry, prefer_main=True):
-            yield ev
+        # 重答升温：拿同一个温度把上一版的毛病再写一遍，纠正指令就白给了。这是编排器路径下
+        # 唯一真正的「整轮重答」（旧交付门那套已删），故升温档挂在这里。
+        with _step_retry_temperature(getattr(self, "_dynamic_temperature", False), 1):
+            async for ev in self._simple_answer(_redo_message(message, review.feedback),
+                                                budget, context=context,
+                                                registry=redo_registry, prefer_main=True):
+                yield ev
 
     # ---- synthesize ----
     async def _synthesize(self, goal: str, artifacts: dict[str, Artifact], recent_dialogue: str = ""):
@@ -466,13 +470,14 @@ class Orchestrator:
 
     # ---- 简单直答交付（三处共用：simple 分流 / 规划失败降级 / 1 步计划回退）----
     async def _simple_deliver(self, message, budget, *, context, registry, skill_hint,
-                              verify, force_simple=False):
+                              verify, force_simple=False, recent_dialogue=""):
         """走单循环直答。verify 决定是否补一道终局校验（与 simple 分流同口径），三处共用
         以免逻辑漂移。force_simple 仅考试轮为真；1 步回退与规划降级都传 False。"""
         if verify and (force_simple or not _obvious_simple(message)):
             async for ev in self._simple_answer_verified(
                     message, budget, context=context, registry=registry,
-                    skill_hint=skill_hint, in_exam=force_simple):
+                    skill_hint=skill_hint, in_exam=force_simple,
+                    recent_dialogue=recent_dialogue):
                 yield ev
         else:
             async for ev in self._simple_answer(message, budget, context=context,
@@ -604,7 +609,8 @@ class Orchestrator:
                 # 仍放过 _obvious_simple（纯寒暄/致谢）：校验「你好」纯属白烧一次往返。
                 async for ev in self._simple_deliver(
                         user_message, budget, context=context, registry=registry,
-                        skill_hint=skill_hint, verify=verify, force_simple=force_simple):
+                        skill_hint=skill_hint, verify=verify, force_simple=force_simple,
+                        recent_dialogue=recent_dialogue):
                     yield ev
                 return
 
@@ -643,7 +649,8 @@ class Orchestrator:
                                detail={"mode": "simple"}, status="ok")
                 async for ev in self._simple_deliver(
                         user_message, budget, context=context, registry=registry,
-                        skill_hint=skill_hint, verify=verify):
+                        skill_hint=skill_hint, verify=verify,
+                        recent_dialogue=recent_dialogue):
                     yield ev
                 return
             plan = out["plan"]
@@ -662,7 +669,8 @@ class Orchestrator:
                                detail={"mode": "simple"}, status="ok")
                 async for ev in self._simple_deliver(
                         user_message, budget, context=context, registry=registry,
-                        skill_hint=skill_hint, verify=verify):
+                        skill_hint=skill_hint, verify=verify,
+                        recent_dialogue=recent_dialogue):
                     yield ev
                 return
             # 确是多步 → 此刻才确认走编排器，发徽章 + 任务步骤块。
@@ -672,6 +680,7 @@ class Orchestrator:
 
             replan_count = 0
             _review_history: list[dict] = []   # 每轮终局校验结论（供 verify 列结构化统计）
+            _review_errored = False            # 是否出现过「裁判崩了→放行」（那种通过不算真通过）
             _last_review_ok = True             # verify=False 时不校验，按通过记
             retry_hints: dict[str, str] = {}
             # 跨轮累积 done 产物：replan 返回全新 Plan（旧 done 步不在其中），必须在换 plan 前收走，
@@ -704,12 +713,14 @@ class Orchestrator:
                 # 结果校验过程可见（对应前端结果校验开关）：走 scope=verify，前端 VerifyBadge 据此
                 # 显示「结果校验中…→通过/未通过」；不通过带缺口说明，重规划后会再发一轮，形成校验历史。
                 yield Progress(scope="verify", text="结果校验中…", status="running")
-                review = await self._critic.review(user_message, plan, all_artifacts)
+                review = await self._critic.review(user_message, plan, all_artifacts,
+                                                   recent_dialogue=recent_dialogue)
                 # 结构化留痕：Progress 里只有给人看的中文，统计侧解不出「过没过/拦在哪层」。
                 # 交付门那套 verify 列此前只在已成死代码的交付门分支里写，编排器每轮都在
                 # 校验、结论却全丢——统计页因此显示「从来没有回答被拦下过」。
                 _review_history.append({"failed": [] if review.accept else ["review"],
                                         "feedback": review.feedback or ""})
+                _review_errored = _review_errored or getattr(review, "errored", False)
                 _last_review_ok = review.accept
                 yield Progress(scope="verify",
                                text="结果校验通过" if review.accept
@@ -773,7 +784,7 @@ class Orchestrator:
                     scope="verify", text="", key=VERIFY_TRACE_KEY,
                     detail={"attempts": replan_count + 1, "retries": replan_count,
                             "ok": bool(_last_review_ok), "degraded": _degraded,
-                            "gate_error": False, "history": _review_history})
+                            "gate_error": _review_errored, "history": _review_history})
             yield RunFinished(message=Message(role=Role.ASSISTANT, content=final))
         finally:
             cleanup.close()          # 还原本轮意图温度（若设过）

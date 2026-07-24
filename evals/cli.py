@@ -2,9 +2,9 @@
 """命令行入口。标准库 argparse，不引 click/typer。
 
   uv run python -m evals run --suite component
-  uv run python -m evals run --suite gate
+  uv run python -m evals run --suite checks
   uv run python -m evals update-baseline --suite component
-  uv run python -m evals compare --report evals/reports/x.json --suite gate
+  uv run python -m evals compare --report evals/reports/x.json --suite checks
 """
 from __future__ import annotations
 

@@ -5,7 +5,6 @@
 """
 import pytest
 
-from app.api.chat import _redo_temperature
 from app.orchestration.orchestrator import _step_retry_temperature
 from app.orchestration.planner import Planner
 from harness.llm.sampling import resolve_sampling, sampling
@@ -20,40 +19,26 @@ def _temp():
     return resolve_sampling(0.7)["temperature"]
 
 
-# ── 整轮重答（交付门未过）──────────────────────────────────────────────────────
-def test_redo_first_attempt_does_not_change_temperature():
-    with _redo_temperature(_Cfg(), 0):
-        assert _temp() == 0.7
-
-
-def test_redo_raises_temperature_on_later_attempts():
-    with _redo_temperature(_Cfg(), 1):
-        assert _temp() == pytest.approx(0.85)
-    with _redo_temperature(_Cfg(), 2):
-        assert _temp() == 1.0            # 0.7+0.3，且被上限夹住
-
-
-def test_redo_stacks_on_the_intent_temperature():
-    """重答升的是「本轮意图定下的那个温度」，不是凭空的绝对值。"""
-    with sampling(temperature=0.2), _redo_temperature(_Cfg(), 1):
-        assert _temp() == pytest.approx(0.35)
-
-
-def test_redo_restores_after_the_attempt():
-    with _redo_temperature(_Cfg(), 2):
-        pass
-    assert _temp() == 0.7
-
-
-def test_redo_is_a_noop_when_switched_off():
-    with _redo_temperature(_Cfg(on=False), 2):
-        assert _temp() == 0.7
-
-
-# ── 单步重试 ───────────────────────────────────────────────────────────────────
+# ── 重答与单步重试（都走 _step_retry_temperature）──────────────────────────────
+# 编排器路径下真正的「整轮重答」是 _simple_answer_verified 里 review 不过后的那一次
+# （旧交付门那套重答循环已随交付门删除），它复用同一个升温档。
 def test_step_retry_raises_temperature():
     with _step_retry_temperature(True, 1):
         assert _temp() == pytest.approx(0.85)
+    with _step_retry_temperature(True, 2):
+        assert _temp() == 1.0            # 0.7+0.3，且被上限夹住
+
+
+def test_retry_stacks_on_the_intent_temperature():
+    """升的是「本轮意图定下的那个温度」，不是凭空的绝对值。"""
+    with sampling(temperature=0.2), _step_retry_temperature(True, 1):
+        assert _temp() == pytest.approx(0.35)
+
+
+def test_retry_restores_afterwards():
+    with _step_retry_temperature(True, 2):
+        pass
+    assert _temp() == 0.7
 
 
 def test_step_retry_noop_on_first_attempt_and_when_off():

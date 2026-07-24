@@ -54,6 +54,13 @@ REVIEW_SYSTEM = (
     "你是终局质检员。给你用户目标和各步骤的产出。判断整体是否足以作为对用户的答复。"
     "若基本达成目标即通过（accept=true）；若有实质缺口（遗漏关键部分、明显错误）则不通过，"
     "并在 feedback 里说清缺什么，供重新规划参考。"
+    # 脱离上文看，承接前文的请求几乎必然显得「跑题」或「过度复杂」。真实误判：聊了半天
+    # LlamaIndex 之后用户说「帮我写个 hello world」，AI 给 LlamaIndex 版 hello world 是对的，
+    # 裁判只看孤立那句就判「不该用 RAG 框架、严重答非所问」。故这条要写在最前面。
+    "**若给出了最近几轮对话，必须据此理解用户本轮要什么**：本轮请求多半是在延续上文的"
+    "话题、技术栈或任务，脱离上下文单看会显得「跑题」或「小题大做」，那是你漏读了上文，"
+    "不是答复有问题。凡是与上文话题一致的答复，一律不得以「答非所问」「过于复杂」"
+    "「误解意图」为由判不通过。用户没有重复交代的前提，默认沿用上文。"
     + _CLARIFY_EXEMPTION +
     "特别地，当缺口只能由用户回答时（需要用户提供信息或做选择），一律 accept=true："
     "重新规划拿不到用户没给过的信息，只会空转几轮后被迫瞎猜；正确做法是把问题交付给用户。"
@@ -89,8 +96,19 @@ def _validate_user(step: PlanStep, artifact: Artifact) -> str:
             f"实际产出：\n{artifact.summary}\n\n请判定是否达成预期。")
 
 
-def _review_user(goal: str, plan: Plan, artifacts: dict) -> str:
-    lines = [f"用户目标：\n{goal}\n", "各步骤产出："]
+def _review_user(goal: str, plan: Plan, artifacts: dict, recent_dialogue: str = "") -> str:
+    lines: list[str] = []
+    if recent_dialogue:
+        # 没有上文，承接前文的请求会被判成答非所问：真实案例——用户和 AI 聊了半天
+        # LlamaIndex，接着说「帮我写个 hello world 看一下」，AI 给的 LlamaIndex 版
+        # hello world 是对的，裁判却只看见孤立的一句「hello world」，判「用了复杂的
+        # RAG 框架、严重答非所问」，把正确答复打回重答。
+        #
+        # 原样用、不再截断：窗口策略只归 chat._recent_dialogue 一处管（它已按条数+字数
+        # 收好），在这里再截一刀等于把同一个策略拆到两处、还比交付门 judge 拿得更少。
+        lines.append("【最近几轮对话（用户本轮多半在接着往下说）】：\n"
+                     f"{recent_dialogue}\n")
+    lines += [f"用户目标：\n{goal}\n", "各步骤产出："]
     for s in plan.steps:
         art = artifacts.get(s.id)
         mark = art.summary if art else f"（未完成，状态={s.status}）"
@@ -118,10 +136,15 @@ class Critic:
             _log.warning("Critic.validate 调用失败，fail-open 放行：%s", e)
             return Verdict(ok=True, reason=f"校验调用失败，放行：{str(e)[:120]}")
 
-    async def review(self, goal: str, plan: Plan, artifacts: dict) -> Review:
+    async def review(self, goal: str, plan: Plan, artifacts: dict,
+                     recent_dialogue: str = "") -> Review:
+        """recent_dialogue：最近几轮对话。缺了它，承接上文的请求会被判成答非所问
+        （见 _review_user 里的真实案例）。默认空 = 与旧行为一致，供既有测试与直接调用。"""
         try:
-            v = await call_json(self._complete, REVIEW_SYSTEM, _review_user(goal, plan, artifacts))
+            v = await call_json(self._complete, REVIEW_SYSTEM,
+                                _review_user(goal, plan, artifacts, recent_dialogue))
             return Review(accept=_coerce_bool(v.get("accept"), True), feedback=str(v.get("feedback", "")))
         except Exception as e:  # fail-open：抖动放行
             _log.warning("Critic.review 调用失败，fail-open 放行：%s", e)
-            return Review(accept=True, feedback=f"审查调用失败，放行：{str(e)[:120]}")
+            return Review(accept=True, errored=True,
+                          feedback=f"审查调用失败，放行：{str(e)[:120]}")

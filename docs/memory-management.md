@@ -17,7 +17,7 @@
 
 | | 装的是什么 | 谁写进去 | 怎么取出来 | 能当作答依据吗 |
 | --- | --- | --- | --- | --- |
-| **知识库** `knowledge:<用户>` | 用户上传/保存的**资料** | 用户上传、`save_to_knowledge` | AI 调 `search_knowledge` | ✅ 是,交付门 grounding 只认它 |
+| **知识库** `knowledge:<用户>` | 用户上传/保存的**资料** | 用户上传、`save_to_knowledge` | AI 调 `search_knowledge` | ✅ 是,grounding 检查只认它 |
 | **长期记忆** `memory:<用户>` | AI 记下的**偏好/结论** | AI 调 `remember` | AI 调 `search_memory` | ❌ 不是事实依据 |
 | **对话记忆** `conversation:<会话>` | 本会话的历史内容 | 每轮结束后台自动写 | **无工具**,由上下文自动注入 | ❌ |
 
@@ -152,7 +152,7 @@ AI 判断某件事值得长期记住时,调用 `remember`,文本经切块 + 向�
   `episodes` 互不串扰。检索时 `MemoryFilter` 恒带 `owner_id` + `kind`,
   且 **collection 刻意不做成模型可传的参数**——scope 由服务端按当前用户注入,
   模型不该也不能跨用户检索。
-- 交付门的 grounding 校验**只认 `search_knowledge` 的命中**:AI 自己记的偏好、对话历史
+- 交付提醒里的 grounding 检查**只认 `search_knowledge` 的命中**:AI 自己记的偏好、对话历史
   都不构成事实依据。
 - 文字入库前会**切块(chunk)**,详见 [RAG 检索](rag-retrieval.md#阶段一把资料存进知识库)。
 

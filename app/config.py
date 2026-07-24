@@ -108,21 +108,20 @@ class AppConfig(HarnessConfig):
     short_pass_score: int = 60
     downloads_dir: str = "downloads"
     download_max_mb: int = 25
-    # 回答交付前校验门（默认关，保持现状直通流式）
-    enable_answer_gate: bool = False
-    answer_gate_max_retries: int = 1        # 校验不过时的自动重答次数（N）；总尝试 = N+1
-    answer_pass_score: int = 60             # LLM 自评打分阈值（低于则不过）
-    gate_check_format: bool = True          # 分项开关：格式/完整性
-    gate_check_grounding: bool = True       # 分项开关：知识库 grounding
-    gate_check_code: bool = True            # 分项开关：代码可运行
-    gate_check_judge: bool = True           # 分项开关：LLM 自评打分
-    gate_check_facts: bool = False          # 分项开关：引用链接可达性核对
+    # 交付后的机械检查（提醒型：只提示、不重答、不判本轮失败，见 app/verify.py）。
+    # 「答复够不够格」由编排器的 Critic.review 判——这四项是它做不到的：确定性检测、
+    # 沙箱执行、网络探测、检索原文比对。
+    enable_delivery_checks: bool = True
+    delivery_check_format: bool = True      # 分项：完整性（代码围栏未闭合＝疑似截断）
+    delivery_check_grounding: bool = True   # 分项：知识库 grounding（有知识库命中才跑）
+    delivery_check_code: bool = True        # 分项：答复里的代码块在沙箱实跑
+    delivery_check_facts: bool = False      # 分项：引用链接可达性（要发网络请求，默认关）
     # 每步校验（实时层，规则/阈值为主，内核零改动）
     enable_step_check: bool = True          # 高风险步实时校验（检索相关性/代码执行）
     step_relevance_min: float = 0.0         # 检索低分阈值；0=只判空命中（起步）
     # 轨迹 judge（评估层，交付前一次性回看整轨迹分层打分）
-    enable_trajectory_judge: bool = False   # 与 answer gate 独立，可单独开
-    trajectory_pass_score: int = 60         # 最终层分数阈值（低于则软门不过）
+    enable_trajectory_judge: bool = False   # 与交付检查独立，可单独开
+    trajectory_pass_score: int = 60         # 最终层分数阈值（低于则质量分标红，不驱动重答）
     judge_model: str = ""                   # 独立 judge 模型；空则回退主 model
     judge_base_url: str = ""                # judge 独立端点；空则回退主 base_url
     judge_api_key: str = ""                 # judge 独立 key；空则回退主 api_key

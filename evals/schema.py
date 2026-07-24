@@ -66,29 +66,27 @@ class ExamGradeCase(_Base):
     expect: ExamExpect
 
 
-# ---------- 组件：verify 校验门准召 ----------
+# ---------- 组件：交付后机械检查（提醒型）准召 ----------
 
-class GateInput(BaseModel):
-    question: str
+class ChecksInput(BaseModel):
     answer: str
     grounding: list[dict] = []             # 同 chat.py collect["grounding"] 形状
-    steps: list[dict] | None = None        # 同 chat.py collect["steps"] 形状
     judge_returns: dict[str, Any] = {}     # {system 关键词: 假 JSON}，值可为 RAISE / BAD_JSON
-    config_overrides: dict = {}            # gate_check_* / answer_pass_score 等
-    # 桩代码工具 {工具名: "ok"|"fail"}，供 code 检查的 case 用（对应 test_verify.py 的 _StubCodeTool）。
+    config_overrides: dict = {}            # delivery_check_* 等
+    # 桩代码工具 {工具名: "ok"|"fail"}，供 code 检查的 case 用。
     # 空 dict → registry 为 None → code/facts 检查自动跳过。
     stub_tools: dict[str, str] = {}
 
 
-class GateExpect(BaseModel):
-    ok: bool
-    failed: list[str] = []                 # 期望的未通过层名（子集匹配，不要求穷举）
+class ChecksExpect(BaseModel):
+    # 期望产出的提醒项（kind 列表，子集匹配）。空列表 = 期望一条提醒都不产生。
+    notices: list[str] = []
 
 
-class GateCase(_Base):
-    kind: Literal["gate"] = "gate"
-    input: GateInput
-    expect: GateExpect
+class ChecksCase(_Base):
+    kind: Literal["checks"] = "checks"
+    input: ChecksInput
+    expect: ChecksExpect
 
 
 # ---------- 组件：检索 ----------
@@ -109,6 +107,6 @@ class RetrievalCase(_Base):
 
 
 EvalCase = Annotated[
-    AgentCase | ExamGradeCase | GateCase | RetrievalCase,
+    AgentCase | ChecksCase | ExamGradeCase | RetrievalCase,
     Field(discriminator="kind"),
 ]

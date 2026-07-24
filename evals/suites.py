@@ -7,13 +7,13 @@ CI 门禁（tests/evals/）与 CLI（evals/cli.py）都从这里组装，绝不�
 from __future__ import annotations
 
 from .dataset import load_corpus, load_suite
-from .drivers import AgentDriver, ExamGradeDriver, GateDriver, RetrievalDriver
+from .drivers import AgentDriver, ChecksDriver, ExamGradeDriver, RetrievalDriver
 from .mocks import HashEmbedder
-from .scorers import (ContainsScorer, ExamGradeScorer, GateScorer, LlmJudgeScorer,
+from .scorers import (ChecksScorer, ContainsScorer, ExamGradeScorer, LlmJudgeScorer,
                       RetrievalScorer, ToolCallScorer)
 
 # 组件层：全 mock、零网络、确定性 → 进 CI 当门禁
-COMPONENT = ("exam_grade", "gate", "retrieval")
+COMPONENT = ("exam_grade", "checks", "retrieval")
 # 端到端层：真实 API + LLM judge，慢、花钱、天生 flaky → 只手动跑，永不当 PR 门禁
 REAL = ("agent",)
 ALL = COMPONENT + REAL
@@ -24,8 +24,8 @@ def build(suite: str):
     cases = load_suite(suite)
     if suite == "exam_grade":
         return cases, ExamGradeDriver(), [ExamGradeScorer()]
-    if suite == "gate":
-        return cases, GateDriver(), [GateScorer()]
+    if suite == "checks":
+        return cases, ChecksDriver(), [ChecksScorer()]
     if suite == "retrieval":
         # 语料集在 case 里声明；同一套件内混用多个语料尚无需求，故取第一条的即可
         corpus = load_corpus(cases[0].input.corpus if cases else "default")

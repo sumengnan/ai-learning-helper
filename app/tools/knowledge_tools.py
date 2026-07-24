@@ -71,7 +71,7 @@ class SaveToKnowledgeTool(Tool):
             res = await self._knowledge.ingest_text(self._uid, params.title, text)
         except EmptyDocument:
             return "保存失败：内容为空。"
-        # 末尾带机读标记〔知识ID:...〕：交付门据此在校验不通过时清理该轮误入库的条目（前端剥离不展示）。
+        # 末尾带机读标记〔知识ID:...〕：编排器单步重试时据此清理该轮误入库的条目（前端剥离不展示）。
         # 走 marker 而非拼进 text——它不进模型上下文，模型看不见就不会把这串 id 抄进回复正文。
         return ToolOutput(
             text=(f"已保存到知识库：《{res['filename']}》（{res['num_chunks']} 块），"

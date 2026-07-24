@@ -46,6 +46,7 @@ const OV: StatsOverview = {
     gate: {
       turns: 0, retries: 0, avg_retries: 0, degraded: 0, degraded_rate: 0,
       first_pass_rate: 0, gate_errors: 0, layer_failures: [],
+      notice_turns: 0, notices: [],
     },
     quality: {
       scored_turns: 0, avg_final: null, avg_plan: null, avg_steps: null,

@@ -13,7 +13,6 @@ from app.config import AppConfig
 from app.conversations import ConversationStore
 from app.documents import DocumentStore
 from app.main import create_app
-from app.verify import Verdict
 from harness.llm.base import StreamChunk
 from harness.llm.openai_compat import get_extra_body_override
 from harness.persistence.checkpoint import CheckpointStore
@@ -42,17 +41,17 @@ class _Probe:
         yield StreamChunk(type="done")
 
 
-class _SpyVerifier:
-    """在校验期间探一次 contextvar：grounding/judge 真正跑的地方就在这一层之下。"""
+class _SpyChecker:
+    """在交付检查期间探一次 contextvar：grounding 真正跑的地方就在这一层之下。"""
     def __init__(self) -> None:
         self.thinking_at_verify: list = []
 
-    async def verify(self, question, answer, grounding, registry, steps=None, recent_dialogue=""):
+    async def run(self, answer, grounding, registry):
         self.thinking_at_verify.append(get_extra_body_override().get("enable_thinking"))
-        return Verdict(ok=True)
+        return []
 
 
-def _client(probe, verifier=None, **cfg_kw):
+def _client(probe, checker=None, **cfg_kw):
     traj = TrajectoryStore(":memory:")
     harness = Harness(client=probe, registry=ToolRegistry(),
                       checkpoint_store=CheckpointStore(":memory:"),
@@ -61,7 +60,7 @@ def _client(probe, verifier=None, **cfg_kw):
     cfg = AppConfig(api_key="k", model="qwen-max", app_db_path=":memory:",
                     _env_file=None, **cfg_kw)
     app = create_app(config=cfg, harness=harness, store=ConversationStore(":memory:"),
-                     doc_store=DocumentStore(":memory:"), verifier=verifier)
+                     doc_store=DocumentStore(":memory:"), delivery_checker=checker)
     return TestClient(app)
 
 
@@ -85,14 +84,14 @@ def test_main_loop_follows_the_chat_toggle(think):
 
 
 @pytest.mark.parametrize("think", [True, False])
-def test_gate_verification_does_not_inherit_the_chat_toggle(think):
-    """交付门校验不该继承聊天页开关：用户关的是「我这个问题不用想那么久」，
-    不是「校验别校验了」。校验各档（judge/核对）自己显式声明思考。"""
-    probe, verifier = _Probe(), _SpyVerifier()
-    _chat(_client(probe, verifier=verifier, enable_answer_gate=True), think=think)
-    assert verifier.thinking_at_verify, "交付门应跑过校验"
-    assert verifier.thinking_at_verify[0] is None, (
-        f"校验时不该带 enable_thinking，却拿到 {verifier.thinking_at_verify[0]}")
+def test_delivery_checks_do_not_inherit_the_chat_toggle(think):
+    """交付检查不该继承聊天页开关：用户关的是「我这个问题不用想那么久」，
+    不是「检查别检查了」。grounding 那档自己显式声明思考（核对档恒关）。"""
+    probe, checker = _Probe(), _SpyChecker()
+    _chat(_client(probe, checker=checker), think=think)
+    assert checker.thinking_at_verify, "交付检查应跑过"
+    assert checker.thinking_at_verify[0] is None, (
+        f"检查时不该带 enable_thinking，却拿到 {checker.thinking_at_verify[0]}")
 
 
 def test_toggle_is_reset_after_the_loop():

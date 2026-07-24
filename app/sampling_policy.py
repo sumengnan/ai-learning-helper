@@ -27,8 +27,8 @@ log = logging.getLogger("app.sampling")
 _JUDGEMENT = {
     "triage": 0.0,            # 简单/复杂二分类
     "critic": 0.0,            # 单步 validate + 终局 review
-    "grounding": 0.0,         # 交付门事实核对
-    "judge": 0.0,             # 交付门打分 / 轨迹分层打分
+    "grounding": 0.0,         # 交付检查的事实核对（拿答案对着检索原文核对有无依据）
+    "judge": 0.0,             # 轨迹分层打分（TrajectoryJudge）
     "exam_grade": 0.0,        # 考试简答判分
     "quiz_grade": 0.0,        # 刷题判分
     "plan_finalize": 0.0,     # 清单收尾（照工具摘要填终态）

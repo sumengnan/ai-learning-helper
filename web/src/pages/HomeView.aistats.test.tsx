@@ -39,6 +39,8 @@ const OV: StatsOverview = {
     gate: {
       turns: 20, retries: 4, avg_retries: 0.2, degraded: 1, degraded_rate: 0.05,
       first_pass_rate: 0.85, gate_errors: 0,
+      notice_turns: 2,
+      notices: [{ kind: "code", zh: "代码可运行", count: 3 }],
       layer_failures: [
         { layer: "judge", zh: "质量评分", count: 2 },
         { layer: "grounding", zh: "知识库依据", count: 1 },
@@ -107,7 +109,7 @@ describe("HomeView · 回答质量", () => {
     expect(screen.getByText("78.4")).toBeTruthy();
     expect(screen.getByText("一次过率")).toBeTruthy();
     expect(screen.getByText("85%")).toBeTruthy();                    // first_pass_rate 0.85
-    expect(screen.getByText("20 轮经过交付门 · 共重答 4 次")).toBeTruthy();
+    expect(screen.getByText("20 轮经过结果校验 · 共重答 4 次")).toBeTruthy();
     expect(screen.getByText("降级交付")).toBeTruthy();
     // 失败层用中文标签展示（后端翻好再传，前端不另抄一份映射）
     expect(screen.getByText("质量评分")).toBeTruthy();
@@ -120,7 +122,7 @@ describe("HomeView · 回答质量", () => {
       ops: {
         ...OV.ops,
         gate: { ...OV.ops.gate, turns: 0, retries: 0, degraded: 0, first_pass_rate: 0,
-                layer_failures: [] },
+                layer_failures: [], notice_turns: 0, notices: [] },
         quality: {
           scored_turns: 0, avg_final: null, avg_plan: null, avg_steps: null,
           distribution: [
@@ -201,5 +203,25 @@ describe("HomeView · 回答质量", () => {
     expect(screen.getByText("42 / 7")).toBeTruthy();
     // L3 挂了 7 次，但没失忆 → 失忆格仍是 0，不被带跑
     expect(screen.getByText("摘要均已覆盖挤出的历史")).toBeTruthy();
+  });
+});
+
+describe("HomeView · 交付提醒", () => {
+  it("展示提醒轮数与各项次数——它只提示，不该被读成失败", async () => {
+    (statsApi.overview as any).mockResolvedValue(OV);
+    renderOps();
+    await waitFor(() => expect(screen.getByText("交付提醒")).toBeTruthy());
+    // 各项次数只出现在这块的 hint 里，比裸数字「2」更能唯一定位到这张卡
+    expect(screen.getByText("代码可运行 3")).toBeTruthy();
+  });
+
+  it("没有提醒时明说「不影响本轮结果」，免得空值被当成没跑", async () => {
+    (statsApi.overview as any).mockResolvedValue({
+      ...OV,
+      ops: { ...OV.ops, gate: { ...OV.ops.gate, notice_turns: 0, notices: [] } },
+    });
+    renderOps();
+    await waitFor(() =>
+      expect(screen.getByText("交付后检查未发现问题 · 不影响本轮结果")).toBeTruthy());
   });
 });

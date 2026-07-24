@@ -50,7 +50,7 @@ _DEFAULT_SECRET = "dev-insecure-secret-change-me"
 
 def create_app(config: AppConfig | None = None, harness=None, store=None, doc_store=None,
                question_store=None, exam_store=None, wrong_store=None,
-               quiz_service=None, user_store=None, verifier=None,
+               quiz_service=None, user_store=None, delivery_checker=None,
                attachment_store=None, stats_service=None, question_importer=None,
                profile_store=None, exam_session_store=None, pending_store=None,
                url_block_store=None) -> FastAPI:
@@ -138,19 +138,15 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
         UserLogContextMiddleware, auth=auth,
         access_log=os.environ.get("HARNESS_ACCESS_LOG", "1").lower()
         not in ("0", "false", "no"))
-    # 回答交付前校验门（开关开时装配；测试可注入 verifier）：用单发 completer 做
-    # grounding/judge，代码块在会话沙箱实跑。
+    # 交付后的机械检查（开关开时装配；测试可注入 checker）：grounding 走核对档
+    # （主模型 + 关思考 + 0 温），代码块在会话沙箱实跑。只提醒、不重答，见 app/verify.py。
     from .completion import build_check_completer, build_judge_completer
-    if verifier is None and config.enable_answer_gate:
-        from .verify import AnswerVerifier
-        # grounding 用核对档（主模型 + 关思考）、judge 用独立 completer（可指向独立端点/
-        # 模型，降低自评打高分偏差）。两者同为校验动作，都不带思考链。
-        verifier = AnswerVerifier(
+    if delivery_checker is None and config.enable_delivery_checks:
+        from .verify import DeliveryChecker
+        delivery_checker = DeliveryChecker(
             with_role(build_check_completer(harness.client, config), config, "grounding"),
-            config,
-            judge_complete=with_role(
-                build_judge_completer(harness.client, config), config, "judge"))
-    # 轨迹 judge（交付前一次性回看整轨迹分层打分）：与 answer gate 独立，可单独开
+            config)
+    # 轨迹 judge（交付后一次性回看整轨迹分层打分）：与交付检查独立，可单独开
     trajectory_judge = None
     if config.enable_trajectory_judge:
         from .verify import TrajectoryJudge
@@ -179,7 +175,8 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
     app.include_router(make_conversations_router(store, harness, attachment_store, config))
     app.include_router(make_chat_router(harness, store, config,
                                         question_store=question_store, wrong_store=wrong_store,
-                                        verifier=verifier, attachment_store=attachment_store,
+                                        delivery_checker=delivery_checker,
+                                        attachment_store=attachment_store,
                                         run_manager=run_manager, knowledge_service=service,
                                         quiz_service=quiz_service, profile_store=profile_store,
                                         trajectory_judge=trajectory_judge,
@@ -283,11 +280,11 @@ def create_app(config: AppConfig | None = None, harness=None, store=None, doc_st
 
     # 启动摘要：一眼看清本次以什么配置起来的（模型/端口/各能力开关）
     logging.getLogger("app").info(
-        "应用就绪 model=%s addr=%s:%s memory=%s rerank=%s answer_gate=%s sandbox=%s "
+        "应用就绪 model=%s addr=%s:%s memory=%s rerank=%s delivery_checks=%s sandbox=%s "
         "recall(entity=%s multi_query=%s hyde=%s) context=%s",
         config.model, config.app_host, config.app_port,
         getattr(harness, "memory", None) is not None,
-        config.enable_rerank, config.enable_answer_gate,
+        config.enable_rerank, config.enable_delivery_checks,
         getattr(harness, "sandbox", None) is not None,
         config.retrieval_use_entity_recall, config.retrieval_use_multi_query,
         config.retrieval_use_hyde, getattr(config, "context_strategy", "full"))

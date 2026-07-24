@@ -47,7 +47,7 @@ def _client(make_mock, monkeypatch, *, orchestrator):
                       trajectory_store=traj, sink=TrajectorySink(traj),
                       system_prompt="你是助手", orchestrator=orchestrator)
     cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,
-                    enable_answer_gate=False, sandbox_approval_timeout=0.3)
+                    sandbox_approval_timeout=0.3)
     store = ConversationStore(":memory:")
     app = create_app(config=cfg, harness=harness, store=store,
                      doc_store=DocumentStore(":memory:"))
@@ -140,7 +140,7 @@ def test_orchestrator_events_recorded_under_registered_run_id(make_mock, monkeyp
                       checkpoint_store=CheckpointStore(":memory:"),
                       trajectory_store=traj, sink=TrajectorySink(traj),
                       system_prompt="你是助手", orchestrator=RunIdToolOrchestrator())
-    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None, enable_answer_gate=False)
+    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None)
     store = ConversationStore(":memory:")
     c = TestClient(create_app(config=cfg, harness=harness, store=store,
                               doc_store=DocumentStore(":memory:")))
@@ -179,7 +179,7 @@ def test_emit_model_usage_reaches_sse_and_trajectory(make_mock, monkeypatch):
                       checkpoint_store=CheckpointStore(":memory:"),
                       trajectory_store=traj, sink=TrajectorySink(traj),
                       system_prompt="你是助手", orchestrator=EmbeddingUsageOrchestrator())
-    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None, enable_answer_gate=False)
+    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None)
     store = ConversationStore(":memory:")
     c = TestClient(create_app(config=cfg, harness=harness, store=store,
                               doc_store=DocumentStore(":memory:")))
@@ -230,7 +230,7 @@ def test_gate_open_precedes_any_tool_event(make_mock, monkeypatch):
 
     信号必须早于**任何**工具事件：save_download 远早于编排器那条「结果校验中…」
     （后者要等所有步骤跑完），只断言「发过了」不足以保证不闪一下。"""
-    from app.api.chat import GATE_OPEN_KEY
+    from app.api.chat import VERIFY_OPEN_KEY
     c, _ = _client(make_mock, monkeypatch, orchestrator=FileToolOrchestrator())
     events = _chat_verify(c, _auth(c), True)
     kinds = _kinds(events)
@@ -243,7 +243,7 @@ def test_gate_open_precedes_any_tool_event(make_mock, monkeypatch):
 
     sig = next(e for e in events
                if e["type"] == "Progress" and e["data"]["scope"] == "verify")
-    assert sig["data"]["key"] == GATE_OPEN_KEY      # 前端靠这个 key 认出它
+    assert sig["data"]["key"] == VERIFY_OPEN_KEY      # 前端靠这个 key 认出它
     assert sig["data"]["status"] == "running"
 
 
@@ -436,7 +436,7 @@ def _quality_client(make_mock, monkeypatch, scored: list):
                       trajectory_store=traj, sink=TrajectorySink(traj),
                       system_prompt="你是助手", orchestrator=_QualityOrchestrator())
     cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None,
-                    enable_answer_gate=False, enable_trajectory_judge=True,
+                    enable_trajectory_judge=True,
                     sandbox_approval_timeout=0.3)
     store = ConversationStore(":memory:")
     app = create_app(config=cfg, harness=harness, store=store,

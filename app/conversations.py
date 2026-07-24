@@ -142,7 +142,8 @@ class ConversationStore:
                     reasoning_ms: int | None = None) -> None:
         """一轮结束：按 run_id 把 streaming 占位 assistant UPDATE 为最终内容 + steps/progress/
         sources（参考来源）+ 状态 + 用量（tokens/cost）+ 耗时（elapsed_ms）+ reasoning（思考过程）
-        + verify（交付门结构化判定轨迹，门未开时为 None）+ context（上下文组装结果：L1 挤出多少、
+        + verify（结果校验结构化留痕：终局 review 结论 + 交付提醒 notices；本轮未开结果校验为 None）
+        + context（上下文组装结果：L1 挤出多少、
         L2/L3 成没成，full 策略下为 None）+ reasoning_ms（思考耗时，非思考模式为 None）
         ——刷新后仍能还原。"""
         self._conn.execute(
