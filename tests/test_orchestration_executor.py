@@ -284,13 +284,23 @@ def test_sandbox_guide_docker_reports_images_and_network():
 
 
 def test_sandbox_guide_reports_resource_limits():
-    """提示词须如实告知每容器的 CPU/内存/磁盘上限，并点明 tmpfs 工作区占内存。"""
+    """提示词须如实告知每容器的 CPU/内存/磁盘/执行超时上限，并点明 tmpfs 工作区占内存。"""
     from app.sandbox_manager import sandbox_guide
     g = sandbox_guide(_sbx_cfg(sandbox_backend="docker", sandbox_cpus=2.0,
-                               sandbox_mem_limit="200m", sandbox_disk_limit="500m"))
+                               sandbox_mem_limit="200m", sandbox_disk_limit="500m",
+                               sandbox_exec_timeout=600.0))
     assert "资源上限" in g
     assert "2.0 核" in g and "200m" in g and "500m" in g
+    assert "600" in g and "执行超时" in g        # 执行超时也要写进去（罩住 pip 子进程）
     assert "tmpfs" in g and "内存" in g          # 点明工作区是内存盘、占内存
+
+
+def test_sandbox_guide_warns_heavy_pip_installs_time_out():
+    """回归：AI 曾 pip install llama-index 撞执行超时。提示词须点明大框架装不了、别试。"""
+    from app.sandbox_manager import sandbox_guide
+    g = sandbox_guide(_sbx_cfg(sandbox_backend="docker", sandbox_network="bridge"))
+    assert "llama-index" in g and "不要尝试" in g
+    assert "执行超时" in g and "pip" in g         # 装包受执行超时约束，罩住 pip 子进程
 
 
 def test_sandbox_guide_docker_offline_says_cannot_install():
