@@ -384,16 +384,31 @@ class Orchestrator:
         """带终局校验的简单直答。用于考试轮（force_simple）与「1 步计划回退」（非考试）。
 
         与多步路径的区别是**不重规划**：考试是有状态流程，重新拆解会打乱逐题推进。
-        校验不过就地重答一次。**重答的工具表按 in_exam 分叉**：
+        校验不过就地重答一次，**重答那版同样再校验一次**——否则重答可能带着新毛病直接
+        交付，且下游据末条校验结论决定要不要打质量分（见 chat._gate_verdict_ok），重答
+        不校验就没有可信的结论。重答后不论过否都交付、不再第三次重答（避免无界循环：用户
+        白等、重答往往也救不回，多步路径的 replan 同样封了次数上限）。
+
+        **重答的工具表按 in_exam 分叉**：
         - 考试轮（in_exam=True）给空工具表——原料（判定结论、正确答案、解析、下一题题面）
           已由服务端在「[考试系统判定]…」提示里给全，模型只需重新组织文字；留着工具反而
           可能让它再调一次 start_exam，把考试进度整个重置。
         - 非考试的 1 步回退（in_exam=False）给真实工具表——这类题恰恰可能「单步但需工具」，
           首答调了检索/生成，若重答无工具就只能空转文字、没法重做，是能力回退。故放行工具。
 
-        第一版的 RunFinished 必须压住不发：它是终结信号，先发出去前端立刻标「已完成」，
-        而这一版随时可能被重答顶掉（与交付门 passthrough=False 的处理同理）。
+        每一版的 RunFinished 都必须压住不发：它是终结信号，先发出去前端立刻标「已完成」，
+        而首答随时可能被重答顶掉、重答版又要等再校验有结论后才该定稿（与交付门
+        passthrough=False 的处理同理）。
         """
+        async def _review(answer: str):
+            # 单步一问一答包成单步计划喂给按多步设计的 Critic.review。考试轮附 _EXAM_REVIEW_NOTE：
+            # 校验器只看到「目标：抽取 5 道题考试」和「产出：第 1 题」会误判「缺第 2~5 题」，而逐题
+            # 呈现恰恰是对的；误判代价不对称（触发整轮重答、重答还是同一道题），故明确告知推进规则。
+            plan, arts = _one_step_plan(message, answer)
+            return await self._critic.review(
+                (_EXAM_REVIEW_NOTE + message) if in_exam else message, plan, arts,
+                recent_dialogue=recent_dialogue)
+
         draft, finished_ev = "", None
         async for ev in self._simple_answer(message, budget, context=context,
                                             registry=registry, prefer_main=True,
@@ -411,19 +426,14 @@ class Orchestrator:
             return
 
         yield Progress(scope="verify", text="结果校验中…", status="running")
-        plan, arts = _one_step_plan(message, draft)
-        # 校验器只看到「目标：抽取 5 道题考试」和「产出：第 1 题」，于是判「缺失第 2~5 题、
-        # 实质性内容遗漏」——而逐题呈现恰恰是对的。误判的代价不对称：它会触发整轮重答，
-        # 用户白等一次，重答出来的还是同一道题。故把考试的推进规则明确告诉校验器。
-        review = await self._critic.review(
-            (_EXAM_REVIEW_NOTE + message) if in_exam else message, plan, arts,
-            recent_dialogue=recent_dialogue)
+        review = await _review(draft)
         if review.accept:
             yield Progress(scope="verify", text="结果校验通过", status="ok")
             if finished_ev is not None:
                 yield finished_ev
             return
 
+        # ---- 第一版未过 → 重答 ----
         yield Progress(scope="verify",
                        text=review.feedback or "存在缺口，重答一次", status="error")
         # 清屏：第一版已逐字流给用户，重答前清空，让新版从头打字机输出。
@@ -432,13 +442,38 @@ class Orchestrator:
         # 重答工具表：考试轮空表（防 start_exam 重置进度），非考试的 1 步回退给真实工具表
         # （否则「单步但需工具」的题重答只能空转、没法重做检索/生成）。
         redo_registry = ToolRegistry() if in_exam else registry
+        draft2, finished2 = "", None
         # 重答升温：拿同一个温度把上一版的毛病再写一遍，纠正指令就白给了。这是编排器路径下
-        # 唯一真正的「整轮重答」（旧交付门那套已删），故升温档挂在这里。
+        # 唯一真正的「整轮重答」（旧交付门那套已删），故升温档挂在这里。升温只包**重答的生成**，
+        # 不包其后的再校验——校验要用 critic 自己的确定性低温，套上升温档会让判分抖动。
         with _step_retry_temperature(getattr(self, "_dynamic_temperature", False), 1):
             async for ev in self._simple_answer(_redo_message(message, review.feedback),
                                                 budget, context=context,
                                                 registry=redo_registry, prefer_main=True):
+                if isinstance(ev, TextDelta):
+                    draft2 += ev.text
+                if isinstance(ev, RunFinished):
+                    finished2 = ev        # 压住，等重答版再校验有结论后才发
+                    continue
                 yield ev
+
+        if not draft2.strip():            # 重答空产出：无可校验，末条 verify 仍是上面那条 error（=未过）
+            if finished2 is not None:
+                yield finished2
+            return
+
+        # ---- 重答那版同样校验一次 ----
+        yield Progress(scope="verify", text="结果校验中…", status="running")
+        review2 = await _review(draft2)
+        if review2.accept:
+            yield Progress(scope="verify", text="结果校验通过", status="ok")
+        else:
+            # 仍不过：不再第三次重答，照样交付重答版；末条 verify 保持 error，
+            # 下游据此（_gate_verdict_ok）不打质量分。
+            yield Progress(scope="verify",
+                           text=review2.feedback or "仍存在缺口", status="error")
+        if finished2 is not None:
+            yield finished2
 
     # ---- synthesize ----
     async def _synthesize(self, goal: str, artifacts: dict[str, Artifact], recent_dialogue: str = ""):

@@ -2323,6 +2323,39 @@ async def test_one_step_fallback_redo_keeps_tools_unlike_exam():
     assert [r.detail["mode"] for r in _routes(events)] == ["simple"]
 
 
+async def test_simple_verified_revalidates_the_redo():
+    """重答那版必须再校验一次。此前重答直接交付、不再校验，带着新毛病也照发——
+    下游还据末条校验结论决定要不要打质量分（见 chat._gate_verdict_ok），重答不校验
+    就没有可信结论。
+
+    reviews=(False, True)：首答未过→重答→重答再校验通过。断言 review 被调两次、
+    末条 verify 为通过态、交付重答版、且仍只有一条 RunFinished。
+    """
+    cap = []
+    orch = _exam_orch((False, True), cap)
+    events = [ev async for ev in orch.run("B", verify=True, force_simple=True)]
+    assert orch._critic._ri == 2, "重答那版必须再走一次校验（首答 1 次 + 重答 1 次）"
+    verify = [e for e in events if isinstance(e, Progress) and e.scope == "verify"]
+    assert verify[-1].status == "ok", "重答校验通过 → 末条 verify 为 ok"
+    assert events[-1].message.content == "第2版讲解", "交付重答那版"
+    assert len([e for e in events if isinstance(e, RunFinished)]) == 1, "仍只有一条终结信号"
+
+
+async def test_simple_verified_redo_failing_review_still_delivers_once():
+    """重答那版再校验仍不过：照样交付重答版，但不再第三次重答（避免无界循环），
+    且末条 verify 为未过态——下游 _gate_verdict_ok 据此不打质量分。
+    """
+    cap = []
+    orch = _exam_orch((False, False), cap)
+    events = [ev async for ev in orch.run("B", verify=True, force_simple=True)]
+    assert orch._critic._ri == 2, "只校验两次：首答 + 重答，绝不无限重答"
+    assert len(cap) == 2, "只重答一次"
+    verify = [e for e in events if isinstance(e, Progress) and e.scope == "verify"]
+    assert verify[-1].status == "error", "重答仍不过 → 末条 verify 为 error"
+    assert events[-1].message.content == "第2版讲解", "仍交付重答那版"
+    assert len([e for e in events if isinstance(e, RunFinished)]) == 1, "只有一条终结信号"
+
+
 # ---------- F-CHAT-1: 学习无关的复杂请求应婉拒，不进编排器拆解 ----------
 
 def _acoro(v):

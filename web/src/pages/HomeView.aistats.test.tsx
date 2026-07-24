@@ -172,56 +172,62 @@ describe("HomeView · 回答质量", () => {
     });
     renderOps();
     await waitFor(() => expect(screen.getByText("上下文健康度")).toBeTruthy());
-    expect(screen.getByText("上下文失忆")).toBeTruthy();
-    expect(screen.getByText("这些轮丢了更早历史，且模型不自知")).toBeTruthy();
+    expect(screen.getByText("L2摘要失败")).toBeTruthy();
+    expect(screen.getByText("这些轮丢了更早历史、AI 却不自知，需排查")).toBeTruthy();
     // L2 失败要能看出「成功/总数」，而非只报一个成功数
     expect(screen.getByText("12 / 15")).toBeTruthy();
-    expect(screen.getByText("3 次失败（含无害的空挤出）")).toBeTruthy();
+    // 未接住的即「L2摘要失败」，hint 点名二者是同一批，免得看着像重复计数
+    expect(screen.getByText("压缩接住的轮数：3 轮没接住（即「L2摘要失败」）")).toBeTruthy();
   });
 
-  it("没失忆时不误报：full 策略（未启用分层）与「摘要都覆盖了」要分得开", async () => {
+  it("没失忆时不误报：还没移出历史 与 移出但都接住了 要分得开", async () => {
+    // evicted=0：对话都没超窗，一条历史都没移出 —— 不是「失忆已覆盖」，而是根本没发生
     (statsApi.overview as any).mockResolvedValue({
       ...OV,
-      ops: { ...OV.ops, context: { turns: 20, layered_turns: 0, evicted_total: 0,
+      ops: { ...OV.ops, context: { turns: 20, layered_turns: 20, evicted_total: 0,
                                    amnesia_turns: 0, summary_errors: 0,
                                    retrieval_errors: 0, summary_ok: 0 } },
     });
     renderOps();
     await waitFor(() =>
-      expect(screen.getByText("未启用分层上下文（full 策略）")).toBeTruthy());
-    expect(screen.queryByText("这些轮丢了更早历史，且模型不自知")).toBeNull();
+      expect(screen.getByText("挤出的历史压缩成摘要时失败的轮数")).toBeTruthy());
+    expect(screen.queryByText("这些轮丢了更早历史、AI 却不自知，需排查")).toBeNull();
   });
 
-  it("L3 检索失败与 L2 失忆分开展示——前者只是少了增益，不该冲淡后者", async () => {
+  it("L1窗口挤出与 L3检索失败拆成两格——前者只是少了增益，不该冲淡失忆", async () => {
     (statsApi.overview as any).mockResolvedValue({
       ...OV,
       ops: { ...OV.ops, context: { ...OV.ops.context, retrieval_errors: 7,
                                    evicted_total: 42, amnesia_turns: 0 } },
     });
     renderOps();
-    await waitFor(() => expect(screen.getByText("挤出历史 / L3 失败")).toBeTruthy());
-    expect(screen.getByText("42 / 7")).toBeTruthy();
-    // L3 挂了 7 次，但没失忆 → 失忆格仍是 0，不被带跑
-    expect(screen.getByText("摘要均已覆盖挤出的历史")).toBeTruthy();
+    // 两格各自独立：L1窗口挤出(42) 与 L3检索失败(7) 不再拼在一格里
+    await waitFor(() => expect(screen.getByText("L1窗口挤出")).toBeTruthy());
+    expect(screen.getByText("42")).toBeTruthy();
+    expect(screen.getByText("L3检索失败")).toBeTruthy();
+    expect(screen.getByText(
+      "从更早历史捞相关片段失败的轮数（只是少层参考，非失忆）")).toBeTruthy();
+    // L3 挂了 7 次，但没失忆 → 失忆格仍是 0，hint 说清是「都接住了」而非「没挤出」
+    expect(screen.getByText("挤出的历史都被摘要接住了，未发生丢失")).toBeTruthy();
   });
 });
 
-describe("HomeView · 交付提醒", () => {
-  it("展示提醒轮数与各项次数——它只提示，不该被读成失败", async () => {
+describe("HomeView · 交付警告", () => {
+  it("展示警告轮数与各项次数——它只提示，不该被读成失败", async () => {
     (statsApi.overview as any).mockResolvedValue(OV);
     renderOps();
-    await waitFor(() => expect(screen.getByText("交付提醒")).toBeTruthy());
-    // 各项次数只出现在这块的 hint 里，比裸数字「2」更能唯一定位到这张卡
-    expect(screen.getByText("代码可运行 3")).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("交付警告")).toBeTruthy());
+    // 轮数与各项次数只出现在这块的 hint 里，比裸数字「2」更能唯一定位到这张卡
+    expect(screen.getByText("2 轮触发交付后检查 · 代码可运行 3")).toBeTruthy();
   });
 
-  it("没有提醒时明说「不影响本轮结果」，免得空值被当成没跑", async () => {
+  it("没有警告时副标题说清校验的是哪几项，免得空值被当成没跑", async () => {
     (statsApi.overview as any).mockResolvedValue({
       ...OV,
       ops: { ...OV.ops, gate: { ...OV.ops.gate, notice_turns: 0, notices: [] } },
     });
     renderOps();
     await waitFor(() =>
-      expect(screen.getByText("交付后检查未发现问题 · 不影响本轮结果")).toBeTruthy());
+      expect(screen.getByText("完整性、检索依据、代码运行或引用链接校验不达标")).toBeTruthy());
   });
 });

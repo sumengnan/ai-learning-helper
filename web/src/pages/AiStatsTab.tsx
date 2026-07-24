@@ -123,7 +123,7 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
       <Eyebrow note={rangeLabel(days)}>回答质量</Eyebrow>
       <>
           <Box sx={{ display: "grid", gap: 1.75, mb: 1.75,
-            gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4,1fr)" } }}>
+            gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(5,1fr)" } }}>
             <StatTile label="平均质量分"
               value={q.avg_final == null ? "—" : String(q.avg_final)}
               hint={`${q.scored_turns} 轮已评`}
@@ -135,18 +135,18 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
               hint={`${gate.turns} 轮经过结果校验 · 共重答 ${gate.retries} 次`}
               stripe={gate.turns === 0 ? theme.palette.primary.main
                 : gate.first_pass_rate >= 0.8 ? theme.palette.success.main : theme.palette.warning.main} />
+            {/* 交付警告：交付后的机械检查（完整性/检索依据/代码可运行/引用链接）。
+                只提示、不拦截、不算本轮失败，故用警告色而非 error 色——后者会让人以为出了故障。 */}
+            <StatTile label="交付警告" value={String(gate.notice_turns)}
+              hint={gate.notices.length
+                ? `${gate.notice_turns} 轮触发交付后检查 · ${gate.notices.map((n) => `${n.zh} ${n.count}`).join(" · ")}`
+                : "完整性、检索依据、代码运行或引用链接校验不达标"}
+              stripe={gate.notice_turns > 0 ? theme.palette.warning.main : theme.palette.success.main} />
             <StatTile label="降级交付" value={String(gate.degraded)}
               hint={gate.gate_errors > 0
                 ? `另有 ${gate.gate_errors} 轮因校验器故障未真校验`
                 : `占 ${fmtPct(gate.degraded_rate)} · 红徽章标未通过，正文原样交付`}
               stripe={gate.degraded > 0 ? theme.palette.error.main : theme.palette.success.main} />
-            {/* 交付提醒：交付后的机械检查（完整性/检索依据/代码可运行/引用链接）。
-                只提示、不拦截、不算本轮失败，故用警告色而非 error 色——后者会让人以为出了故障。 */}
-            <StatTile label="交付提醒" value={String(gate.notice_turns)}
-              hint={gate.notices.length
-                ? gate.notices.map((n) => `${n.zh} ${n.count}`).join(" · ")
-                : "交付后检查未发现问题 · 不影响本轮结果"}
-              stripe={gate.notice_turns > 0 ? theme.palette.warning.main : theme.palette.success.main} />
           </Box>
           <Box sx={{ display: "grid", gap: 1.75, gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" } }}>
             <Card sx={cardSx}>
@@ -216,27 +216,41 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
           对话记录——不是「本就不该有值」。与本页其它块一致：照常出 tiles、值为 0，
           不换成一段说明文案。 */}
       <Eyebrow note={rangeLabel(days)}>上下文健康度</Eyebrow>
+      {/* 四格连成一条链，让用户顺着读懂「历史是怎么保住/丢掉的」：
+          ① 挤出 L1 窗口 → ② L2 摘要成功接住 → ③ L2 摘要失败＝失忆 → ④ L3 检索失败。
+          分层轮数已去掉：系统固定 layered 策略，那格恒等于总轮数，没有信息量。
+          标题用 L1/L2/L3 层级术语点名是哪一层，副标题用人话解释这层在做什么。 */}
       <Box sx={{ display: "grid", gap: 1.75, mb: 1.75,
         gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4,1fr)" } }}>
-        {/* 头号指标：不为 0 就得查 —— 那些轮模型丢了一段历史还照着残缺上下文自信作答了。
-            故 >0 一律标红，不设「少量可接受」的黄档：一次失忆就是一次事故。 */}
-        <StatTile label="上下文失忆" value={String(ctx.amnesia_turns)}
-          hint={ctx.amnesia_turns > 0
-            ? "这些轮丢了更早历史，且模型不自知"
-            : ctx.layered_turns === 0 ? "未启用分层上下文（full 策略）" : "摘要均已覆盖挤出的历史"}
-          stripe={ctx.amnesia_turns > 0 ? theme.palette.error.main : theme.palette.success.main} />
-        <StatTile label="分层轮数" value={String(ctx.layered_turns)}
-          hint={`共 ${ctx.turns} 轮有记录 · 其余走 full`}
+        {/* ① 挤出 L1 窗口条数：对话太长、装不下而被移出 AI 可见范围的消息条数（累计）。
+            中性信息，非好非坏——长对话必然发生，故用中性色。 */}
+        <StatTile label="L1窗口挤出" value={String(ctx.evicted_total)}
+          hint="对话太长、最早的消息被挤出 L1 窗口的条数"
           stripe={theme.palette.primary.main} />
-        <StatTile label="L2 摘要" value={ctx.summary_errors ? `${ctx.summary_ok} / ${ctx.summary_ok + ctx.summary_errors}` : String(ctx.summary_ok)}
-          hint={ctx.summary_errors > 0 ? `${ctx.summary_errors} 次失败（含无害的空挤出）` : "成功压缩更早历史的轮数"}
+        {/* ② L2 摘要成功数：把挤出的历史压缩成摘要接住、避免丢失，成功的轮数。
+            有失败时显示「成功 / 总计」，并点名未接住的即「L2摘要失败」，免得看着像重复计数。 */}
+        <StatTile label="L2摘要成功"
+          value={ctx.summary_errors ? `${ctx.summary_ok} / ${ctx.summary_ok + ctx.summary_errors}` : String(ctx.summary_ok)}
+          hint={ctx.summary_errors > 0
+            ? `压缩接住的轮数：${ctx.summary_errors} 轮没接住（即「L2摘要失败」）`
+            : "把挤出的历史压缩成摘要的轮数"}
           stripe={ctx.summary_errors > 0 ? theme.palette.warning.main : theme.palette.success.main} />
-        {/* L3 与 L2 分开摆：检索挂了只是少了「相关片段」这层增益，不等于失忆，
-            混在一起看会把真正要紧的 amnesia 冲淡 */}
-        <StatTile label="挤出历史 / L3 失败"
-          value={`${ctx.evicted_total} / ${ctx.retrieval_errors}`}
-          hint="累计移出 L1 的消息条数 · 语义检索失败轮数"
-          stripe={theme.palette.primary.main} />
+        {/* ③ L2 摘要失败：头号告警——挤出的历史没被摘要接住，AI 真丢了一段还不自知（＝上下文失忆）。
+            >0 一律标红，不设「少量可接受」的黄档：一次失忆就是一次事故。 */}
+        <StatTile label="L2摘要失败" value={String(ctx.amnesia_turns)}
+          hint={ctx.amnesia_turns > 0
+            ? "这些轮丢了更早历史、AI 却不自知，需排查"
+            : ctx.evicted_total === 0
+              ? "挤出的历史压缩成摘要时失败的轮数"
+              : "挤出的历史都被摘要接住了，未发生丢失"}
+          stripe={ctx.amnesia_turns > 0 ? theme.palette.error.main : theme.palette.success.main} />
+        {/* ④ L3 检索失败：再从更早历史里语义检索相关片段，失败的轮数。
+            比失忆轻——丢了只是少一层参考，不等于失忆，故用黄档而非红档。 */}
+        <StatTile label="L3检索失败" value={String(ctx.retrieval_errors)}
+          hint={ctx.retrieval_errors > 0
+            ? "从更早历史捞相关片段失败的轮数（只是少层参考，非失忆）"
+            : "从向量库检索更早的历史对话时失败的次数"}
+          stripe={ctx.retrieval_errors > 0 ? theme.palette.warning.main : theme.palette.success.main} />
       </Box>
 
       {/* 工具调用 */}
