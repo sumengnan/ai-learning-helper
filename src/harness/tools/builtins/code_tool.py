@@ -27,11 +27,16 @@ async def _run_code(sandbox: Sandbox, spec: LangSpec, code: str, version: str | 
     直连 Docker/Local 时返回自身），在其中 write_file + exec。显式 version 无对应镜像
     → SandboxError（is_error，让模型换版本）。
     """
-    box = await sandbox.for_language(spec.language, version)   # SandboxError→is_error
+    box = await sandbox.for_language(spec.language, version)   # 版本无镜像等→SandboxError（尚无容器/镜像）
     meta = {"image": box.image} if getattr(box, "image", None) else None   # 供前端标注用的镜像
-    await box.write_file(spec.filename, code)                  # SandboxError→is_error
     cmd = spec.argv if spec.argv is not None else ["sh", "-c", spec.shell]
-    res = await box.exec(cmd, timeout)
+    try:
+        await box.write_file(spec.filename, code)
+        res = await box.exec(cmd, timeout)
+    except ToolError:
+        raise
+    except Exception as e:     # 容器级异常（SandboxError 等）也带上镜像 meta，保证成功失败都显示镜像
+        raise ToolError(str(e), meta=meta)
     out = format_exec(res, max_chars)
     if res.exit_code != 0 or res.timed_out:     # 非零退出/超时 → 标记失败（失败也带镜像 meta）
         raise ToolError(out, meta=meta)

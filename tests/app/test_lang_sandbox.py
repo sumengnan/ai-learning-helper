@@ -164,6 +164,26 @@ async def test_container_tool_result_carries_image_meta(_conv, _stub):
     assert r.meta and r.meta.get("image") == "python:3.12-slim"
 
 
+async def test_container_tool_image_meta_on_failure():
+    """无论成功失败都带镜像 meta：非零退出、以及容器级异常（exec 抛错）两种失败都要带上。"""
+    class _NonZero:
+        image = "python:3.12-slim"; workspace = "/workspace"
+        async def start(self): pass
+        async def for_language(self, language=None, version=None): return self
+        async def write_file(self, p, c): pass
+        async def exec(self, cmd, timeout, *, quiet=False):
+            return ExecResult("SyntaxError", "", 1)          # 非零退出
+    class _Boom(_NonZero):
+        async def exec(self, cmd, timeout, *, quiet=False):
+            raise SandboxError("容器起不来")                  # 容器级异常
+    for box in (_NonZero(), _Boom()):
+        reg = ToolRegistry(); reg.register(RunPythonTool(box, timeout=5))
+        r = await ToolExecutor(reg).execute(ToolCall(
+            id="c1", name="run_python", arguments={"code": "x="}))
+        assert r.is_error is True
+        assert r.meta and r.meta.get("image") == "python:3.12-slim"
+
+
 async def test_run_java_tool_end_to_end_via_proxy(_conv, _stub):
     proxy = SandboxProxy(SandboxManager(_cfg()))
     reg = ToolRegistry(); reg.register(RunJavaTool(proxy, timeout=5))
