@@ -224,12 +224,12 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
         gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4,1fr)" } }}>
         {/* ① 挤出 L1 窗口条数：对话太长、装不下而被移出 AI 可见范围的消息条数（累计）。
             中性信息，非好非坏——长对话必然发生，故用中性色。 */}
-        <StatTile label="挤出L1窗口条数" value={String(ctx.evicted_total)}
+        <StatTile label="L1窗口挤出" value={String(ctx.evicted_total)}
           hint="对话太长、最早的消息被挤出 L1 窗口、AI 看不到了（累计条数）"
           stripe={theme.palette.primary.main} />
         {/* ② L2 摘要成功数：把挤出的历史压缩成摘要接住、避免丢失，成功的轮数。
             有失败时显示「成功 / 总计」，并点名未接住的即「L2摘要失败」，免得看着像重复计数。 */}
-        <StatTile label="L2摘要成功数"
+        <StatTile label="L2摘要成功"
           value={ctx.summary_errors ? `${ctx.summary_ok} / ${ctx.summary_ok + ctx.summary_errors}` : String(ctx.summary_ok)}
           hint={ctx.summary_errors > 0
             ? `压缩接住的轮数：${ctx.summary_errors} 轮没接住（即「L2摘要失败」）`

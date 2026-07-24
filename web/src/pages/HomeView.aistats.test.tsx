@@ -194,15 +194,15 @@ describe("HomeView · 回答质量", () => {
     expect(screen.queryByText("这些轮丢了更早历史、AI 却不自知，需排查")).toBeNull();
   });
 
-  it("挤出L1窗口条数与 L3检索失败拆成两格——前者只是少了增益，不该冲淡失忆", async () => {
+  it("L1窗口挤出与 L3检索失败拆成两格——前者只是少了增益，不该冲淡失忆", async () => {
     (statsApi.overview as any).mockResolvedValue({
       ...OV,
       ops: { ...OV.ops, context: { ...OV.ops.context, retrieval_errors: 7,
                                    evicted_total: 42, amnesia_turns: 0 } },
     });
     renderOps();
-    // 两格各自独立：挤出L1窗口条数(42) 与 L3检索失败(7) 不再拼在一格里
-    await waitFor(() => expect(screen.getByText("挤出L1窗口条数")).toBeTruthy());
+    // 两格各自独立：L1窗口挤出(42) 与 L3检索失败(7) 不再拼在一格里
+    await waitFor(() => expect(screen.getByText("L1窗口挤出")).toBeTruthy());
     expect(screen.getByText("42")).toBeTruthy();
     expect(screen.getByText("L3检索失败")).toBeTruthy();
     expect(screen.getByText(
