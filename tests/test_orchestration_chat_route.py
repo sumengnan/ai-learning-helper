@@ -560,3 +560,19 @@ def test_gate_verdict_ok_reads_verify_trace():
     assert _gate_verdict_ok(failed) is False
     assert _gate_verdict_ok([{"scope": "route", "text": "x"}]) is True   # 无 verify_trace → 不拦
     assert _gate_verdict_ok([]) is True
+
+
+def test_gate_verdict_ok_falls_back_to_verify_progress_status():
+    """简单直答路径不发结构化 trace，只发 scope=verify 终态：据最后一条 ok/error 判定。
+
+    重答那版已再校验一次，末条终态即最终结论——未过（error）→ False（不打质量分）；
+    通过（ok）→ True；只有进行中（running）无终态 → 回退 True（没结论不拦）。
+    """
+    from app.api.chat import _gate_verdict_ok
+    failed = [{"scope": "verify", "text": "结果校验中…", "status": "running"},
+              {"scope": "verify", "text": "仍存在缺口", "status": "error"}]
+    passed = [{"scope": "verify", "text": "结果校验通过", "status": "ok"}]
+    running_only = [{"scope": "verify", "text": "结果校验中…", "status": "running"}]
+    assert _gate_verdict_ok(failed) is False
+    assert _gate_verdict_ok(passed) is True
+    assert _gate_verdict_ok(running_only) is True

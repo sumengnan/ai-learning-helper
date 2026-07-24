@@ -259,14 +259,21 @@ def _plan_from_orchestrator(progress: list[dict]) -> bool:
 
 
 def _gate_verdict_ok(progress: list[dict]) -> bool:
-    """本轮结果校验（交付门）是否通过——从编排器发的 VERIFY_TRACE 事件取 detail.ok。
+    """本轮结果校验（交付门）是否通过。
 
-    没有该事件（本轮没跑校验，如关了校验开关）→ 视作 True，不据此拦别的东西。
-    用途：结果校验未通过（ok=False）时不再跑轨迹评分——答复本身都没过关，再打质量分没意义。
+    - 多步路径发结构化 VERIFY_TRACE 事件：取其 detail.ok。
+    - 简单直答路径（_simple_answer_verified，考试轮/1 步回退）不发 trace，只发 scope=verify
+      的终态进度；重答那版已再校验一次，故**最后一条 ok/error** 即最终结论，据此判定。
+    - 两者都没有（本轮没跑校验，如关了校验开关）→ 视作 True，不据此拦别的东西。
+
+    用途：结果校验未通过时不再跑轨迹评分——答复本身都没过关，再打质量分没意义。
     """
     for p in reversed(progress or []):
         if p.get("key") == VERIFY_TRACE_KEY and p.get("detail"):
             return bool(p["detail"].get("ok"))
+    for p in reversed(progress or []):
+        if p.get("scope") == "verify" and p.get("status") in ("ok", "error"):
+            return p.get("status") == "ok"
     return True
 
 
