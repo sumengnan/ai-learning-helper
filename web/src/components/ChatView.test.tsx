@@ -533,6 +533,27 @@ describe("ChatView", () => {
     expect(screen.getByRole("button", { name: /报告\.md/ })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /旧版\.md/ })).toBeNull();
   });
+
+  it("交付提醒在 RunFinished 之后到达也照样渲染（不因流已终态而丢弃）", async () => {
+    // 后端时序：正文 → RunFinished（编排器终态，passthrough 转发）→ 交付提醒。
+    // 每个 SSE 事件独立 dispatch、RunFinished 只置 status 不中断，故其后的 notice 仍入 progress。
+    vi.mocked(streamChat).mockImplementationOnce(
+      async (_c: string, _m: string, onEvent: (e: any) => void) => {
+        onEvent({ type: "TextDelta", data: { text: "答案" } });
+        onEvent({ type: "RunFinished", data: {} });
+        onEvent({ type: "Progress", data: { scope: "notice", text: "代码未跑通：run_python: 报错",
+          status: "warn", key: "notice:code", detail: { kind: "code", label: "代码可运行" } } });
+      });
+    render(<ChatView conversationId="c1" initial={[]} />);
+    fireEvent.change(screen.getByPlaceholderText("问点什么…"), { target: { value: "写段代码" } });
+    fireEvent.click(screen.getByText("发送"));
+    // 徽章上出现提醒计数；展开后能看到该条提醒
+    await waitFor(() => expect(screen.getByText("· 1 项提醒")).toBeTruthy());
+    fireEvent.click(screen.getByText(/项提醒/));
+    expect(screen.getByText(/代码可运行：代码未跑通/)).toBeTruthy();
+    // 提醒不改变正文、不谎称失败
+    expect(screen.getByText("答案")).toBeTruthy();
+  });
 });
 
 describe("计划来源区分（ReAct 清单 vs 编排器计划）", () => {
