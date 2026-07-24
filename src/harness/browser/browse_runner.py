@@ -6,7 +6,7 @@
 以及同目录被写进来的 `_policy`（宿主 net/policy.py 的逐字节副本）。绝不 import `harness` 包。
 
 流程：读 _browse_input.json → 用 sync Playwright 启 Chromium → 对每一跳导航请求用
-_policy.check_url 做 SSRF 校验（与宿主 PlaywrightBrowser._route 一致，子资源不校验）→
+_policy.check_url 做 SSRF 校验（与宿主策略（SandboxedBrowser）一致，子资源不校验）→
 把 {final_url,title,html} 写进 _browse_output.json；任何异常写 {"ok":false,"error":...} 并非零退出。
 """
 from __future__ import annotations

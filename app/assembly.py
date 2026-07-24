@@ -1,6 +1,7 @@
 # app/assembly.py
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from harness.llm.openai_compat import OpenAICompatibleClient
@@ -17,6 +18,9 @@ from .tools.validating import ValidatingTool, relevance_check, web_content_check
 
 
 # 执行子步的隐藏工具视图 HidingRegistry 已移至 app.orchestration.executor（供编排器与装配层共用）。
+
+
+log = logging.getLogger("app.assembly")
 
 
 @dataclass
@@ -181,7 +185,12 @@ def build_harness(config) -> Harness:
         _reg(RememberTool(mem))
         _reg(RecallEpisodesTool(EpisodicMemory(mem), default_k=config.episode_recall_k))
 
-    if config.enable_browser:
+    # 浏览器统一在沙箱容器内跑（宿主不再内置 Playwright）：没配沙箱就没法抓，禁用并告警，
+    # 而不是回退本地——本地路径已随 playwright 一起移除。
+    if config.enable_browser and sandbox is None:
+        log.warning("enable_browser 需要沙箱：浏览器在沙箱容器内跑（开 enable_sandbox 并配"
+                    "浏览器专用镜像），未配沙箱，浏览器抓取已禁用。")
+    if config.enable_browser and sandbox is not None:
         from harness.browser.factory import build_browser
         from harness.tools.builtins.browse_tool import BrowseTool
         # 配了浏览器专用镜像 → 浏览器沙箱**全局共用一个**（跨会话），懒加载启动、复用，空闲 24h
@@ -314,6 +323,8 @@ def build_harness(config) -> Harness:
         fast_client=_exec_client, fast_model=_exec_model,
         # 简单直答的上下文按快速模型口径再收一道（0=不裁）
         fast_max_prompt_tokens=config.context_max_prompt_tokens_fast,
+        # 简单直答单循环步数上限（可配；防失控后备闸）
+        simple_max_steps=config.orchestrator_simple_max_steps,
         # 每次 run 新建独立预算封顶时长/token（超限带现有成果收尾）；单例并发安全
         budget_factory=lambda: BudgetTracker(config.max_tokens_budget, config.max_wall_seconds),
         max_step_retry=config.orchestrator_max_step_retry,

@@ -1,5 +1,5 @@
-import { type ReactNode } from "react";
-import { Box, CircularProgress, useTheme } from "@mui/material";
+import { forwardRef, type ReactNode } from "react";
+import { Box, CircularProgress, Tooltip, useTheme } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
@@ -11,12 +11,13 @@ import { fmtDuration } from "./duration";
 import { LiveDuration } from "./LiveDuration";
 import type { ChatMessage } from "../types";
 
-// 一枚彩色药丸：图标 + 内容，底色取自语义色的浅色调，辨识度高且与正文明显不同
-function Pill({ icon, color, title, children }: {
+// 一枚彩色药丸：图标 + 内容，底色取自语义色的浅色调，辨识度高且与正文明显不同。
+// forwardRef + 透传 props：让外层 MUI Tooltip 能挂 ref 与 hover 事件（token 药丸用到）。
+const Pill = forwardRef<HTMLSpanElement, {
   icon: ReactNode; color: string; title?: string; children: ReactNode;
-}) {
+}>(function Pill({ icon, color, title, children, ...rest }, ref) {
   return (
-    <Box component="span" title={title} sx={{
+    <Box component="span" ref={ref} title={title} {...rest} sx={{
       display: "inline-flex", alignItems: "center", gap: 0.5,
       px: 0.9, py: 0.3, borderRadius: 999, whiteSpace: "nowrap",
       bgcolor: alpha(color, 0.13), color,
@@ -27,7 +28,7 @@ function Pill({ icon, color, title, children }: {
       {icon}{children}
     </Box>
   );
-}
+});
 
 // 助手回复的元信息条：状态 / 耗时 / tokens 各为一枚独立药丸，一眼可辨。
 export function MessageMeta({ status, live, startedAt, elapsedMs, usage, usageByModel, showMeta }: {
@@ -37,7 +38,7 @@ export function MessageMeta({ status, live, startedAt, elapsedMs, usage, usageBy
   elapsedMs?: number;
   usage?: { tokens: number; cost: number | null };
   usageByModel?: Record<string, { tokens: number; cost: number | null }>;   // 分模型明细（hover 展示）
-  showMeta: boolean;   // 「展示工具调用和 Token」开关：控制耗时/tokens 是否显示
+  showMeta: boolean;   // 「展示工具调用和 Token」开关：仅控制 tokens 是否显示（耗时始终显示）
 }) {
   const t = useTheme();
   const S = t.palette;
@@ -57,8 +58,8 @@ export function MessageMeta({ status, live, startedAt, elapsedMs, usage, usageBy
     }
   })();
 
-  // 生成中：耗时始终显示并实时增长（不受「展示 Token」开关限制）；完成后的固定耗时才受开关控制
-  const showElapsed = (live && startedAt != null) || (showMeta && elapsedMs != null);
+  // 耗时始终显示（生成中实时增长、完成后固定值），不受「展示 Token」开关控制；只有 token 受开关控制
+  const showElapsed = (live && startedAt != null) || elapsedMs != null;
   const showTokens = showMeta && !!usage;
   if (!statusPill && !showElapsed && !showTokens) return null;
 
@@ -77,12 +78,17 @@ export function MessageMeta({ status, live, startedAt, elapsedMs, usage, usageBy
           ? "本轮各模型用量：\n" + entries.map(([m, u]) =>
               `${m}：${u.tokens} tokens${u.cost != null ? ` · ¥${u.cost.toFixed(4)}` : ""}`).join("\n")
           : "本轮 token 用量（所有模型合计）";
+        // 用 MUI Tooltip 而非原生 title：原生 title 弹出延迟由浏览器固定（~1s+）无法调，
+        // 太慢。enterDelay 调小让明细几乎即时弹出。多行明细用 pre-line 保留换行。
         return (
-          <Pill icon={<TollIcon />} color={S.secondary.main} title={title}>
-            <RollingNumber value={usage.tokens} /><Box component="span" sx={{ ml: 0.4, opacity: 0.8 }}>tokens</Box>
-            {usage.cost != null ? <Box component="span" sx={{ ml: 0.4, opacity: 0.8 }}>· ¥{usage.cost.toFixed(4)}</Box> : null}
-            {entries.length > 1 ? <Box component="span" sx={{ ml: 0.4, opacity: 0.6 }}>· {entries.length} 模型</Box> : null}
-          </Pill>
+          <Tooltip placement="top" enterDelay={150} enterNextDelay={150}
+            title={<Box sx={{ whiteSpace: "pre-line" }}>{title}</Box>}>
+            <Pill icon={<TollIcon />} color={S.secondary.main}>
+              <RollingNumber value={usage.tokens} /><Box component="span" sx={{ ml: 0.4, opacity: 0.8 }}>tokens</Box>
+              {usage.cost != null ? <Box component="span" sx={{ ml: 0.4, opacity: 0.8 }}>· ¥{usage.cost.toFixed(4)}</Box> : null}
+              {entries.length > 1 ? <Box component="span" sx={{ ml: 0.4, opacity: 0.6 }}>· {entries.length} 模型</Box> : null}
+            </Pill>
+          </Tooltip>
         );
       })()}
     </Box>

@@ -276,6 +276,9 @@ def test_sandbox_guide_docker_reports_images_and_network():
     assert "python:3.12-slim" in g                # 语言子沙箱镜像（默认 lang_images）
     assert "可联网" in g and "禁止联网" in g        # base=bridge 可联网、子沙箱=none 禁网
     assert "pip install" in g                     # 联网环境可自行装包的指引
+    # 权限硬约束：加固沙箱非 root，apt/全局装会 Permission denied——必须如实告知，否则模型照旧文案去 apt 白撞
+    assert "非 root" in g and "apt" in g
+    assert "--target" in g                        # 给出唯一可行路径：装到可写工作目录
 
 
 def test_sandbox_guide_docker_reflects_sub_network_online():

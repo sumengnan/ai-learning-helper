@@ -7,7 +7,6 @@ import pytest
 import harness.net.policy as policy_mod
 from harness.browser.base import PageResult
 from harness.browser.factory import build_browser
-from harness.browser.playwright_browser import PlaywrightBrowser
 from harness.browser.sandboxed_browser import SandboxedBrowser
 from harness.config import HarnessConfig
 from harness.tools.base import ToolExecutor, ToolRegistry
@@ -187,9 +186,13 @@ def test_factory_returns_sandboxed_when_sandbox_present():
     assert isinstance(build_browser(cfg, sb), SandboxedBrowser)
 
 
-def test_factory_returns_host_playwright_without_sandbox():
+def test_factory_requires_sandbox():
+    """浏览器统一走沙箱：无沙箱时 build_browser 明确报错，不再回退宿主本地 Playwright
+    （宿主不再装 playwright，浏览器只在沙箱容器内跑）。"""
+    import pytest
     cfg = HarnessConfig(api_key="k", _env_file=None)
-    assert isinstance(build_browser(cfg), PlaywrightBrowser)
+    with pytest.raises(RuntimeError, match="沙箱"):
+        build_browser(cfg)
 
 
 async def test_sub_acquire_cached_box_not_closed_after_fetch():

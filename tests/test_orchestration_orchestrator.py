@@ -754,6 +754,7 @@ async def test_simple_answer_prefer_main_uses_main_client_no_reclamp(monkeypatch
     orch._fast_client, orch._fast_model = "FAST", "fast-model"
     orch._fast_max_prompt_tokens = 999999          # >0：非主档时会触发重裁
     orch._registry = None
+    orch._simple_max_steps = 20                     # 简单直答步数上限（本测不关心具体值，仅需存在）
     ctx_obj = ContextManager("sys")
 
     _ = [ev async for ev in orch._simple_answer("hi", context=ctx_obj, prefer_main=True)]

@@ -154,6 +154,16 @@ describe("ChatView", () => {
     expect(screen.queryByText("你你好好")).toBeNull();
   });
 
+  it("AI 回复完成后自动聚焦输入框（免得用户手动点击）", async () => {
+    render(<ChatView conversationId="c1" initial={[]} />);
+    const box = () => screen.getByPlaceholderText("问点什么…") as HTMLTextAreaElement;
+    fireEvent.change(box(), { target: { value: "hi" } });
+    fireEvent.click(screen.getByText("发送"));
+    await waitFor(() => expect(screen.getByText("你好")).toBeTruthy());
+    // 回复完成（busy: true→false）→ 输入框自动获得焦点
+    await waitFor(() => expect(document.activeElement).toBe(box()));
+  });
+
   it("AI 回复中封住输入/开关/附件，只留停止按钮", async () => {
     // streamChat 挂住（回一个 TextDelta 后不结束）→ busy 保持 true
     vi.mocked(streamChat).mockImplementationOnce(
@@ -171,6 +181,50 @@ describe("ChatView", () => {
     expect((screen.getByLabelText("展示工具调用和 Token") as HTMLInputElement).disabled).toBe(true);
     // 附件按钮禁用
     expect((screen.getByLabelText("上传文件") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("考试进行中：结果校验强制关闭且置灰，发送时不带校验；考试结束自动恢复原设置", async () => {
+    // 用户开着结果校验（localStorage=1），进入考试后：开关应显示为关且禁用（置灰），
+    // 且本轮发送给后端的 verify 必须是 false（考试期间不校验）。退出考试后开关回到「开」。
+    localStorage.setItem("chat_verify", "1");
+    let sentVerify: boolean | undefined;
+    vi.mocked(streamChat).mockImplementationOnce(
+      async (_c: string, _m: string, onEvent: (e: any) => void,
+             _sig?: AbortSignal, _att?: string[], _onRid?: any,
+             _think?: boolean, verify?: boolean) => {
+        sentVerify = verify;
+        onEvent({ type: "RunFinished", data: {} });
+      });
+    // 考试状态：第一次拉为进行中，之后（结束）为未进行
+    vi.mocked(api.exam.status)
+      .mockResolvedValueOnce({ active: true, cursor: 0, total: 3, mode: "graded" } as any)
+      .mockResolvedValue({ active: false } as any);
+    render(<ChatView conversationId="c1" initial={[]} />);
+
+    const sw = () => screen.getByText(/结果校验/).closest("label")!.querySelector("input") as HTMLInputElement;
+    // 进入考试 → 关且禁用
+    await waitFor(() => expect(sw().disabled).toBe(true));
+    expect(sw().checked).toBe(false);
+
+    // 发一轮 → 后端收到的 verify 为 false；该轮结束会 refreshExam 拿到「考试结束」
+    fireEvent.change(screen.getByPlaceholderText(/作答本题|问点什么/), { target: { value: "答" } });
+    fireEvent.click(screen.getByText("发送"));
+    await waitFor(() => expect(sentVerify).toBe(false));
+
+    // 考试结束 → 开关恢复用户原设置（开且可用）
+    await waitFor(() => expect(sw().disabled).toBe(false));
+    expect(sw().checked).toBe(true);
+  });
+
+  it("考试进行中：悬停结果校验开关，tooltip 解释为什么禁用", async () => {
+    vi.mocked(api.exam.status).mockResolvedValueOnce(
+      { active: true, cursor: 0, total: 2, mode: "instant" } as any);
+    render(<ChatView conversationId="c1" initial={[]} />);
+    const sw = () => screen.getByText(/结果校验/).closest("label")!.querySelector("input") as HTMLInputElement;
+    await waitFor(() => expect(sw().disabled).toBe(true));
+    // 悬停到开关标签 → 出现说明（考试由系统判分、AI 不代答，故校验关闭）
+    fireEvent.mouseOver(screen.getByText(/结果校验/));
+    expect(await screen.findByText(/考试由系统按标准答案判分/)).toBeTruthy();
   });
 
   it("拿到 run 句柄前「停止」禁用；句柄到达后启用并调 stopRun", async () => {

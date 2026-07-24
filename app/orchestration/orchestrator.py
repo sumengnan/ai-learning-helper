@@ -214,7 +214,8 @@ class Orchestrator:
                  fast_max_prompt_tokens: int = 0,
                  budget=None, budget_factory=None,
                  max_step_retry: int = 2, max_replan: int = 2, skill_matcher=None,
-                 dynamic_temperature: bool = False, intent_temperature=None) -> None:
+                 dynamic_temperature: bool = False, intent_temperature=None,
+                 simple_max_steps: int = 20) -> None:
         self._client = client
         self._registry = registry
         self._model = model
@@ -241,6 +242,8 @@ class Orchestrator:
         self._dynamic_temperature = dynamic_temperature
         # 意图 → 温度的查表函数（由装配层绑定 config）。None=不做意图路由，全用基准温度。
         self._intent_temperature = intent_temperature
+        # 简单直答单循环的步数上限（triage 判为无需拆步的轻任务；正常几步就结束，此为防失控后备闸）
+        self._simple_max_steps = int(simple_max_steps)
 
     @staticmethod
     async def _plan_streaming(coro, out: dict):
@@ -368,7 +371,8 @@ class Orchestrator:
             ctx = ClampedContextManager(ctx, self._fast_model, self._fast_max_prompt_tokens)
         loop = AgentLoop(client=client,
                          registry=registry if registry is not None else self._registry,
-                         context=ctx, max_steps=10, budget=budget, model_name=model)
+                         context=ctx, max_steps=self._simple_max_steps, budget=budget,
+                         model_name=model)
         async for ev in loop.run(message):
             if isinstance(ev, RunStarted):
                 continue

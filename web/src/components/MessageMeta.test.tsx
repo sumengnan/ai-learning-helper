@@ -1,4 +1,4 @@
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { describe, it, expect, afterEach } from "vitest";
 import { MessageMeta } from "./MessageMeta";
 
@@ -25,12 +25,21 @@ describe("MessageMeta", () => {
     expect(screen.getByText(/\d+\s*秒/)).toBeTruthy();   // 生成中耗时不受开关限制
   });
 
-  it("关闭「展示 Token」时隐藏耗时与 tokens，仅留状态", () => {
+  it("关闭「展示 Token」时隐藏 tokens，但状态与耗时保留", () => {
     render(<MessageMeta status="done" live={false} elapsedMs={5000}
       usage={{ tokens: 10, cost: null }} showMeta={false} />);
     expect(screen.getByText("已完成")).toBeTruthy();
-    expect(screen.queryByText("tokens")).toBeNull();
-    expect(screen.queryByText(/秒/)).toBeNull();
+    expect(screen.queryByText("tokens")).toBeNull();      // token 仍受开关控制
+    expect(screen.getByText(/5\s*秒/)).toBeTruthy();       // 耗时不再随开关消失
+  });
+
+  it("悬停 tokens 药丸弹出各模型用量明细（MUI Tooltip，非原生 title）", async () => {
+    render(<MessageMeta status="done" live={false} elapsedMs={1000}
+      usage={{ tokens: 30, cost: 0.02 }}
+      usageByModel={{ main: { tokens: 20, cost: 0.015 }, fast: { tokens: 10, cost: 0.005 } }}
+      showMeta />);
+    fireEvent.mouseOver(screen.getByText("tokens"));
+    expect(await screen.findByText(/本轮各模型用量/)).toBeTruthy();
   });
 
   it("各终态文案：失败 / 已停止 / 已中断", () => {

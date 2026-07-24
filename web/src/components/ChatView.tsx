@@ -143,17 +143,30 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
   const stickRef = useRef(true);
   const thinkRef = useRef(think);
   thinkRef.current = think;
-  const verifyRef = useRef(verify);
-  verifyRef.current = verify;
+  // 结果校验开关的「有效值」：考试进行中强制关闭（不改动 verify 本身与 localStorage，
+  // 故考试一结束就自动恢复用户原来的设置）。经 ref 传给发送逻辑，保证本轮真的不校验。
+  const examActive = !!exam?.active;
+  const effectiveVerify = examActive ? false : verify;
+  const verifyRef = useRef(effectiveVerify);
+  verifyRef.current = effectiveVerify;
   // 待发附件（发送前可增删）；含本地 File 供即时预览、上传状态。
   const [pending, setPending] = useState<AttachmentItem[]>([]);
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
   const fileRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
   const flashTimer = useRef<number | undefined>(undefined);
+
+  // AI 回复结束（busy 由 true→false）后自动把焦点移回输入框，省得用户手动点击再输入。
+  // 只在这一次跳变时聚焦：不在挂载时抢焦点，也不打断用户在别处的操作。
+  const prevBusyRef = useRef(busy);
+  useEffect(() => {
+    if (prevBusyRef.current && !busy) inputRef.current?.focus();
+    prevBusyRef.current = busy;
+  }, [busy]);
 
   // 点击正文 [n] 角标：滚动到对应来源并短暂高亮
   const scrollToCite = (msgKey: string, n: number) => {
@@ -745,7 +758,8 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
                   || m.quality);
                 const hasStatus = live || m.status === "done" || m.status === "error"
                   || m.status === "stopped" || m.status === "interrupted";
-                const hasElapsed = (live && m.startedAt != null) || (showTools && m.elapsedMs != null);
+                // 耗时始终显示（不随「展示工具调用和 Token」开关消失）；仅 tokens 受开关控制
+                const hasElapsed = (live && m.startedAt != null) || m.elapsedMs != null;
                 const hasTokens = showTools && !!m.usage;
                 const showMetaRow = hasStatus || hasElapsed || hasTokens;
                 if (!showMetaRow && !hasSources && !hasVerify) return null;
@@ -779,11 +793,15 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
             onChange={(e) => toggleThink(e.target.checked)} />}
           label={<Typography variant="caption">思考模式</Typography>}
         />
-        <FormControlLabel
-          control={<Switch size="small" checked={verify} disabled={busy}
-            onChange={(e) => toggleVerify(e.target.checked)} />}
-          label={<Typography variant="caption">结果校验</Typography>}
-        />
+        <Tooltip placement="top" enterDelay={0} title={examActive
+          ? (<>考试由系统按标准答案判分，<br />AI 只主持讲解、不代你作答，无需结果校验。<br />考试结束后自动恢复。</>)
+          : ""}>
+          <FormControlLabel
+            control={<Switch size="small" checked={effectiveVerify} disabled={busy || examActive}
+              onChange={(e) => toggleVerify(e.target.checked)} />}
+            label={<Typography variant="caption">结果校验{examActive ? "（考试中禁用）" : ""}</Typography>}
+          />
+        </Tooltip>
         <FormControlLabel
           control={<Switch size="small" checked={showTools} disabled={busy}
             onChange={(e) => toggleShowTools(e.target.checked)} />}
@@ -867,7 +885,7 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
             </span>
           </Tooltip>
           <TextField
-            fullWidth size="small" value={input}
+            fullWidth size="small" value={input} inputRef={inputRef}
             multiline minRows={1} maxRows={6}
             disabled={busy}   // AI 回复中封住输入框
             onChange={(e) => setInput(e.target.value)}
