@@ -190,7 +190,7 @@ describe("HomeView · 回答质量", () => {
     });
     renderOps();
     await waitFor(() =>
-      expect(screen.getByText("还没有历史被挤出，未发生丢失")).toBeTruthy());
+      expect(screen.getByText("挤出的历史压缩成摘要时失败的轮数")).toBeTruthy());
     expect(screen.queryByText("这些轮丢了更早历史、AI 却不自知，需排查")).toBeNull();
   });
 

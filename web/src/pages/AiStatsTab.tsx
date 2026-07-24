@@ -241,7 +241,7 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
           hint={ctx.amnesia_turns > 0
             ? "这些轮丢了更早历史、AI 却不自知，需排查"
             : ctx.evicted_total === 0
-              ? "还没有历史被挤出，未发生丢失"
+              ? "挤出的历史压缩成摘要时失败的轮数"
               : "挤出的历史都被摘要接住了，未发生丢失"}
           stripe={ctx.amnesia_turns > 0 ? theme.palette.error.main : theme.palette.success.main} />
         {/* ④ L3 检索失败：再从更早历史里语义检索相关片段，失败的轮数。
@@ -249,7 +249,7 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
         <StatTile label="L3检索失败" value={String(ctx.retrieval_errors)}
           hint={ctx.retrieval_errors > 0
             ? "从更早历史捞相关片段失败的轮数（只是少层参考，非失忆）"
-            : "从更早历史捞相关片段：暂无失败"}
+            : "从向量库检索更早的历史对话时失败的次数"}
           stripe={ctx.retrieval_errors > 0 ? theme.palette.warning.main : theme.palette.success.main} />
       </Box>
 
