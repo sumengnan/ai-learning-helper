@@ -172,12 +172,12 @@ describe("HomeView · 回答质量", () => {
     });
     renderOps();
     await waitFor(() => expect(screen.getByText("上下文健康度")).toBeTruthy());
-    expect(screen.getByText("上下文失忆")).toBeTruthy();
+    expect(screen.getByText("L2摘要失败")).toBeTruthy();
     expect(screen.getByText("这些轮丢了更早历史、AI 却不自知，需排查")).toBeTruthy();
     // L2 失败要能看出「成功/总数」，而非只报一个成功数
     expect(screen.getByText("12 / 15")).toBeTruthy();
-    // 未接住的即「上下文失忆」，hint 点名二者是同一批，免得看着像重复计数
-    expect(screen.getByText("压缩接住的轮数：3 轮没接住（即「上下文失忆」）")).toBeTruthy();
+    // 未接住的即「L2摘要失败」，hint 点名二者是同一批，免得看着像重复计数
+    expect(screen.getByText("压缩接住的轮数：3 轮没接住（即「L2摘要失败」）")).toBeTruthy();
   });
 
   it("没失忆时不误报：还没移出历史 与 移出但都接住了 要分得开", async () => {
@@ -190,25 +190,25 @@ describe("HomeView · 回答质量", () => {
     });
     renderOps();
     await waitFor(() =>
-      expect(screen.getByText("还没有历史被移出，未发生丢失")).toBeTruthy());
+      expect(screen.getByText("还没有历史被挤出，未发生丢失")).toBeTruthy());
     expect(screen.queryByText("这些轮丢了更早历史、AI 却不自知，需排查")).toBeNull();
   });
 
-  it("移出的历史与 L3 检索失败拆成两格——前者只是少了增益，不该冲淡失忆", async () => {
+  it("挤出L1窗口条数与 L3检索失败拆成两格——前者只是少了增益，不该冲淡失忆", async () => {
     (statsApi.overview as any).mockResolvedValue({
       ...OV,
       ops: { ...OV.ops, context: { ...OV.ops.context, retrieval_errors: 7,
                                    evicted_total: 42, amnesia_turns: 0 } },
     });
     renderOps();
-    // 两格各自独立：移出的历史(42) 与 历史检索失败(7) 不再拼在一格里
-    await waitFor(() => expect(screen.getByText("移出的历史")).toBeTruthy());
+    // 两格各自独立：挤出L1窗口条数(42) 与 L3检索失败(7) 不再拼在一格里
+    await waitFor(() => expect(screen.getByText("挤出L1窗口条数")).toBeTruthy());
     expect(screen.getByText("42")).toBeTruthy();
-    expect(screen.getByText("历史检索失败")).toBeTruthy();
+    expect(screen.getByText("L3检索失败")).toBeTruthy();
     expect(screen.getByText(
       "从更早历史捞相关片段失败的轮数（只是少层参考，非失忆）")).toBeTruthy();
-    // L3 挂了 7 次，但没失忆 → 失忆格仍是 0，hint 说清是「都接住了」而非「没移出」
-    expect(screen.getByText("移出的历史都被摘要接住了，未发生丢失")).toBeTruthy();
+    // L3 挂了 7 次，但没失忆 → 失忆格仍是 0，hint 说清是「都接住了」而非「没挤出」
+    expect(screen.getByText("挤出的历史都被摘要接住了，未发生丢失")).toBeTruthy();
   });
 });
 

@@ -217,35 +217,36 @@ export function AiStatsTab({ data, days }: { data: StatsOverview; days: number }
           不换成一段说明文案。 */}
       <Eyebrow note={rangeLabel(days)}>上下文健康度</Eyebrow>
       {/* 四格连成一条链，让用户顺着读懂「历史是怎么保住/丢掉的」：
-          ① 移出的历史 → ② 摘要接住 → ③ 没接住＝失忆 → ④ 额外的检索增益。
-          分层轮数已去掉：系统固定 layered 策略，那格恒等于总轮数，没有信息量。 */}
+          ① 挤出 L1 窗口 → ② L2 摘要成功接住 → ③ L2 摘要失败＝失忆 → ④ L3 检索失败。
+          分层轮数已去掉：系统固定 layered 策略，那格恒等于总轮数，没有信息量。
+          标题用 L1/L2/L3 层级术语点名是哪一层，副标题用人话解释这层在做什么。 */}
       <Box sx={{ display: "grid", gap: 1.75, mb: 1.75,
         gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4,1fr)" } }}>
-        {/* ① 移出的历史：对话太长、装不下而被移出 AI 可见范围的消息条数（累计）。
+        {/* ① 挤出 L1 窗口条数：对话太长、装不下而被移出 AI 可见范围的消息条数（累计）。
             中性信息，非好非坏——长对话必然发生，故用中性色。 */}
-        <StatTile label="移出的历史" value={String(ctx.evicted_total)}
-          hint="对话太长、最早的消息被移出 AI 可见范围（累计条数）"
+        <StatTile label="挤出L1窗口条数" value={String(ctx.evicted_total)}
+          hint="对话太长、最早的消息被挤出 L1 窗口、AI 看不到了（累计条数）"
           stripe={theme.palette.primary.main} />
-        {/* ② 历史摘要（L2）：把移出的历史压缩成摘要接住、避免丢失，成功的轮数。
-            有失败时显示「成功 / 总计」，并点名未接住的即右邻「上下文失忆」，免得看着像重复计数。 */}
-        <StatTile label="历史摘要"
+        {/* ② L2 摘要成功数：把挤出的历史压缩成摘要接住、避免丢失，成功的轮数。
+            有失败时显示「成功 / 总计」，并点名未接住的即「L2摘要失败」，免得看着像重复计数。 */}
+        <StatTile label="L2摘要成功数"
           value={ctx.summary_errors ? `${ctx.summary_ok} / ${ctx.summary_ok + ctx.summary_errors}` : String(ctx.summary_ok)}
           hint={ctx.summary_errors > 0
-            ? `压缩接住的轮数：${ctx.summary_errors} 轮没接住（即「上下文失忆」）`
-            : "把移出的历史压缩成摘要接住的轮数"}
+            ? `压缩接住的轮数：${ctx.summary_errors} 轮没接住（即「L2摘要失败」）`
+            : "把挤出的历史压缩成摘要接住的轮数"}
           stripe={ctx.summary_errors > 0 ? theme.palette.warning.main : theme.palette.success.main} />
-        {/* ③ 上下文失忆：头号告警——移出的历史没被摘要接住，AI 真丢了一段还不自知。
+        {/* ③ L2 摘要失败：头号告警——挤出的历史没被摘要接住，AI 真丢了一段还不自知（＝上下文失忆）。
             >0 一律标红，不设「少量可接受」的黄档：一次失忆就是一次事故。 */}
-        <StatTile label="上下文失忆" value={String(ctx.amnesia_turns)}
+        <StatTile label="L2摘要失败" value={String(ctx.amnesia_turns)}
           hint={ctx.amnesia_turns > 0
             ? "这些轮丢了更早历史、AI 却不自知，需排查"
             : ctx.evicted_total === 0
-              ? "还没有历史被移出，未发生丢失"
-              : "移出的历史都被摘要接住了，未发生丢失"}
+              ? "还没有历史被挤出，未发生丢失"
+              : "挤出的历史都被摘要接住了，未发生丢失"}
           stripe={ctx.amnesia_turns > 0 ? theme.palette.error.main : theme.palette.success.main} />
-        {/* ④ 历史检索（L3）：再从更早历史里语义检索相关片段，失败的轮数。
+        {/* ④ L3 检索失败：再从更早历史里语义检索相关片段，失败的轮数。
             比失忆轻——丢了只是少一层参考，不等于失忆，故用黄档而非红档。 */}
-        <StatTile label="历史检索失败" value={String(ctx.retrieval_errors)}
+        <StatTile label="L3检索失败" value={String(ctx.retrieval_errors)}
           hint={ctx.retrieval_errors > 0
             ? "从更早历史捞相关片段失败的轮数（只是少层参考，非失忆）"
             : "从更早历史捞相关片段：暂无失败"}
