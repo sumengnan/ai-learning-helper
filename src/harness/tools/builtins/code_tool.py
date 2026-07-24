@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from ..base import Tool, ToolError
 from ...sandbox.base import Sandbox
+from ...types import ToolOutput
 from ._sandbox_util import format_exec
 
 
@@ -27,13 +28,14 @@ async def _run_code(sandbox: Sandbox, spec: LangSpec, code: str, version: str | 
     → SandboxError（is_error，让模型换版本）。
     """
     box = await sandbox.for_language(spec.language, version)   # SandboxError→is_error
+    meta = {"image": box.image} if getattr(box, "image", None) else None   # 供前端标注用的镜像
     await box.write_file(spec.filename, code)                  # SandboxError→is_error
     cmd = spec.argv if spec.argv is not None else ["sh", "-c", spec.shell]
     res = await box.exec(cmd, timeout)
     out = format_exec(res, max_chars)
-    if res.exit_code != 0 or res.timed_out:     # 非零退出/超时 → 标记失败
-        raise ToolError(out)
-    return out
+    if res.exit_code != 0 or res.timed_out:     # 非零退出/超时 → 标记失败（失败也带镜像 meta）
+        raise ToolError(out, meta=meta)
+    return ToolOutput(text=out, meta=meta) if meta else out
 
 
 class _CodeTool(Tool):

@@ -305,7 +305,11 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
     else if (e.type === "ToolStarted") upd((a) => a.steps!.push({ tool: e.data.tool_call.name, args: e.data.tool_call.arguments }));
     else if (e.type === "ToolFinished") upd((a) => {
       const s = a.steps![a.steps!.length - 1];
-      if (s) { s.result = e.data.result.content; s.isError = e.data.result.is_error; }
+      if (s) {
+        s.result = e.data.result.content; s.isError = e.data.result.is_error;
+        const img = e.data.result.meta?.image;   // 容器工具用的镜像名（展示用）
+        if (img) s.image = img;
+      }
     });
     else if (e.type === "ModelUsage") upd((a) => {
       // 所有 ModelUsage 都是逐模型增量：按模型累加，合计所有模型即本轮总额（含 embedding/rerank）。

@@ -106,6 +106,14 @@ export function AgentProgress({ steps, live = false, stopped = false }: {
                 <ToolLabel name={s.tool} />
                 {sp && !live ? cutLabel : ""}
               </Typography>
+              {s.image && (
+                <Box component="span" title={`执行容器镜像：${s.image}`}
+                  sx={{ ml: 0.5, px: 0.6, py: 0.1, borderRadius: 0.75, fontSize: 10.5,
+                        fontFamily: "monospace", color: "text.secondary",
+                        bgcolor: "action.hover", whiteSpace: "nowrap" }}>
+                  {s.image}
+                </Box>
+              )}
             </AccordionSummary>
             <AccordionDetails sx={{ px: 0, pt: 0 }}>
               <ToolCallDetail args={s.args} result={s.result} isError={s.isError} />

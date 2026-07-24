@@ -286,7 +286,8 @@ class Executor:
                     yield Progress(scope, f"调用工具 {name}",
                                    status="error" if r.is_error else "ok", key=r.tool_call_id,
                                    detail={"tool": name, "args": tool_args.get(r.tool_call_id),
-                                           "result": r.content, "is_error": r.is_error})
+                                           "result": r.content, "is_error": r.is_error,
+                                           "image": (r.meta or {}).get("image")})
                 elif isinstance(ev, StepStarted):   # 透传：前端忽略，仅供 trajectory 统计步数
                     yield ev
                 elif isinstance(ev, ModelUsage):   # 用量记进累加器，供 Orchestrator 末尾汇总

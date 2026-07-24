@@ -4,6 +4,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from ..base import Tool, ToolError
+from ...types import ToolOutput
 from ...approval import request_approval
 from ...events import Progress
 from ...progress import emit
@@ -46,8 +47,9 @@ class RunShellTool(Tool):
                     "绝对不要声称它已执行，也不要描述任何执行结果、影响或后续状态。"
                     "若该步骤因此无法完成，就说明卡在这里、并给出替代做法。")
         box = await self._sandbox.for_language("shell")   # run_shell 在 shell 容器执行
+        meta = {"image": box.image} if getattr(box, "image", None) else None   # 供前端标注用的镜像
         res = await box.exec(["sh", "-c", params.command], self._timeout)
         out = format_exec(res, self._max_chars)
-        if res.exit_code != 0 or res.timed_out:   # 非零退出/超时 → 标记失败
-            raise ToolError(out)
-        return out
+        if res.exit_code != 0 or res.timed_out:   # 非零退出/超时 → 标记失败（失败也带镜像 meta）
+            raise ToolError(out, meta=meta)
+        return ToolOutput(text=out, meta=meta) if meta else out

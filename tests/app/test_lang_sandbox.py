@@ -154,6 +154,16 @@ async def test_unknown_language_falls_back_to_shell(_conv, _stub):
     assert box.label == "shell" and box.image == "debian:12-slim"
 
 
+async def test_container_tool_result_carries_image_meta(_conv, _stub):
+    """run_python 的结果 meta 带上用的镜像名（供前端在工具日志里标注）。"""
+    proxy = SandboxProxy(SandboxManager(_cfg()))
+    reg = ToolRegistry(); reg.register(RunPythonTool(proxy, timeout=5))
+    r = await ToolExecutor(reg).execute(ToolCall(
+        id="c1", name="run_python", arguments={"code": "print(1)"}))
+    assert r.is_error is False
+    assert r.meta and r.meta.get("image") == "python:3.12-slim"
+
+
 async def test_run_java_tool_end_to_end_via_proxy(_conv, _stub):
     proxy = SandboxProxy(SandboxManager(_cfg()))
     reg = ToolRegistry(); reg.register(RunJavaTool(proxy, timeout=5))

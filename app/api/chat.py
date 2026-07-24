@@ -757,6 +757,9 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         if st is not None:
                             st["result"] = ev.result.content
                             st["is_error"] = ev.result.is_error
+                            _img = (ev.result.meta or {}).get("image")   # 容器工具用的镜像名（前端展示）
+                            if _img:
+                                st["image"] = _img
                             _t0 = tool_t0.pop(ev.result.tool_call_id, None)
                             _dur = round((time.time() - _t0) * 1000) if _t0 else -1
                             log.info("工具完成 %s 耗时%dms error=%s 输出%d字",

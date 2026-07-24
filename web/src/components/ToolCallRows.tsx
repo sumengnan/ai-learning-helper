@@ -1,4 +1,4 @@
-import { Accordion, AccordionSummary, AccordionDetails, Typography, CircularProgress } from "@mui/material";
+import { Accordion, AccordionSummary, AccordionDetails, Typography, CircularProgress, Box } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
@@ -8,7 +8,7 @@ import { ToolLabel } from "./ToolLabel";
 export type ToolRow = {
   // warn 见 ProgressBlock 里同名字段的注释（交付提醒借同一条 progress 列传输）
   text: string; status?: "running" | "ok" | "error" | "warn" | null; key?: string | null;
-  detail?: { tool?: string; args?: unknown; result?: string; is_error?: boolean; elapsed_ms?: number } | null;
+  detail?: { tool?: string; args?: unknown; result?: string; is_error?: boolean; elapsed_ms?: number; image?: string } | null;
 };
 
 // 同 key 的开始/完成折叠成一行（后到覆盖），保留末态（带 result 的完成行）
@@ -47,6 +47,14 @@ export function ToolCallRows({ rows, live }: { rows: ToolRow[]; live: boolean })
             <Typography variant="caption" component="div">
               <ToolLabel name={p.detail?.tool || p.text} />
             </Typography>
+            {p.detail?.image && (
+              <Box component="span" title={`执行容器镜像：${p.detail.image}`}
+                sx={{ ml: 0.5, px: 0.6, py: 0.1, borderRadius: 0.75, fontSize: 10.5,
+                      fontFamily: "monospace", color: "text.secondary",
+                      bgcolor: "action.hover", whiteSpace: "nowrap" }}>
+                {p.detail.image}
+              </Box>
+            )}
           </AccordionSummary>
           <AccordionDetails sx={{ px: 0, pt: 0 }}>
             <ToolCallDetail args={p.detail?.args} result={p.detail?.result} isError={p.detail?.is_error} />
