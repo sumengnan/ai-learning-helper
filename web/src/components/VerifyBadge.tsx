@@ -85,8 +85,9 @@ const SectionLabel = ({ text }: { text: string }) => (
 //
 // 两套彼此独立的校验机制共用本徽章，主行文案必须区分二者——否则用户关掉聊天页「结果校验」开关后，
 // 仅由每步校验触发的徽章仍写「校验通过」，等于谎称结果被校验过：
-// - 结果校验：交付门（scope=verify，受聊天页开关 + 服务端 enable_answer_gate 双重控制）与轨迹
-//   质量分（quality，由 trajectory judge 产出，同属结果层）→「结果校验通过/未通过」
+// - 结果校验：编排器终局 Critic.review（scope=verify，受聊天页「结果校验」开关控制）与轨迹
+//   质量分（quality，由 trajectory judge 产出，同属结果层）→「结果校验通过/未通过」。
+//   另有交付提醒（scope=notice）也在结果层，但它只提示、不参与主行的通过/未通过判定。
 // - 步骤校验：工具执行的实时标记（scope=check，由服务端 enable_step_check 控制、默认开，
 //   聊天页无开关）→「步骤校验通过/未通过」
 //

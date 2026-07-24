@@ -78,9 +78,11 @@ log = logging.getLogger("app.chat")
 # 交付门缓冲后补发终稿时，把文本切成小片以保留打字机效果
 _DELIVER_CHUNK = 40
 
-# 「本轮开了校验门」信号的固定 key（前端 VerifyBadge.tsx 有同名常量，改这里必须同时改那里）。
+# 「本轮开了结果校验」信号的固定 key（前端 VerifyBadge.tsx 有同名常量，改这里必须同时改那里）。
 # 借 scope=verify 通道下发，但它不是校验进展，前端不得把它渲染成校验徽章。详见发出处的注释。
-GATE_OPEN_KEY = "verify:gate-open"
+# 字面值保留 verify:gate-open：历史消息的 progress 列里存的就是这个串（gate 已无对应物，
+# 但改字面值会让老消息里这条信号被当成一条真校验事件、徽章永远转圈）。
+VERIFY_OPEN_KEY = "verify:gate-open"
 
 
 def _chunks(text: str, size: int = _DELIVER_CHUNK):
@@ -859,9 +861,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     parts.append(ev.text)
                     if len(parts) % 25 == 0:   # 去抖 flush：仅为服务重启后能看到断点前部分
                         store.flush_partial(req.conversation_id, turn_run_id, "".join(parts))
-                # 编排器校验未过、重答前会发 scope=reset 让前端清屏（考试轮）：落库缓冲必须
-                # 跟着清，否则最终存的是「被否那版 + 新版」的拼接，与用户屏幕所见不一致。
-                # 交付门那条路径由调用方自己 clear（见下方 gate 分支），此处只管编排器发的。
+                # 编排器校验未过、重答前会发 scope=reset 让前端清屏（考试轮/1步回退）：落库
+                # 缓冲必须跟着清，否则最终存的是「被否那版 + 新版」的拼接，与用户屏幕所见不一致。
                 elif isinstance(ev, Progress) and ev.scope == "reset":
                     parts.clear()
                     store.flush_partial(req.conversation_id, turn_run_id, "")
@@ -924,7 +925,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                     # （registry，含用户级工具）、最近对话注入 run()——否则多轮对话/附件/考试/引用/
                     # 个性化/用户工具全丢。context 只喂给编排器的简单直答（与 ReAct 主路径同源，故也
                     # 同样包一层技能上下文）；registry 喂给简单直答与各执行子步。
-                    # 下方 ReAct/交付门两分支仅在 orchestrator 缺失时作惰性兜底（如精简测试注入 None）。
+                    # 下方 else（ReAct 直通）分支仅在 orchestrator 缺失时作惰性兜底（如精简测试注入 None）。
                     used_orchestrator = True
                     collect = {"final": None, "error": None, "steps": steps,
                                "grounding": [], "progress": progress, "usage": None,
@@ -964,17 +965,15 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                             in_stateful_exam=in_stateful_exam,
                             purge_side_effects=_purge_step_fx,
                             run_id=run_id_a))   # 事件归到 conversation_runs 登记的 run_id，统计才认
-                    # 告诉在途客户端「本轮开了校验门」。必须赶在编排器跑之前发：执行子步的
+                    # 告诉在途客户端「本轮开了结果校验」。必须赶在编排器跑之前发：执行子步的
                     # save_download 远早于编排器那条「结果校验中…」（后者要等所有步骤跑完），
                     # 不先发这条，前端就会在校验还没开始时把生成的文件显示出来。
-                    # 这条信号原先只在下方 ReAct+交付门分支里发，而编排器已是唯一主流程，
-                    # 于是整套「交付前盖住文件」的机制形同虚设——前端遮挡条件本身是对的。
                     # 仅 req.verify 时发：关校验的轮次编排器一条 verify 事件都不发，前端
                     # 见不到信号即照常显示，不会出现「永远不显示」。
                     # 刻意不落库（不走 _emit_verify）：刷新后由已存的终态记录决定展示即可；
                     # 落库反而会在用户中途停止时留下一条永远转圈的「生成中…」。
                     if req.verify:
-                        yield Progress("verify", "生成中…", status="running", key=GATE_OPEN_KEY)
+                        yield Progress("verify", "生成中…", status="running", key=VERIFY_OPEN_KEY)
                     async for s in _drain(_orch_src, run_id_a, model_message, True, collect):
                         yield _acc(s)
                     errored = collect["final"] is None
@@ -1081,8 +1080,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 _usage = collect.get("usage") or {}
                 _elapsed = round((time.time() - turn_start) * 1000)
                 # 编排器的终局校验结论（结构化）：Progress 里只有给人看的中文，统计侧解不出
-                # 「过没过 / 重答几次 / 拦在哪层」。放在落库前提取，不依赖上游分支的执行顺序。
-                # 交付门分支若已自行填过 verify_trace，则不覆盖（那条路有更细的逐层记录）。
+                # 「过没过 / 重答几次」。放在落库前从编排器发的 VERIFY_TRACE_KEY 事件里提取。
                 if verify_trace is None:
                     for _p in progress or []:
                         if _p.get("key") == VERIFY_TRACE_KEY and _p.get("detail"):
