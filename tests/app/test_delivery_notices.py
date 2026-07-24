@@ -137,3 +137,56 @@ def test_notices_are_recorded_for_stats():
     _, msgs = _chat(_client(checker))
     vt = msgs[-1].get("verify")
     assert vt and vt.get("notices") == ["facts"]
+
+
+def test_message_marked_done_before_slow_delivery_checks():
+    """回归「刷新后耗时从1重计」：交付检查慢时，消息也必须在检查前就翻成 done。
+
+    模拟场景——交付检查里跑代码卡了很久。旧行为：这期间消息一直 streaming，用户刷新
+    → 前端把它当在途 run 接回、耗时归零重计。修法：答案交付即 mark_delivered 翻 done，
+    故检查跑到一半刷新，DB 里已是 done + 冻结耗时。
+    """
+    import time as _t
+
+    seen_status_at_check = {}
+
+    class _SlowChecker:
+        def __init__(self, store, cid):
+            self._store = store
+            self._cid = cid
+
+        async def run(self, answer, grounding, registry):
+            # 检查执行的这一刻，去库里看消息 status——必须已经是 done（不是 streaming）
+            rows = self._store._conn.execute(
+                "SELECT status FROM conversation_messages "
+                "WHERE role='assistant' ORDER BY seq DESC LIMIT 1").fetchone()
+            seen_status_at_check["status"] = rows[0] if rows else None
+            return []
+
+    # 需要拿到 create_app 内部用的 store，故显式注入
+    from app.assembly import Harness
+    from harness.persistence.checkpoint import CheckpointStore
+    from harness.persistence.trajectory import TrajectoryStore, TrajectorySink
+    traj = TrajectoryStore(":memory:")
+    harness = Harness(client=_Model(), registry=ToolRegistry(),
+                      checkpoint_store=CheckpointStore(":memory:"),
+                      trajectory_store=traj, sink=TrajectorySink(traj), system_prompt="s")
+    store = ConversationStore(":memory:")
+    checker = _SlowChecker(store, None)
+    cfg = AppConfig(api_key="k", app_db_path=":memory:", _env_file=None)
+    app = create_app(config=cfg, harness=harness, store=store,
+                     doc_store=DocumentStore(":memory:"), delivery_checker=checker)
+    client = TestClient(app)
+    r = client.post("/api/auth/register",
+                    json={"username": "u", "full_name": "测试", "password": "pw1234"})
+    h = {"Authorization": f"Bearer {r.json()['token']}"}
+    cid = client.post("/api/conversations", json={}, headers=h).json()["id"]
+    with client.stream("POST", "/api/chat",
+                       json={"conversation_id": cid, "message": "问", "verify": True},
+                       headers=h) as resp:
+        for _ in resp.iter_lines():
+            pass
+    # 交付检查执行时，消息已是 done —— 这就是「刷新不再重计」的保证
+    assert seen_status_at_check.get("status") == "done"
+    last = client.get(f"/api/conversations/{cid}/messages", headers=h).json()[-1]
+    assert last["status"] == "done" and last["elapsed_ms"] is not None

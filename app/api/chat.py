@@ -846,6 +846,17 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             delivered = None
             delivered_sources: list[dict] = []   # 交付那次尝试的权威来源
             errored = False
+            # 答案交付时刻的墙钟耗时（毫秒）。在此冻结、并即刻把消息翻成终态（mark_delivered），
+            # 使其后的旁路后处理（轨迹 judge/交付检查/清单收尾）期间刷新不会把消息误当在途
+            # 重新计时。末尾 finish_turn 复用它，故落库耗时=答案交付耗时，不被后处理拉长。
+            deliver_ms: int | None = None
+
+            def _mark_delivered() -> None:
+                nonlocal deliver_ms
+                if deliver_ms is None:
+                    deliver_ms = round((time.time() - turn_start) * 1000)
+                store.mark_delivered(req.conversation_id, turn_run_id, delivered or "",
+                                     "error" if errored else "done", deliver_ms)
             used_orchestrator = False    # 本轮是否走编排器路径（其计划终态自洽，不需清单收尾 shim）
             # 交付门结构化判定轨迹（门未开则保持 None，不落库）：progress 列只存渲染用中文，
             # 统计「哪层失败率高/平均重答几次」要的是这里未拍扁的 failed[]/hard_failed[]。
@@ -988,6 +999,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         delivered = f"[出错] {empty_text}"
                         yield RunError(error=empty_text)
                     delivered_sources = source_sink.snapshot()
+                    # 先翻终态、冻结耗时，再跑轨迹 judge/交付检查等旁路——见 _mark_delivered
+                    _mark_delivered()
                     # 回答质量分（轨迹 judge）：编排器已有自己的终局 Critic 把关，这里仅额外打一次
                     # 分层质量分，落 progress 列供「AI 运行统计 · 回答质量」展示，不据此驱动重答。
                     # 仅多步任务（工具步 > 1）才评：单步/无工具无「拆分/多步」可评，跳过省 token
@@ -1037,6 +1050,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                         delivered = f"[出错] {empty_text}"
                         yield RunError(error=empty_text)
                     delivered_sources = source_sink.snapshot()
+                    _mark_delivered()   # 同编排器分支：先翻终态冻结耗时，再跑交付检查等旁路
                 # 交付后的机械检查（完整性/检索依据/代码可运行/引用链接）。放在两条路径的
                 # 汇合处，理由同下方清单收尾：挂在任一分支里另一条就会漏。
                 #
@@ -1078,7 +1092,11 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
                 status = "error" if errored else "done"
                 final_content = delivered or "".join(parts) or "（本轮未完成）"
                 _usage = collect.get("usage") or {}
-                _elapsed = round((time.time() - turn_start) * 1000)
+                # 复用交付时刻冻结的耗时：落库耗时 = 答案交付耗时，不含其后旁路后处理
+                # （轨迹 judge/交付检查/清单收尾）的时间。deliver_ms 为空（未走到交付点，
+                # 如极早异常）才回退到此刻。
+                _elapsed = deliver_ms if deliver_ms is not None else round(
+                    (time.time() - turn_start) * 1000)
                 # 编排器的终局校验结论（结构化）：Progress 里只有给人看的中文，统计侧解不出
                 # 「过没过 / 重答几次」。放在落库前从编排器发的 VERIFY_TRACE_KEY 事件里提取。
                 if verify_trace is None:

@@ -162,6 +162,24 @@ class ConversationStore:
              conv_id, run_id))
         self._conn.commit()
 
+    def mark_delivered(self, conv_id: str, run_id: str, content: str,
+                       status: str, elapsed_ms: int | None) -> None:
+        """答案对用户可见后，立刻把占位从 streaming 翻成终态并冻结耗时——**先于**交付检查/
+        轨迹 judge/清单收尾这些旁路后处理。
+
+        为什么必须早翻：这些后处理跑在答案已交付之后、finish_turn 之前，其间消息若仍是
+        streaming，用户一刷新，前端会把它当在途 run 重新接回、`startedAt` 归零重新计时
+        （耗时「从 1 开始」的真凶）。尤其交付检查会在沙箱里实跑答案里的代码，慢/卡时这个
+        窗口很长甚至永不结束。翻成 done 后刷新走「已完成」路径，显示冻结耗时，不再重计。
+
+        只更 content/status/elapsed_ms 三样、且仅当仍是 streaming（幂等）：steps/progress/
+        sources/verify 仍交末尾的 finish_turn 补全（那时 notices/quality 才齐）。"""
+        self._conn.execute(
+            "UPDATE conversation_messages SET content=?, status=?, elapsed_ms=? "
+            "WHERE conv_id=? AND run_id=? AND role='assistant' AND status='streaming'",
+            (content, status, elapsed_ms, conv_id, run_id))
+        self._conn.commit()
+
     def flush_partial(self, conv_id: str, run_id: str, content: str) -> None:
         """生成中把已累积的部分文本写进 streaming 占位（不改 status/steps）——仅为服务重启后
         还能看到断点前的部分兜底；客户端刷新的主路径靠内存总线，不依赖它。"""

@@ -144,3 +144,44 @@ def test_append_steps_persist_for_ui_and_replay_to_llm():
     assert llm[1].tool_calls[0].name == "calculator"
     assert llm[2].content == "2"
     assert llm[3].content == "是 2"
+
+
+def test_mark_delivered_flips_streaming_to_done_with_elapsed():
+    """答案交付即翻终态：占位从 streaming → done，并冻结耗时。
+
+    刷新的重连只对 status=='streaming' 触发；不早翻，交付检查/轨迹 judge 期间刷新会把
+    已完成的回复误当在途、耗时从 0 重新计（用户报的「每次刷新耗时从1开始」）。
+    """
+    s = ConversationStore(":memory:")
+    cid = s.create("u", "t")
+    s.start_turn(cid, Message(role=Role.USER, content="问"), "r1")
+    s.mark_delivered(cid, "r1", "答案正文", "done", 5300)
+    m = s.ui_messages(cid)[-1]
+    assert m["status"] == "done" and m["content"] == "答案正文" and m["elapsed_ms"] == 5300
+
+
+def test_mark_delivered_is_idempotent_only_touches_streaming():
+    """只翻 streaming 那条；已 done 的不再动（幂等，防末尾 finish_turn 之后又被回退）。"""
+    s = ConversationStore(":memory:")
+    cid = s.create("u", "t")
+    s.start_turn(cid, Message(role=Role.USER, content="问"), "r1")
+    s.finish_turn(cid, "r1", "最终", status="done", elapsed_ms=5300,
+                  steps=[{"tool": "x", "args": {}, "result": "ok"}])
+    # 二次 mark_delivered（模拟迟到调用）不得覆盖已定稿的内容/耗时
+    s.mark_delivered(cid, "r1", "半截", "done", 1)
+    m = s.ui_messages(cid)[-1]
+    assert m["content"] == "最终" and m["elapsed_ms"] == 5300 and m["steps"] is not None
+
+
+def test_finish_turn_after_mark_delivered_fills_the_rest():
+    """交付后 finish_turn 补齐 steps/progress/verify，且耗时保持交付时冻结的值。"""
+    s = ConversationStore(":memory:")
+    cid = s.create("u", "t")
+    s.start_turn(cid, Message(role=Role.USER, content="问"), "r1")
+    s.mark_delivered(cid, "r1", "答案", "done", 5300)
+    s.finish_turn(cid, "r1", "答案", status="done", elapsed_ms=5300,
+                  steps=[{"tool": "run_python", "args": {}, "result": "ok"}],
+                  verify={"notices": ["code"]})
+    m = s.ui_messages(cid)[-1]
+    assert m["status"] == "done" and m["elapsed_ms"] == 5300
+    assert m["steps"] and m["verify"] == {"notices": ["code"]}
