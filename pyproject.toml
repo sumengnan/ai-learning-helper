@@ -1,32 +1,20 @@
 [project]
-name = "harness"
+name = "ai-learning-helper"
 version = "0.1.0"
-description = "最小 Agent 运行时内核"
+description = "AI 学习助手：基于 ai-harness-framework 内核构建的学习/练习/知识管理应用"
 requires-python = ">=3.11"
 dependencies = [
-    "openai>=1.40",
-    "pydantic>=2.7",
-    "pydantic-settings>=2.3",
-    "pyyaml>=6.0",
-    "opentelemetry-api>=1.25",
-    "opentelemetry-sdk>=1.25",
-    "tiktoken>=0.7",
-    "sqlite-vec>=0.1.6",
-    "docker[ssh]>=7.0",
-    "httpx>=0.27",
-    "trafilatura>=1.9",
+    # Agent 运行时内核：模型接入 / 工具循环 / 预算 / 可观测 / 持久化 / 记忆 / 编排 / 沙箱。
+    # 已抽成独立可发布包（https://github.com/sumengnan/ai-harness-framework），import 名仍是 harness。
+    # [all] 拉齐全部 extras（docker/sqlite-vec/mcp/tree-sitter/tiktoken/trafilatura 等），
+    # 覆盖本应用用到的每一路能力——完整消费者本就该装全，见框架 pyproject 注释。
+    "ai-harness-framework[all]>=0.0.1",
+    # ↓ app 层独有依赖（不属于内核）：Web 服务 + 文档解析 + 表单/文件上传
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "pypdf>=4.2",
     "python-docx>=1.1",
     "python-multipart>=0.0.9",
-    "mcp>=1.12.4,<2.0",
-    "semantic-text-splitter>=0.32.0",
-    "tree-sitter-python>=0.25.0",
-    "tree-sitter-javascript>=0.25.0",
-    "tree-sitter-typescript>=0.23.2",
-    "tree-sitter-java>=0.23.5",
-    "tree-sitter-go>=0.25.0",
 ]
 
 [dependency-groups]
@@ -37,7 +25,9 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-pythonpath = ["src", "."]
+# harness 现在是已安装的外部包（ai-harness-framework），不再走 src/ 源码路径；
+# 只保留 "." 让 app/ 等顶层包可导入。
+pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "--import-mode=importlib"
 
@@ -46,4 +36,5 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/harness"]
+# 本仓库现在是应用，不再分发 harness 内核；打包目标为 app/。
+packages = ["app"]

@@ -64,16 +64,23 @@ def test_every_table_name_is_a_real_tool():
     """表里的名字必须是真实存在的工具类名，防止写错字或留下已删工具的死条目。
 
     从源码里扫 `name = "..."` 收集全部工具名——比起真去装配一个 harness（要 api_key、
-    要建库），这样既快又不依赖环境。
+    要建库），这样既快又不依赖环境。app 侧工具在本仓库 app/tools，内核工具在已安装的
+    ai-harness-framework 包里（按 harness.__file__ 定位，不写死路径）。
     """
     import pathlib
     import re
 
+    import harness
+
     root = pathlib.Path(__file__).resolve().parents[2]
+    harness_root = pathlib.Path(harness.__file__).resolve().parent
+    dirs = [root / "app" / "tools",
+            harness_root / "tools",
+            harness_root / "skills",
+            harness_root / "orchestration"]
     declared: set[str] = set()
-    for d in ("app/tools", "src/harness/tools", "src/harness/skills",
-              "src/harness/orchestration"):
-        for f in (root / d).rglob("*.py"):
+    for d in dirs:
+        for f in d.rglob("*.py"):
             declared |= set(re.findall(r'^\s{4}name = "([^"]+)"', f.read_text(encoding="utf-8"),
                                        re.M))
     missing = _table_names() - declared

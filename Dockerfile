@@ -53,8 +53,7 @@ RUN LD="$(echo /app/.venv/lib/python3.*/site-packages/babel/locale-data)" \
  && find "$LD" -name '*.dat' ! -name 'root.dat' ! -name 'en*.dat' ! -name 'zh*.dat' -delete \
  && echo "babel locale-data 瘦身后：$(du -sh "$LD" | cut -f1)"
 
-# 源码与运行期需要的目录
-COPY src ./src
+# 源码与运行期需要的目录（harness 内核已作为 ai-harness-framework 装进 .venv，不再随源码拷入）
 COPY app ./app
 COPY skills ./skills
 COPY agents ./agents
@@ -64,7 +63,7 @@ COPY --from=web /web/dist ./web/dist
 
 ENV PATH="/app/.venv/bin:$PATH" \
     TZ=Asia/Shanghai \
-    PYTHONPATH="/app/src:/app" \
+    PYTHONPATH="/app" \
     PYTHONUNBUFFERED=1 \
     HARNESS_APP_HOST=0.0.0.0 \
     HARNESS_APP_PORT=8000 \

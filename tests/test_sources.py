@@ -343,17 +343,19 @@ def test_no_hit_sentinel_is_single_source_of_truth():
 
 
 def test_sentinel_not_rehardcoded_in_production_code():
-    """生产代码里不得再出现该字面量（测试与 evals 数据集里是黑盒断言，不在此列）。"""
+    """app 生产代码里不得再出现该字面量。
+
+    其规范定义在 harness 内核的 tools/builtins/memory_search.py（现已抽成外部包
+    ai-harness-framework），app 侧应经导入常量引用、绝不重抄字面量。
+    测试与 evals 数据集里是黑盒断言，不在此列。"""
     import pathlib
     root = pathlib.Path(__file__).resolve().parents[1]
     literal = "（未在知识库中检索到相关内容）"
     offenders = []
-    for d in ("app", "src"):
-        for f in (root / d).rglob("*.py"):
-            if literal in f.read_text(encoding="utf-8"):
-                offenders.append(str(f.relative_to(root)))
-    assert offenders == ["src/harness/tools/builtins/memory_search.py"], \
-        f"字面量被重抄到：{offenders}"
+    for f in (root / "app").rglob("*.py"):
+        if literal in f.read_text(encoding="utf-8"):
+            offenders.append(str(f.relative_to(root)))
+    assert offenders == [], f"字面量被重抄到 app 生产代码：{offenders}"
 
 # —— 成品文件的角标剥离：跳过代码块 ——
 
