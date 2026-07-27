@@ -1,3 +1,8 @@
+> ⚠️ **历史设计记录（已过时）**：harness 内核已抽成外部包
+> [ai-harness-framework](https://github.com/sumengnan/ai-harness-framework)（import 名仍是 `harness`）。
+> 本文是带日期的设计存档，文中的 `src/harness/` 路径与打包配置反映**当时**的仓库结构、未随抽包更新；
+> 当前结构以 [架构文档](../../architecture-harness.md) 为准。
+
 # 多层结果正确性校验 + 前端校验状态展示 设计
 
 > 面向 AI 代理的工作者：实现时用 superpowers:writing-plans 生成分步计划，逐步实现。

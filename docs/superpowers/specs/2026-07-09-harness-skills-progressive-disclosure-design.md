@@ -1,3 +1,8 @@
+> ⚠️ **历史设计记录（已过时）**：harness 内核已抽成外部包
+> [ai-harness-framework](https://github.com/sumengnan/ai-harness-framework)（import 名仍是 `harness`）。
+> 本文是带日期的设计存档，文中的 `src/harness/` 路径与打包配置反映**当时**的仓库结构、未随抽包更新；
+> 当前结构以 [架构文档](../../architecture-harness.md) 为准。
+
 # Skill 渐进式披露（SkillRegistry） — 设计规格
 
 > 状态：已实现（提交 `bedc144`，全量 308 passed / 3 skipped）
