@@ -1,7 +1,8 @@
 # app —— FastAPI 应用层
 
-把 `src/harness`（作为库导入，零改动）装配成一个学习助手产品：网页多轮对话、实时看到 agent
-干活、上传资料建知识库、出题考试、生成可下载的产物。`web/` 是配套的 React SPA。
+把 `harness` 内核（独立包 [ai-harness-framework](https://github.com/sumengnan/ai-harness-framework)，
+作为依赖导入、零改动）装配成一个学习助手产品：网页多轮对话、实时看到 agent 干活、上传资料建
+知识库、出题考试、生成可下载的产物。`web/` 是配套的 React SPA。
 
 架构总览见 [`../docs/architecture-app.md`](../docs/architecture-app.md)；本文按**功能域**讲
 每块怎么跑、怎么验收、有什么已知限制。
@@ -218,7 +219,7 @@ POST /api/pending-actions/{id}/reject
 
 ### 2. 危险命令人工审核
 
-`run_shell` 执行前用正则策略（`src/harness/shell/policy.py`）分类命令，命中即
+`run_shell` 执行前用正则策略（`harness/shell/policy.py`）分类命令，命中即
 `request_approval` 挂起、发 `ApprovalRequired` 事件给前端弹窗，用户经
 `POST /api/chat/{run_id}/decision` 表态。
 

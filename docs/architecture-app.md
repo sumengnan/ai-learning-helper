@@ -8,8 +8,10 @@
 > 每个说法都用文件路径 / 类名锚定，方便直接跳过去读代码。
 >
 > **依赖方向是单向的**：`app` 可以随意用 `harness`，但 `harness` 不得反向 import `app`
-> ——只有 `src/harness` 会被打包发布，`app/` 不在其中。新工具该放哪一侧、这条线如何用
-> 测试钉死，见 [harness 内核](architecture-harness.md#分层harness-是库app-是它的消费者)。
+> ——内核已抽成独立可发布包 [ai-harness-framework](https://github.com/sumengnan/ai-harness-framework)
+> （import 名仍是 `harness`），本仓库经依赖引入、`app/` 建于其上。新工具该放哪一侧、这条边界
+> 现在如何由「内核是独立仓库/包」天然保证，见
+> [harness 内核](architecture-harness.md#分层harness-是库app-是它的消费者)。
 
 ## 分层总览
 
@@ -23,7 +25,7 @@ flowchart TD
       SVC --> DB[("SQLite<br/>app.db 业务数据<br/>memory.db 向量<br/>harness.db 轨迹/检查点")]
       ORCH --> SVC
     end
-    ORCH -->|驱动| H["harness 内核 src/harness/<br/>AgentLoop · 工具 · 记忆 · 沙箱 · MCP"]
+    ORCH -->|驱动| H["harness 内核 (ai-harness-framework 包)<br/>AgentLoop · 工具 · 记忆 · 沙箱 · MCP"]
     H -->|调用| EXT["外部<br/>LLM API · Embedding API · 沙箱容器 · 网页 · MCP server"]
 ```
 
@@ -178,7 +180,7 @@ flowchart TD
 **引用前置产出必须连依赖**（`_NEEDS_DEPS_RE`）。校验错误串会被拼进下一次提示驱动 Planner
 重试（上限 `orchestrator_planner_max_retries`）。
 
-**技能是「主动挂载」的，不等模型自觉加载。** `SkillMatcher`（`src/harness/skills/matcher.py`）
+**技能是「主动挂载」的，不等模型自觉加载。** `SkillMatcher`（`harness/skills/matcher.py`）
 按触发词确定性匹配用户消息，命中的技能剧本被注入两处：Planner（当拆解蓝本）和简单直答
 （当参考前缀），同时发一条 `Progress(scope="skill")` 让前端显示。命中技能的轮次**不做重规划**
 ——剧本本身就规定了拆法，重新拆解等于把它推翻，用户会看到步骤中途凭空变样；单步做砸仍由
@@ -289,12 +291,12 @@ sequenceDiagram
 
 命令是 agent 要**当场执行**的，所以必须在工具执行内部阻塞等待。
 
-- `src/harness/shell/policy.py::classify_command()` 用一份精选黑名单正则判定
+- `harness/shell/policy.py::classify_command()` 用一份精选黑名单正则判定
   （`rm`、`mkfs`、`dd of=/dev/`、fork 炸弹、`curl | sh`、`sudo`、`>/etc/` 等），
   命中返回 `Danger(pattern, reason)`。它的 docstring 说得很清楚：这是**面向人工的启发式
   绊线，不是安全边界**——真正的边界是容器隔离（cap_drop=ALL、network=none、非 root、
   tmpfs 工作区、用后销毁）。判定刻意偏向多弹窗。
-- `src/harness/approval.py::request_approval()` 先 `emit(ApprovalRequired)`（经
+- `harness/approval.py::request_approval()` 先 `emit(ApprovalRequired)`（经
   `harness/progress.py` 的 emitter 并入 SSE），再 `await` 一个模块级全局 registry 里的
   `asyncio.Future`。用全局而非 contextvar，是因为决策来自**另一个 HTTP 请求**
   （`POST /api/chat/{run_id}/decision` → `harness.approval.resolve`），contextvar 桥不过去。

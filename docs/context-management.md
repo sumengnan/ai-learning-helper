@@ -54,7 +54,7 @@
 
 ## Token 预算(`ContextBudget`)
 
-各层的额度由 token 预算切分(`src/harness/context/budget.py`):
+各层的额度由 token 预算切分(`harness/context/budget.py`):
 
 ```
 available      = min(context_window − response_reserve, max_prompt_tokens) − system_tokens
@@ -76,7 +76,7 @@ working_tokens = available × working_ratio        # L1「最近原文」的额�
 
 ## L1:滑动窗口(`WindowStrategy`)
 
-`src/harness/context/windowing.py`。按 token 预算保留最近的完整轮次,**切割只落在干净的
+`harness/context/windowing.py`。按 token 预算保留最近的完整轮次,**切割只落在干净的
 user 边界**——绝不从一轮中间切开,否则会留下孤儿 `tool` 结果或被截断的 `tool_calls`,
 OpenAI 端会报 400。
 
@@ -143,12 +143,12 @@ OpenAI 端会报 400。
 - `ContextAssembler` 在 `make_chat_router` 里只建一次、被所有并发请求共用,因此它**不持任何
   轮级状态**;每轮的 trace 通过传入的 dict 就地回填,避免串轮。
 
-harness 内核自带的 `ContextManager`(`src/harness/context/manager.py`)是最简版(system + 全量历史);
+harness 内核自带的 `ContextManager`(`harness/context/manager.py`)是最简版(system + 全量历史);
 应用层用鸭子类型的 `ConversationContextManager` / `LayeredContextManager` 扩展它,**内核零改动**。
 
 ## 补充:按更小的模型再收一道(`ClampedContextManager`)
 
-`src/harness/context/clamp.py`。上面的预算是按**主模型**算的,但有两处的输入会交给
+`harness/context/clamp.py`。上面的预算是按**主模型**算的,但有两处的输入会交给
 窗口更小的模型,需要再确定性地硬裁一次:
 
 - **编排器的简单直答**走快速模型,用 `context_max_prompt_tokens_fast` 重裁;
@@ -187,10 +187,10 @@ L3 检索还受记忆侧配置影响:`HARNESS_MEMORY_WRITE_EXTRACT`(是否提炼
 | --- | --- |
 | `app/context_assembly.py` | `ContextAssembler`:按策略异步组装、降级、写 trace |
 | `app/context.py` | `ConversationContextManager` / `LayeredContextManager`:同步拼装 |
-| `src/harness/context/budget.py` | `ContextBudget`:token 预算切分 |
-| `src/harness/context/windowing.py` | `WindowStrategy`:L1 滑动窗口 |
-| `src/harness/context/clamp.py` | `ClampedContextManager`:按更小模型口径确定性硬裁 |
-| `src/harness/context/manager.py` | harness 内核自带的最简 `ContextManager` |
+| `harness/context/budget.py` | `ContextBudget`:token 预算切分 |
+| `harness/context/windowing.py` | `WindowStrategy`:L1 滑动窗口 |
+| `harness/context/clamp.py` | `ClampedContextManager`:按更小模型口径确定性硬裁 |
+| `harness/context/manager.py` | harness 内核自带的最简 `ContextManager` |
 | `app/summarizer.py` / `app/summaries.py` | L2 滚动摘要与存储 |
 | `app/conversation_memory.py` | L3 会话语义检索/写入 |
 | `app/api/chat.py` | 装配 summarizer / conv_memory,触发后台记忆写入 |
