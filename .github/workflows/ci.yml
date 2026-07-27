@@ -18,8 +18,8 @@ jobs:
       # 且任何漏网的真实调用会直接 401 而不是烧钱。CI 不配 secret 是零成本的结构性保证。
       HARNESS_API_KEY: ""
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: 安装依赖（按 uv.lock 复现）
@@ -35,8 +35,8 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
