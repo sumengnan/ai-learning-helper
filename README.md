@@ -63,12 +63,13 @@ flowchart TD
     APP --> ROUTES["API 路由 + 领域服务<br/>聊天 / 知识库 / 题库 / 概览 …"]
     ROUTES --> ORCH["Plan-Execute-Reflect 编排器<br/>(app/orchestration/)"]
     ROUTES --> DB[("SQLite<br/>app.db 业务数据<br/>memory.db 向量库<br/>harness.db 运行轨迹")]
-    ORCH -->|每步一个独立 AgentLoop| CORE["harness 核心 (src/harness/)<br/>AgentLoop：模型 ↔ 工具 循环"]
+    ORCH -->|每步一个独立 AgentLoop| CORE["harness 内核 (ai-harness-framework 包)<br/>AgentLoop：模型 ↔ 工具 循环"]
     CORE -->|调用| EXT["外部<br/>LLM API · Embedding · 沙箱容器 · 网页 · MCP"]
 ```
 
-- **harness 核心**(`src/harness/`):最小 Agent 运行时,只负责"模型 ↔ 工具"的循环、记忆、
-  持久化、可观测。详见 [架构:harness 核心](docs/architecture-harness.md)。
+- **harness 内核**(独立包 [ai-harness-framework](https://github.com/sumengnan/ai-harness-framework),
+  import 名仍是 `harness`):最小 Agent 运行时,只负责"模型 ↔ 工具"的循环、记忆、持久化、可观测。
+  已从本仓库抽出、作为依赖引入。详见 [架构:harness 核心](docs/architecture-harness.md)。
 - **app 应用层**(`app/`):FastAPI 把内核包装成学习助手产品——鉴权、会话、知识库、题库、回答把关等。
   详见 [架构:app 层](docs/architecture-app.md)。
 
@@ -161,7 +162,7 @@ npm run dev        # http://localhost:5173，/api 已代理到后端 8000
 全部配置见 [`.env.example`](.env.example)。除 `AUTH_SECRET` 外一律 `HARNESS_` 前缀,
 dict / list 值写 JSON。生产务必设置随机 `AUTH_SECRET` 与真实 `HARNESS_API_KEY`。
 
-常用项与默认值(定义在 [`app/config.py`](app/config.py) 与 [`src/harness/config.py`](src/harness/config.py)):
+常用项与默认值(定义在 [`app/config.py`](app/config.py) 与 ai-harness-framework 包内的 `harness/config.py`):
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -229,7 +230,8 @@ app/                 FastAPI 应用层（见 app/README.md）
   api/               HTTP 路由（chat / documents / questions / pending-actions / stats …）
   orchestration/     Plan-Execute-Reflect 编排器（planner / executor / critic / plan）
   tools/             应用级工具（题库、考试、知识库写入、下载、每步校验包装）
-src/harness/         最小 Agent 运行时内核（循环、工具、记忆、沙箱、持久化、MCP…）
+# harness 内核不在本仓库：作为依赖包 ai-harness-framework 装入（import 名仍是 harness，
+# 循环、工具、记忆、沙箱、持久化、MCP… 均在其中）；见 pyproject.toml 依赖
 web/                 React 前端（Vite），npm run build 产出 web/dist 由后端同源托管
 skills/              技能目录            agents/   子 agent 花名册（YAML）
 mcp/                 MCP server 清单     docker/   容器化与浏览器子沙箱镜像

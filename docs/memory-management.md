@@ -42,7 +42,7 @@
 | **情景记忆**(episodic) | "发生过的事" | 上次帮用户整理了一份线性代数笔记 |
 | **程序记忆**(procedural) | "学会的做法" | 出这类题时先检索知识库再生成 |
 
-分型定义在 `MemType`(`src/harness/memory/record.py`)。有一点值得注意:
+分型定义在 `MemType`(`harness/memory/record.py`)。有一点值得注意:
 
 > **只有"智能写入"这条路径才会产出 episodic / procedural。**
 > `Memory.add_texts` 把 `mem_type` 写死为 `SEMANTIC`——也就是说 `remember` 写的、
@@ -158,7 +158,7 @@ AI 判断某件事值得长期记住时,调用 `remember`,文本经切块 + 向�
 
 ## 常用配置
 
-均为 `HARNESS_` 前缀环境变量(定义见 `src/harness/config.py` 与 `app/config.py`,
+均为 `HARNESS_` 前缀环境变量(定义见 `harness/config.py` 与 `app/config.py`,
 示例见 [`.env.example`](../.env.example)):
 
 | 环境变量 | 默认 | 说明 |
@@ -188,16 +188,16 @@ AI 判断某件事值得长期记住时,调用 `remember`,文本经切块 + 向�
 
 | 文件 | 职责 |
 | --- | --- |
-| `src/harness/memory/record.py` | `MemType` 三分类、`MemoryRecord` / `MemoryFilter` 数据结构 |
-| `src/harness/memory/memory.py` | `Memory` 门面(切块+向量化+检索统一入口)、`collection_to_scope` |
-| `src/harness/memory/writer.py` | 智能写入:提炼 → 找候选 → 调和 → 应用 |
-| `src/harness/memory/retriever.py` | 语义检索:多路召回 → RRF → 加权 → MMR → 重排 |
-| `src/harness/memory/maintainer.py` | 记忆维护:整合(蒸馏)+ 过期清理 |
-| `src/harness/memory/episodic.py` | `EpisodicMemory` / `EpisodeRecorder` 任务经验门面 |
-| `src/harness/memory/sqlite_backend.py` | SQLite + sqlite-vec / FTS5 存储后端 |
-| `src/harness/tools/builtins/memory_search.py` | `search_knowledge` / `search_memory` 工具 |
-| `src/harness/tools/builtins/memory_write.py` | `remember` 工具 |
-| `src/harness/tools/builtins/episode_tools.py` | `recall_episodes`(已注册)/ `RecordEpisodeTool`(未注册) |
+| `harness/memory/record.py` | `MemType` 三分类、`MemoryRecord` / `MemoryFilter` 数据结构 |
+| `harness/memory/memory.py` | `Memory` 门面(切块+向量化+检索统一入口)、`collection_to_scope` |
+| `harness/memory/writer.py` | 智能写入:提炼 → 找候选 → 调和 → 应用 |
+| `harness/memory/retriever.py` | 语义检索:多路召回 → RRF → 加权 → MMR → 重排 |
+| `harness/memory/maintainer.py` | 记忆维护:整合(蒸馏)+ 过期清理 |
+| `harness/memory/episodic.py` | `EpisodicMemory` / `EpisodeRecorder` 任务经验门面 |
+| `harness/memory/sqlite_backend.py` | SQLite + sqlite-vec / FTS5 存储后端 |
+| `harness/tools/builtins/memory_search.py` | `search_knowledge` / `search_memory` 工具 |
+| `harness/tools/builtins/memory_write.py` | `remember` 工具 |
+| `harness/tools/builtins/episode_tools.py` | `recall_episodes`(已注册)/ `RecordEpisodeTool`(未注册) |
 | `app/assembly.py` | 记忆设施装配:backend / retriever / writer / maintainer |
 | `app/api/chat.py` | 按用户覆盖记忆工具的 scope;后台记忆写入与整合的触发 |
 | `app/conversation_memory.py` | 对话记忆(L3)的写入与召回 |

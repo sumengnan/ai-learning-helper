@@ -1,9 +1,12 @@
 # 架构：harness 内核
 
-> 面向想读懂代码结构的人。`harness`（`src/harness/`）是本项目自研的**最小 Agent 运行时内核**，
-> 不依赖任何 Agent 框架。它只负责一件事：**驱动「模型 ↔ 工具」的循环**，并把整个过程以事件流
-> 的形式吐出来。上层的 `app/`（见 [app 层架构](architecture-app.md)）把它包装成一个学习助手
-> Web 服务。
+> 面向想读懂代码结构的人。`harness` 是本项目自研的**最小 Agent 运行时内核**，不依赖任何
+> Agent 框架。它只负责一件事：**驱动「模型 ↔ 工具」的循环**，并把整个过程以事件流的形式吐出来。
+>
+> 内核已抽成独立可发布包 **[ai-harness-framework](https://github.com/sumengnan/ai-harness-framework)**
+> （PyPI 同名，import 名仍是 `harness`）。本仓库经依赖引入、不再内联其源码；下文出现的
+> `harness/xxx.py` 均指**该包内**的模块路径（安装后位于 `site-packages/harness/`）。上层的
+> `app/`（见 [app 层架构](architecture-app.md)）把它装配成一个学习助手 Web 服务。
 >
 > 这份文档讲的是**模块怎么切、数据怎么流、边界划在哪**，不是 API 手册。
 
@@ -11,7 +14,7 @@
 
 大模型本身只会「输入文字 → 输出文字」。要让它**动手做事**，需要一个循环：模型说「我要调用某
 工具」，程序执行它，把结果回喂给模型，如此往复直到它不再要求调工具。这个循环就是
-`src/harness/loop/agent_loop.py::AgentLoop`。
+`harness/loop/agent_loop.py::AgentLoop`。
 
 ## 核心：AgentLoop
 
@@ -61,7 +64,7 @@ flowchart TD
 
 ## 一切皆事件
 
-`AgentLoop.run()` 不返回结果，而是**异步产出一串事件**（`src/harness/events.py`）。这是内核与
+`AgentLoop.run()` 不返回结果，而是**异步产出一串事件**（`harness/events.py`）。这是内核与
 上层解耦的关键：上层只消费事件，不关心循环内部。
 
 | 事件 | 关键字段 |
@@ -94,7 +97,7 @@ flowchart TD
 - `detail` —— `{tool, args, result, is_error}`，供前端展开。
 
 问题在于：工具的 `run()` 只能返回字符串，**没法 yield 事件**。所以有了
-`src/harness/progress.py`——用 contextvar 存一个 emitter，工具内部调 `emit(event)` 就能把进度
+`harness/progress.py`——用 contextvar 存一个 emitter，工具内部调 `emit(event)` 就能把进度
 插进主事件流。`set_current_agent()` 期间，`scope=="sandbox"` 且未打标的事件会被**自动补上
 当前 agent 名**。**未设 emitter 时 `emit()` 是 no-op**——纯 harness / CLI 场景照常可用。
 
@@ -122,7 +125,7 @@ flowchart TD
 
 ## 工具：统一契约
 
-`src/harness/tools/base.py` 三个类，加起来 83 行：
+`harness/tools/base.py` 三个类，加起来 83 行：
 
 ```
 Tool（ABC）           name / description / Params(BaseModel) / async run(params) -> str | ToolOutput
@@ -138,7 +141,7 @@ ToolExecutor         execute(call) -> ToolResult
 （前缀「工具执行出错: 」）。例外是 `ToolError`——工具**主动**标记本次失败时，内容原样回传，
 不加前缀，便于工具自己控制对模型说什么。
 
-内置工具（`src/harness/tools/builtins/`）：
+内置工具（`harness/tools/builtins/`）：
 
 | 文件 | 工具名 |
 | --- | --- |
@@ -165,7 +168,7 @@ AgentLoop
             └─ 任意 OpenAI 兼容端点（OpenAI / 千问 Qwen / DeepSeek / 自建 vLLM …）
 ```
 
-`src/harness/llm/base.py` 的 `ModelClient` 是个 `Protocol`，**只有一个方法**：
+`harness/llm/base.py` 的 `ModelClient` 是个 `Protocol`，**只有一个方法**：
 `async stream(messages, tools) -> AsyncIterator[StreamChunk]`。`StreamChunk.type` 取
 `"text" | "reasoning" | "tool_call" | "done"`，usage 与 attempts 只在 done chunk 上携带。
 因为是 Protocol，`RetryingModelClient` 装在外面 loop 完全无感知。
@@ -203,7 +206,7 @@ budget 时全树只设一次墙钟基准），`add_usage()` / `check()`，超限
 
 ## 上下文：内核最重要的扩展点
 
-`src/harness/context/manager.py` 的 `ContextManager` 只有 18 行，`build(state)` 就一行：
+`harness/context/manager.py` 的 `ContextManager` 只有 18 行，`build(state)` 就一行：
 `[system 消息, *state.messages]`。docstring 写明了意图——「build() 是纯函数，未来的裁剪/压缩/
 RAG 注入都在这里加，loop 无感知」。
 
@@ -400,13 +403,10 @@ status="error"))` 落库，即便正文谎称已删除，用户也能在同一�
 ## 内核与应用的边界
 
 **内核不知道任何应用概念。** 没有「知识库」「题库」「用户」「会话」，只有消息、工具、事件、
-记忆记录。这不是口号，可以验证：
-
-```
-grep -rE "^\s*(from|import)\s+app(\.|\s|$)" src/harness/   →  零命中
-```
-
-依赖方向严格单向：`app/config.py` 里 `AppConfig(HarnessConfig)`，反过来没有。
+记忆记录。这不是口号，而是**物理隔离**：内核已是独立仓库/包（ai-harness-framework），源码里
+根本没有 `app` 可 import——发布出去的包若真写了 `from app...`，装到任何消费者环境里都会直接
+`ModuleNotFoundError`。依赖方向因此天然单向：`app/config.py` 里 `AppConfig(HarnessConfig)`，
+反过来不可能存在。
 
 应用扩展内核只有两条通道：
 
@@ -437,8 +437,8 @@ grep -rE "^\s*(from|import)\s+app(\.|\s|$)" src/harness/   →  零命中
 
 两处都有工具目录,判据是**这个工具离开学习助手还有没有意义**:
 
-- **`src/harness/tools/builtins/`** —— 与业务无关的通用能力:算术、抓网页、发 HTTP、
-  跑代码、读写文件、检索记忆。换个产品照样能用。
+- **`harness/tools/builtins/`**(在 ai-harness-framework 包内)—— 与业务无关的通用能力:
+  算术、抓网页、发 HTTP、跑代码、读写文件、检索记忆。换个产品照样能用。
 - **`app/tools/`** —— 学习助手的领域工具:题库、错题集、知识库、附件、下载区。
   离开这个产品就没有意义。
 
@@ -448,16 +448,18 @@ grep -rE "^\s*(from|import)\s+app(\.|\s|$)" src/harness/   →  零命中
 
 ## 分层:harness 是库,app 是它的消费者
 
-两者**不是平级模块**。`pyproject.toml` 里只有 `packages = ["src/harness"]` 会被打包
-——发布出去的产物是 `harness`(一个可分发的 Agent 运行时内核),`app/` 不在其中,
-它是建于其上的第一个应用。`skills/`、`web/`、`evals/` 同理,都属于 app 层。
+两者**不是平级模块**,而是**两个仓库**。内核已抽成独立可发布包
+[ai-harness-framework](https://github.com/sumengnan/ai-harness-framework)(PyPI 同名、import 名
+仍是 `harness`);本仓库是它的**第一个消费者**——`app/` 经依赖引入内核,`skills/`、`web/`、
+`evals/` 同理,都属于 app 层。本仓库 `pyproject.toml` 只声明对 `ai-harness-framework[all]` 的依赖,
+打包目标是 `app`。
 
 **依赖方向必须单向:`app` → `harness`,反向零依赖。**
 
-这条线由 `tests/test_architecture_layering.py` 用 AST 扫描钉死:`src/harness/**` 里
-出现任何 `import app` / `from app.x` 即测试失败。它靠人自觉是守不住的——随手写一句
-`from app.config import AppConfig` 就能把内核焊死在这个产品上,而且运行时不会有任何
-报错,只有发布时才发现打出来的包 import 不动。
+抽包之前,这条线靠仓库内一个 AST 扫描测试(`test_architecture_layering`)钉死;现在内核成了
+**独立仓库/包**,边界由物理隔离天然保证——内核源码里根本没有 `app` 可 import,真写了发布出去
+也会在消费者环境里直接 `ModuleNotFoundError`。内核自身的分层约束(内部各模块不互相越界)现由
+ai-harness-framework 仓库的测试守护。
 
 内核确实需要感知上层的东西时,走**鸭子类型或回调注入**(见下方设计原则),不要反向 import。
 
@@ -476,9 +478,11 @@ grep -rE "^\s*(from|import)\s+app(\.|\s|$)" src/harness/   →  零命中
 
 ## 代码入口
 
-- 主循环：`src/harness/loop/agent_loop.py`
-- 事件定义：`src/harness/events.py`；旁路上报：`src/harness/progress.py`
-- 工具契约：`src/harness/tools/base.py`；内置工具：`src/harness/tools/builtins/`
-- 模型客户端：`src/harness/llm/base.py`（Protocol）、`llm/openai_compat.py`（实现）
-- 上下文扩展点：`src/harness/context/manager.py`
+> 以下均为 ai-harness-framework 包内的模块路径（安装后位于 `site-packages/harness/`）。
+
+- 主循环：`harness/loop/agent_loop.py`
+- 事件定义：`harness/events.py`；旁路上报：`harness/progress.py`
+- 工具契约：`harness/tools/base.py`；内置工具：`harness/tools/builtins/`
+- 模型客户端：`harness/llm/base.py`（Protocol）、`llm/openai_compat.py`（实现）
+- 上下文扩展点：`harness/context/manager.py`
 - 上层如何装配这些：见 [app 层架构](architecture-app.md) 的 `build_harness`

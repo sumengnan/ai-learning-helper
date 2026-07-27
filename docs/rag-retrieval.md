@@ -46,7 +46,7 @@ grounding 检查也只认这个工具的命中。
    这一步必须赶在向量化之前——走到那儿钱就已经花了,而且会把一模一样的向量再灌一遍进库,
    让同一内容在检索里命中两次、白占候选池名额。
    > 只压平空白,不做其他规范化:大小写、标点的差异是真实的内容差异,不能抹掉。
-3. **切块(chunk)**:长文切成若干小块(`src/harness/memory/chunker.py`)。因为检索要精确到
+3. **切块(chunk)**:长文切成若干小块(`harness/memory/chunker.py`)。因为检索要精确到
    "相关的那一段",整篇太大既不精准也超长。切分是**结构感知**的,按文件后缀选策略:
    - `md/markdown/html` → `MarkdownSplitter`,按标题层级切,保表格/代码块/列表完整,
      **不做重叠**(避免污染结构);
@@ -64,7 +64,7 @@ grounding 检查也只认这个工具的命中。
 
 ## 阶段二:检索(把最相关的片段找出来)
 
-对应 `src/harness/memory/retriever.py` 的 `Retriever.retrieve`。这不是简单的关键词匹配,
+对应 `harness/memory/retriever.py` 的 `Retriever.retrieve`。这不是简单的关键词匹配,
 而是一条多步流水线。用"招聘"来打个比方:
 
 | 步骤 | 通俗类比 | 做了什么 |
@@ -150,7 +150,7 @@ relevance = clip(round((1 − distance) × 100), 0, 100)
 
 ## 常用配置
 
-均为 `HARNESS_` 前缀环境变量(定义见 `src/harness/config.py` 与 `app/config.py`,
+均为 `HARNESS_` 前缀环境变量(定义见 `harness/config.py` 与 `app/config.py`,
 示例见 [`.env.example`](../.env.example)):
 
 | 环境变量 | 默认 | 说明 |
@@ -197,13 +197,13 @@ relevance = clip(round((1 − distance) × 100), 0, 100)
 | --- | --- |
 | `app/knowledge.py` | 知识库入库:去重、切块、向量化、文档记录;片段检索与相关度 |
 | `app/parsing.py` | 各格式文件 → 纯文本 |
-| `src/harness/memory/chunker.py` | 结构感知切块(markdown / tree-sitter 代码 / 递归文本) |
-| `src/harness/memory/embeddings.py` | 文字 → 向量 |
-| `src/harness/memory/retriever.py` | 检索流水线:多路召回 → RRF → 加权 → MMR → 重排 → top-k |
-| `src/harness/memory/query_planner.py` | 召回增强的查询规划:多查询 / HyDE / 实体键 |
-| `src/harness/memory/reranker.py` | `NoOpReranker` / `HttpReranker`(openai / dashscope 两种风格) |
-| `src/harness/memory/sqlite_backend.py` | sqlite-vec 向量检索 + FTS5 关键词检索后端 |
-| `src/harness/tools/builtins/memory_search.py` | `search_knowledge` / `search_memory` 工具 |
+| `harness/memory/chunker.py` | 结构感知切块(markdown / tree-sitter 代码 / 递归文本) |
+| `harness/memory/embeddings.py` | 文字 → 向量 |
+| `harness/memory/retriever.py` | 检索流水线:多路召回 → RRF → 加权 → MMR → 重排 → top-k |
+| `harness/memory/query_planner.py` | 召回增强的查询规划:多查询 / HyDE / 实体键 |
+| `harness/memory/reranker.py` | `NoOpReranker` / `HttpReranker`(openai / dashscope 两种风格) |
+| `harness/memory/sqlite_backend.py` | sqlite-vec 向量检索 + FTS5 关键词检索后端 |
+| `harness/tools/builtins/memory_search.py` | `search_knowledge` / `search_memory` 工具 |
 | `app/tools/validating.py` | 空命中哨兵与每步校验包装 |
 | `app/verify.py` | grounding 校验(答案是否有资料依据) |
 | `app/assembly.py` | 检索设施装配:reranker / RetrievalConfig / Retriever / Memory |
