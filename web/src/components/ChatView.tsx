@@ -432,6 +432,10 @@ export function ChatView({ conversationId, initial, autoSend, onTitled, onStart 
     } catch (err: any) {
       // 用户点停止 → 已停止；非用户 abort（卸载/重挂载）→ null：不落终态，保留 streaming 待重连
       if (err?.name === "AbortError") outcome = userStoppedRef.current ? "stopped" : null;
+      // 流已开始（已拿到本轮 X-Run-Id）后被中间层/网络掐断：后端后台任务仍在跑，断开只取消
+      // 订阅。置 null 走下面的接回逻辑续流，而不是直接报「连接失败」——否则用户得手动刷新
+      // 才能把已生成的回复接回来（长回复常被 nginx 空闲超时掐断，正是这个症状）。
+      else if (turnRunIdRef.current) outcome = null;
       else { upd((a) => { a.content += `\n[连接失败] ${err}`; }); outcome = "error"; }
     } finally {
       setBusy(false); busyRef.current = false;

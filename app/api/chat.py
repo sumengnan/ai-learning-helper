@@ -90,6 +90,44 @@ def _chunks(text: str, size: int = _DELIVER_CHUNK):
     for i in range(0, len(text), size):
         yield text[i:i + size]
 
+
+# SSE 心跳标记：在事件流的空闲间隙插入，供上层发一行 SSE 注释保活。
+_HEARTBEAT = object()
+
+
+async def _with_heartbeat(source, interval: float):
+    """透传 source（run_manager.subscribe 的事件流），事件间隙每 interval 秒插一个
+    _HEARTBEAT 标记；interval<=0 时退化为纯透传（不发心跳）。
+
+    编排器规划/工具执行/校验这些阶段可能长时间不产出事件，连接静默会被 nginx 等中间层
+    （默认 proxy_read_timeout 60s）当成空闲连接掐断——前端读到断流报错、只有刷新才接得回。
+    故按固定间隔发心跳保活。用 asyncio.wait（超时不取消待定 future）守住那次未决的
+    __anext__，避免把正在等的下一个事件丢掉。"""
+    if interval <= 0:
+        async for ev in source:
+            yield ev
+        return
+    it = source.__aiter__()
+    pending: asyncio.Task | None = None
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.ensure_future(it.__anext__())
+            done, _ = await asyncio.wait({pending}, timeout=interval)
+            if not done:
+                yield _HEARTBEAT
+                continue
+            try:
+                ev = pending.result()
+            except StopAsyncIteration:
+                return
+            finally:
+                pending = None
+            yield ev
+    finally:
+        if pending is not None:
+            pending.cancel()
+
 EXAM_GUIDE = (
     "\n\n你具备「题库 / 错题集 / 模拟考试」能力：\n"
     "- 【正式模拟考试优先用 start_exam 开考】：从题库随机抽题(source=bank)/错题集抽题(source=wrong)，"
@@ -588,6 +626,12 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
 
     def _sse(ev) -> str:
         return f"data: {json.dumps(event_to_dict(ev), ensure_ascii=False)}\n\n"
+
+    async def _sse_stream(run_id: str):
+        """订阅一个 run 的事件流，逐条转成 SSE 文本下发；空闲间隙发心跳注释保活。"""
+        async for item in _with_heartbeat(run_manager.subscribe(run_id),
+                                          config.sse_heartbeat_seconds):
+            yield ": ping\n\n" if item is _HEARTBEAT else _sse(item)
 
     @router.post("/api/chat")
     async def chat(req: _ChatRequest, user_id: str = Depends(current_user)):
@@ -1223,11 +1267,8 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
         store.add_run(req.conversation_id, turn_run_id)
         await run_manager.start(turn_run_id, req.conversation_id, gen(turn_run_id))
 
-        async def sse_stream():
-            async for ev in run_manager.subscribe(turn_run_id):
-                yield _sse(ev)
         # X-Run-Id 让前端拿到本轮句柄（供 stop / 刷新后接回）
-        return StreamingResponse(sse_stream(), media_type="text/event-stream",
+        return StreamingResponse(_sse_stream(turn_run_id), media_type="text/event-stream",
                                  headers={"X-Run-Id": turn_run_id})
 
     @router.get("/api/chat/attach/{run_id}")
@@ -1240,10 +1281,7 @@ def make_chat_router(harness, store, config, question_store=None, wrong_store=No
             # 已结束或服务重启丢失 → 让前端改为重载消息（库里已是最终态）
             raise HTTPException(status_code=409, detail="run 已结束")
 
-        async def sse_stream():
-            async for ev in run_manager.subscribe(run_id):
-                yield _sse(ev)
-        return StreamingResponse(sse_stream(), media_type="text/event-stream")
+        return StreamingResponse(_sse_stream(run_id), media_type="text/event-stream")
 
     @router.post("/api/chat/stop/{run_id}")
     async def stop(run_id: str, user_id: str = Depends(current_user)):

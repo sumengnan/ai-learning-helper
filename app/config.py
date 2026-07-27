@@ -51,6 +51,10 @@ class AppConfig(HarnessConfig):
 
     app_host: str = "127.0.0.1"
     app_port: int = 8000
+    # SSE 心跳间隔（秒）：编排器规划/工具执行/校验阶段可能长时间不产出事件，连接静默会被
+    # nginx 等中间层（默认 proxy_read_timeout 60s）判成空闲掐断，导致前端断流报错、须刷新
+    # 才接回。事件间隙按此间隔发一行 SSE 注释保活。设为 0 关闭心跳（如无反向代理的本地开发）。
+    sse_heartbeat_seconds: float = 15.0
     auth_secret: str = "dev-insecure-secret-change-me"
     # 登录/注册是否强制图形验证码（后端校验）。默认关，便于测试直连；
     # 生产用 HARNESS_REQUIRE_CAPTCHA=true 打开。前端始终展示并回传验证码。

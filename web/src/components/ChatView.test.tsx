@@ -67,6 +67,27 @@ describe("ChatView", () => {
     expect(screen.queryByText("…")).toBeNull();       // 不再停在空的「…」
   });
 
+  it("长回复被中间层空闲超时掐断（已拿到 X-Run-Id、非用户 abort）→ 自动接回续流，不显示「连接失败」", async () => {
+    // 用户实测场景：编排器长回复期间 SSE 连接被 nginx 空闲超时掐断，reader 抛网络错误
+    // （非 AbortError）。此前直接把气泡标「[连接失败]」，用户须手动刷新才接回。现在因已拿到
+    // 本轮 X-Run-Id（后端后台任务仍在跑），应自动接回续流。
+    vi.mocked(streamChat).mockImplementationOnce(
+      async (_cid: string, _msg: string, _onEvent: (e: any) => void,
+             _sig?: AbortSignal, _att?: string[], onRunId?: (rid: string) => void) => {
+        onRunId?.("R9");                              // 响应头已到，拿到本轮句柄
+        throw new TypeError("network error");         // 随后中途断流（非 abort）
+      });
+    vi.mocked(attachChat).mockImplementationOnce(async (_rid: string, onEvent: (e: any) => void) => {
+      onEvent({ type: "TextDelta", data: { text: "断线后接回的完整答案" } });
+      onEvent({ type: "RunFinished", data: {} });
+    });
+    render(<ChatView conversationId="c1" initial={[]} autoSend="长问题" />);
+    await waitFor(() => expect(vi.mocked(attachChat)).toHaveBeenCalledWith(
+      "R9", expect.anything(), expect.anything()));
+    await waitFor(() => expect(screen.getByText("断线后接回的完整答案")).toBeTruthy());
+    expect(screen.queryByText(/连接失败/)).toBeNull();
+  });
+
   it("流被掐断且后端并无在途 run → 落可重试终态，不停在空的「…」", async () => {
     // 请求压根没到后端（无占位可捞）：此时必须收尾成失败态，而不是把气泡吊死在「…」。
     // 刻意全程不回调 onRunId（本地始终没有 run 句柄），复现"流被掐断且无在途 run"。
