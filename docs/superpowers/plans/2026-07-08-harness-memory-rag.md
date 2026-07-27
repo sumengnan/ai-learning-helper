@@ -1,3 +1,8 @@
+> ⚠️ **历史设计记录（已过时）**：harness 内核已抽成外部包
+> [ai-harness-framework](https://github.com/sumengnan/ai-harness-framework)（import 名仍是 `harness`）。
+> 本文是带日期的设计存档，文中的 `src/harness/` 路径与打包配置反映**当时**的仓库结构、未随抽包更新；
+> 当前结构以 [架构文档](../../architecture-harness.md) 为准。
+
 # AI Harness 记忆/RAG（子项目③a）实现计划
 
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
