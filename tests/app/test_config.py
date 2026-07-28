@@ -31,3 +31,15 @@ def test_system_prompt_has_reasoning_invisibility_guard():
     assert "界面" in sp                     # 说清它去了哪：只在界面展示
     assert "无法查看" in sp                 # 给出明确的答复口径
     assert "不要调用工具徒劳查找" in sp     # 拦住白调 search/recall/read_file
+
+
+def test_system_prompt_allows_creative_writing():
+    """回归：简单直答路径的学习边界只由 app_system_prompt 把关（复杂路径另有 off_topic 门，
+    且那道门本就把「写一首诗」判为学习相关）。此前措辞把「娱乐」列为拒绝项、白名单又漏了创作，
+    模型据此把「写一首诗」当娱乐婉拒——而写诗/写故事恰是正当的写作学习。边界须显式允许写作
+    创作、判断从宽，只挡「直接索取与学习无关的具体结果」。"""
+    sp = AppConfig(api_key="k", _env_file=None).app_system_prompt
+    assert "写诗" in sp and "创作" in sp     # 写作/文学创作被显式列入允许范围
+    assert "拿不准" in sp                    # 存疑默认按学习请求照做，不拒绝
+    # 「娱乐」不再作为一刀切的拒绝触发词——否则写诗又会被误判为娱乐而婉拒
+    assert "如闲聊、娱乐" not in sp
