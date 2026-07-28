@@ -54,7 +54,14 @@ export function BeianFooter({ divider = false }: { divider?: boolean }) {
             variant="caption" color="text.secondary" underline="hover"
             href={`https://beian.mps.gov.cn/#/query/webSearch?code=${code}`}
             target="_blank" rel="noreferrer"
+            sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}
           >
+            {/* 公安备案惯例：备案号前带警徽图标。图放 web/public，构建后位于站点根 /beian-gongan.png。
+                alt 留空作装饰性图标——紧邻的备案号文字已表意，避免读屏器重复播报。 */}
+            <Box
+              component="img" src="/beian-gongan.png" alt=""
+              sx={{ height: 15, width: "auto", display: "block" }}
+            />
             {police}
           </Link>
         )}

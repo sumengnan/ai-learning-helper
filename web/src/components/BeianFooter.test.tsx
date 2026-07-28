@@ -39,6 +39,21 @@ describe("BeianFooter", () => {
     expect(police?.getAttribute("href")).toContain("11010102000001");
   });
 
+  it("公安备案号前带警徽图标，ICP 那条不带", async () => {
+    mockSite({
+      icp: "京ICP备12345678号-1",
+      police_icp: "京公网安备 11010102000001号",
+      copyright: "",
+    });
+    render(<BeianFooter />);
+    const police = (await screen.findByText("京公网安备 11010102000001号")).closest("a");
+    // 公安备案惯例：备案号前带警徽图标（web/public/beian-gongan.png）
+    expect(police?.querySelector('img[src="/beian-gongan.png"]')).toBeTruthy();
+    // 工信部 ICP 那条按惯例无图标，别误加
+    const icp = screen.getByText("京ICP备12345678号-1").closest("a");
+    expect(icp?.querySelector("img")).toBeNull();
+  });
+
   it("一项都没配则整块不渲染", async () => {
     mockSite({ icp: "", police_icp: "", copyright: "" });
     const { container } = render(<BeianFooter />);
