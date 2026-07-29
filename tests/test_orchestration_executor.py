@@ -275,6 +275,17 @@ def test_search_guidance_date_wording_fits_both_contexts():
     assert "今天日期" in SEARCH_SYSTEM_GUIDANCE
 
 
+def test_search_guidance_nudges_balanced_multi_provider_use():
+    """接入多家搜索 MCP（博查+百炼）后模型会固定偏向一个；指引须引导在多个搜索工具间均衡使用。
+
+    LLM 选工具无权重档、MCP 工具描述又改不了，只能从系统提示侧弱引导——把拆出的子查询分摊到
+    不同工具、鼓励轮换。这条护栏守住这段引导别被删。
+    """
+    from app.search_guidance import SEARCH_SYSTEM_GUIDANCE
+    assert "均衡" in SEARCH_SYSTEM_GUIDANCE
+    assert "不要固定只用" in SEARCH_SYSTEM_GUIDANCE
+
+
 def test_orchestrator_simple_answer_carries_clarify_guide():
     """全编排器/编排器模式下简单直答面向用户，其系统提示应带澄清指引。"""
     from app.orchestration.orchestrator import Orchestrator

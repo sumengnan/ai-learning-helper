@@ -8,6 +8,15 @@
       "url": "https://dashscope.aliyuncs.com/api/v1/mcps/WebSearch/mcp",
       "headers": {"Authorization": "Bearer ${DASHSCOPE_API_KEY}"},
       "timeout": 30
+    },
+    {
+      "_comment": "博查 Web Search：全网实时检索。bocha_web_search 通搜（网页标题/链接/摘要/发布时间）；bocha_ai_search 语义增强，额外附天气·股票·百科等结构化模态卡。",
+      "name": "bocha",
+      "enabled": true,
+      "transport": "http",
+      "url": "https://mcp.bochaai.com/mcp",
+      "headers": {"Authorization": "Bearer ${BOCHA_API_KEY}"},
+      "timeout": 30
     }
   ]
 }
