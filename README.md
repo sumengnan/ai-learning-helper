@@ -264,4 +264,6 @@ docs/                架构与专题文档、部署说明、截图
 
 **运维**
 - [`docs/DEPLOY.md`](docs/DEPLOY.md) —— 部署:服务器准备、GitHub Secrets、版本自检等。
+- [`docs/aifix.md`](docs/aifix.md) —— aifix 自动修复:开一个 `/aifix` 开头的 issue 换一个
+  修复 PR,一次性配置、触发方式、三种结局与验收清单。
 
