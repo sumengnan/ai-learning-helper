@@ -1,0 +1,184 @@
+# 一个 `/aifix` 开头的 issue（或一条 `/aifix` 评论）→ 一个 PR。
+#
+# aifix 是测试失败驱动的自我修复循环：读 issue 写一条复现测试 → 确认它真的红了 →
+# 让模型去修 → **用全量测试判定改得对不对** → 推一条 aifix/<run_id> 分支并开 PR。
+# 判卷的是零 LLM 的确定性代码，模型碰不到 tests/ 下的任何文件。
+# 上游文档：https://github.com/sumengnan/aifix-code/tree/main/docs
+# 本仓库的配置与验收：docs/aifix.md
+#
+# ⚠️ **这个文件必须待在默认分支（本仓库是 `dev`）上**：GitHub 只从默认分支加载
+# issues / issue_comment 的 workflow。放在特性分支上是调不通的 —— 而且不报错，
+# 只是永远不触发。
+name: aifix
+
+on:
+  # 正文第一行是 /aifix 的新 issue —— 主入口，开 issue 即触发。
+  #
+  # 只认 opened，不接 edited：改自己的 issue 正文是完全静默的（没有新通知，时间线上
+  # 只有一个不起眼的标记）。接了 edited，一条半年前的 issue 被改成 /aifix 开头就能
+  # 触发，而没有任何人会知道。
+  issues:
+    types: [opened]
+  # 第一行是 /aifix 的评论 —— 用来再跑一次，以及回答 `/aifix <编号>`。
+  issue_comment:
+    types: [created]
+
+# 同一个 issue 同时只跑一个。手滑连点两次 = 两倍开销，而且两个 run 会抢同一个
+# worktree 路径。两种事件的 issue.number 都在同一个位置，一条就够。
+concurrency:
+  group: aifix-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    # 便宜的前置过滤：绝大多数 issue / 评论在这里就被挡掉，一秒 runner 都不花。
+    # 权威判定在 aifix 自己的 authorize() 里（还要挡 PR、bot、命令不在第一行、以及
+    # 全部权限判定）。两处都要，不是重复 —— 这里挡不住的由代码挡。
+    #
+    # **这里刻意不判权限**，尽管加一条 author_association 会更省 runner 分钟数。
+    # 理由：没权限的人打了 /aifix，要求是**回帖告诉他**（静默丢弃会让他以为已经在跑
+    # 了）。而 job 的 if: 拦下来的事件根本不会起 job，也就没有任何东西能发出那条回帖。
+    #
+    # 代价说清楚：任何人开一个 /aifix 开头的 issue 都会起一次 job（约 1~2 分钟 runner，
+    # 零模型调用，随即以一条权限说明收场）。本仓库是公开仓库，这是一个可被刷的面 ——
+    # 真被刷了，就把权限判据加回这个 if:，代价是那些人不再收到解释。
+    if: >
+      (github.event_name == 'issues' &&
+       startsWith(github.event.issue.body, '/aifix')) ||
+      (github.event_name == 'issue_comment' &&
+       startsWith(github.event.comment.body, '/aifix'))
+
+    runs-on: ubuntu-latest
+    # 必须显著大于 AIFIX_BUDGET_WALL_SECONDS。Actions 的超时是**杀进程**：aifix 里那个
+    # 「保证报告先落地」的分支根本执行不到，跑了一小时什么都留不下。让 aifix 自己的
+    # 墙钟闸先响（60 分钟），硬杀（90 分钟）只是兜底。
+    timeout-minutes: 90
+
+    # 显式写全。不写的话仓库默认可能是宽松的，而「我以为它是最小权限」是这类事故最
+    # 常见的开头。
+    permissions:
+      contents: write          # 推交付分支与 aifix/traces
+      issues: write            # 状态评论、reaction
+      pull-requests: write     # 开 PR
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # 要完整历史：交付分支是从 HEAD 长出来的新分支，从浅克隆推新分支在部分场景
+          # 下会被拒（shallow update not allowed）。这个仓库不大，换几秒 checkout 买掉
+          # 一整类只在生产出现的失败。
+          fetch-depth: 0
+
+      # ┌─────────────────────────────────────────────────────────────┐
+      # │ 本项目自己的测试环境。与 ci.yml 的 python job 保持同一套装法。 │
+      # │ 唯一要求：装完之后 .venv/bin/python 能跑起 pytest。            │
+      # └─────────────────────────────────────────────────────────────┘
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      # --frozen 不是可选的：不带它 uv sync 会重写 uv.lock，把工作区弄脏，而 aifix 的
+      # preflight 见到脏工作区直接拒绝启动（baseline 是从 HEAD 算的，工作区另有改动时
+      # 算出来的失败集合和你眼前看到的对不上）。
+      - name: 安装依赖（按 uv.lock 复现）
+        run: uv sync --frozen
+
+      # 装依赖有时仍会改动被跟踪的文件。真发生了就还原，别让 preflight 在后面才拒绝。
+      - name: 确认工作区干净
+        run: |
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            echo "::warning::安装步骤改动了被跟踪的文件，已还原："
+            git status --porcelain --untracked-files=no
+            git checkout -- .
+          fi
+
+      # ┌─────────────────────────────────────────────────────────────┐
+      # │ aifix 装在**独立** venv 里，不碰本项目的测试环境。             │
+      # │ 它自己依赖 langgraph / pydantic / openai —— 混进 .venv 轻则版本 │
+      # │ 冲突，重则污染跑 baseline 的那套环境，凭空多出一批红。          │
+      # └─────────────────────────────────────────────────────────────┘
+      - name: 装 aifix
+        run: |
+          python3 -m venv /tmp/aifix-venv
+          # 发行名是 aifix-code，装完命令叫 aifix。
+          # **钉住版本**：不钉的话某天 aifix 发个新版，这条流水线的行为会在没人改过
+          # 任何东西的情况下变掉 —— 而它是会花钱、会开 PR 的。
+          /tmp/aifix-venv/bin/pip install --quiet "aifix-code==0.1.2"
+          /tmp/aifix-venv/bin/aifix --help > /dev/null && echo "aifix 就绪"
+
+      - name: aifix issue handle
+        run: /tmp/aifix-venv/bin/aifix issue handle
+        env:
+          # gh CLI 与 git push 都用它
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          # ★ 与 ci.yml 同一条理由，且必须一致：显式置空，需要真实端点的测试据此整文件
+          #   skip（tests/test_integration_real.py:17）。aifix 的 baseline 就是判卷标准，
+          #   它必须和 CI 判的是同一个东西 —— 否则「本来就红的」那个集合对不上，
+          #   「这个补丁没弄坏别的」这个结论跟着失效。
+          #   附带的一层：任何漏网的真实调用会直接 401 而不是烧钱。
+          HARNESS_API_KEY: ""
+
+          # 两条模型路由都从仓库 variable 读，缺省退回 flash：
+          #   gh variable set AIFIX_FIXER__MODEL    --body deepseek-v4-pro
+          #   gh variable set AIFIX_DETECTOR__MODEL --body deepseek-v4-flash
+          #
+          # variable 名与环境变量**同名**：设什么就是什么，不用记一层映射。换模型因此
+          # 不必改这个文件 —— 而改它要合进默认分支才生效，一次换模型要走一次提交、
+          # 评审、合并，那个摩擦足以让人干脆不换。
+          #
+          # 缺省是 flash 而不是 pro：这个默认值只在「还没配就先跑一次」时生效，那种时候
+          # 要验的是链路通不通，不是修复质量 —— 拿贵的模型验管道，贵在了不产生信息的
+          # 地方。
+          AIFIX_FIXER__MODEL:       ${{ vars.AIFIX_FIXER__MODEL || 'deepseek-v4-flash' }}
+          AIFIX_FIXER__BASE_URL:    ${{ secrets.AIFIX_BASE_URL }}
+          AIFIX_FIXER__API_KEY:     ${{ secrets.AIFIX_API_KEY }}
+          AIFIX_DETECTOR__MODEL:    ${{ vars.AIFIX_DETECTOR__MODEL || 'deepseek-v4-flash' }}
+          AIFIX_DETECTOR__BASE_URL: ${{ secrets.AIFIX_BASE_URL }}
+          AIFIX_DETECTOR__API_KEY:  ${{ secrets.AIFIX_API_KEY }}
+
+          # 价格表用 variable 不用 secret：它不是机密，而放进 secret 会在日志里被遮成
+          # ***，你反而看不出它配没配对 —— 而没配价格表的后果是**美元闸永远不触发**
+          # （成本恒算成 0）。格式是 {模型名: [输入价/千token, 输出价/千token]}。
+          AIFIX_PRICE_MAP: ${{ vars.AIFIX_PRICE_MAP }}
+
+          # 额外获准触发 aifix 的登录名，逗号分隔（可选）。
+          #   gh variable set AIFIX_ALLOWED_USERS --body "alice,bob"
+          # 它是**加法**：默认已经放行仓库所有者、有写入权限的协作者、以及组织仓库的
+          # 成员。这份名单用来点名放进按 author_association 认不出来的人。
+          AIFIX_ALLOWED_USERS: ${{ vars.AIFIX_ALLOWED_USERS }}
+
+          # ★ 显式配，别靠探测：runner 上 clone 出来没有 .venv，自动探测落空会退回
+          #   aifix 自己的解释器，而本项目的测试依赖不在那里面 —— 表现是一整批
+          #   collection error 被当成待修的 bug 排进队列，真花钱，而报告最后写的是
+          #   「模型没修好」，一个成绩，其实是一次故障。
+          #   uv sync 就把 venv 建在这里。
+          AIFIX_TEST_PYTHON: ${{ github.workspace }}/.venv/bin/python
+
+          # 复现那一步的思考模式，默认关（与 aifix config 的默认一致）。
+          #   gh variable set AIFIX_REPRODUCER_THINKING --body true   # 开回去
+          #
+          # `|| 'false'` 不能省：variable 未设置时 Actions 给的是**空串**，而空串被 aifix
+          # 的 before-validator 当作「不发这个参数」= 随端点默认 = 开。那与「默认关」
+          # 正好相反 —— 一个纯粹由 YAML 语义造成的、和意图反着来的默认值。
+          AIFIX_REPRODUCER_THINKING: ${{ vars.AIFIX_REPRODUCER_THINKING || 'false' }}
+
+          # 预算三闸。语义是「越线之后不再发起新的模型调用」，不是「绝不超过这个数」
+          # —— 超支上界是一次模型调用。别设太紧：实测把上限从 $0.60 调到 $0.20 时，
+          # 某个任务 1 轮就被掐断判成「没修好」，放回去之后同一个任务修好了。
+          # 预算设太紧会把「模型不行」和「额度不够」混成同一个数字。
+          AIFIX_BUDGET_USD: ${{ vars.AIFIX_BUDGET_USD || '2.0' }}
+          AIFIX_BUDGET_WALL_SECONDS: "3600"
+
+      # 崩了才最需要它。`if: always()` 不是可选的 —— job 失败时不上传，等于恰好在最需要
+      # 诊断数据的那一次把它扔了。下载解压后 `aifix replay <run_id> --repo <目录>` 能看到
+      # 模型每一步读了什么、改了什么、为什么被守卫拦下。
+      #
+      # 版本按本仓库 9481e4d 定下的口径选：「各自第一个采用 node24 的大版本」。
+      # upload-artifact 的 v5 只是**预备**支持 node24、默认仍跑 node20，v6 才是默认
+      # node24 的那一版（v7 另加了 direct upload / ESM，我们用不到）。
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: aifix-trace-${{ github.event.issue.number }}-${{ github.run_id }}
+          path: .aifix/runs/
+          retention-days: 30
