@@ -37,7 +37,7 @@
 ## 一、一次性配置
 
 本仓库已经带好两个 workflow（`.github/workflows/aifix.yml` 与
-`aifix-connectivity.yml`），但**它们要配上凭据、并且合进默认分支 `main` 才会生效**。
+`aifix-connectivity.yml`），但**它们要配上凭据、并且合进默认分支 `dev` 才会生效**。
 
 ### 1. secrets 与 variables
 
@@ -73,13 +73,13 @@ gh variable set AIFIX_BUDGET_USD      --body 2.0
 1. **Settings → Actions → General → Workflow permissions → 勾上「Allow GitHub Actions to
    create and approve pull requests」。** 不勾的话 PR 开不出来，报的是 *not permitted to
    create and approve pull requests*。这是接入时撞上概率第一名的坑。
-2. **确认没有 ruleset / 分支保护规则匹配 `aifix/*`。** aifix 推的是一条新分支，不推 `main`，
-   所以 `main` 上的保护不影响它；但仓库级的 push restriction 会让它「修好了却推不上去」。
+2. **确认没有 ruleset / 分支保护规则匹配 `aifix/*`。** aifix 推的是一条新分支，不推 `dev`，
+   所以 `dev` 上的保护不影响它；但仓库级的 push restriction 会让它「修好了却推不上去」。
 
 ### 3. 合进默认分支
 
-⚠️ **`issues` / `issue_comment` 的 workflow 只从默认分支加载。** 本仓库的默认分支是 `main`，
-所以 `aifix.yml` 必须合进 `main` 才会开始工作 —— 放在特性分支上是**静默不触发**，不报错，
+⚠️ **`issues` / `issue_comment` 的 workflow 只从默认分支加载。** 本仓库的默认分支是 `dev`，
+所以 `aifix.yml` 必须合进 `dev` 才会开始工作 —— 放在特性分支上是**静默不触发**，不报错，
 没有任何提示。改这个文件同理，每改一次都要合一次。
 
 ### 4. 先验一次连通性
@@ -154,9 +154,9 @@ gh run watch
 ```bash
 gh pr checkout <PR 号>
 
-git diff main...HEAD -- tests/    # 1. 测试文件除了新增的复现测试，一个字节都不该变
-git log --oneline main..HEAD      # 2. 分支上真的有提交，不是空 PR
-git diff main...HEAD              # 3. 亲眼看一遍 diff —— 这是唯一那道人闸
+git diff dev...HEAD -- tests/    # 1. 测试文件除了新增的复现测试，一个字节都不该变
+git log --oneline dev..HEAD      # 2. 分支上真的有提交，不是空 PR
+git diff dev...HEAD              # 3. 亲眼看一遍 diff —— 这是唯一那道人闸
 uv run pytest -q                 # 4. 在自己机器上跑一遍全量，别只信报告
 ```
 
@@ -192,7 +192,7 @@ aifix run . --dry-run
 # 真跑：修当前红着的用例
 aifix run . --budget 1.0
 aifix run . --test 'tests/app/test_api.py::test_xxx'    # 只修其中一个
-git diff main aifix/<run_id>                              # 跑完看一眼再合
+git diff dev aifix/<run_id>                              # 跑完看一眼再合
 ```
 
 `--dry-run` 应当输出「适配器：pytest / 修复 **0 / 0**」（0/0 表示仓库现在全绿，正常）。
@@ -239,7 +239,7 @@ git diff main aifix/<run_id>                              # 跑完看一眼再�
 
 | 症状 | 多半是 |
 |---|---|
-| 开了 `/aifix` issue，**什么都没发生** | workflow 不在默认分支 `main` 上。这条永远静默，不报错 |
+| 开了 `/aifix` issue，**什么都没发生** | workflow 不在默认分支 `dev` 上。这条永远静默，不报错 |
 | PR 开不出来，日志说 *not permitted to create and approve pull requests* | Settings 里那格没勾，见[一次性配置](#2-仓库设置里的两格) |
 | 一整批 collection error，报告说「整个测试文件没能跑起来」 | `AIFIX_TEST_PYTHON` 没指对。这道闸是有意的 —— 否则模型会被派去修「这台机器上缺了点什么」，真花钱，而报告写的是「模型没修好」 |
 | preflight 拒绝启动，说工作区不干净 | 装依赖改动了被跟踪的文件，多半是 `uv.lock` |
