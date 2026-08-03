@@ -40,6 +40,12 @@ attachments/
 # eval 报告产物（每轮一份，带时间戳）。基线 evals/baselines/ 要进 git —— 它是门禁判据，
 # 分数变化必须以 diff 形式出现在 PR 里让人看见。
 evals/reports/
+
+# aifix 的运行产物（每次 /aifix 一份：事件流、报告、诊断快照）。见 docs/aifix.md。
+# 不入库有两条理由：体积（events.jsonl 单次可到几十 MB），以及它已有更好的去处 ——
+# CI 上作为 artifact 存 30 天，facts + report 另推到 aifix/traces 分支。
+.aifix/
+
 .claude
 /CLAUDE.md
 /.codegraph
