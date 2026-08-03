@@ -6,7 +6,7 @@
 # 上游文档：https://github.com/sumengnan/aifix-code/tree/main/docs
 # 本仓库的配置与验收：docs/aifix.md
 #
-# ⚠️ **这个文件必须待在默认分支（本仓库是 `main`）上**：GitHub 只从默认分支加载
+# ⚠️ **这个文件必须待在默认分支（本仓库是 `dev`）上**：GitHub 只从默认分支加载
 # issues / issue_comment 的 workflow。放在特性分支上是调不通的 —— 而且不报错，
 # 只是永远不触发。
 name: aifix
