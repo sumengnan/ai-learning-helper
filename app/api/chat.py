@@ -347,14 +347,28 @@ def _drop_purged_marks(steps: list[dict], fx: dict[str, list[str]]) -> None:
     """
     marks = [f"〔下载ID:{i}〕" for i in fx["download"]]
     marks += [f"〔知识ID:{i}〕" for i in fx["knowledge"]]
+    purged_q = set(fx.get("questions") or [])
+    q_group = re.compile(r"〔题目ID:([^〕]+)〕")
     for s in steps or []:
         r = s.get("result") or ""
         hit = [m for m in marks if m in r]
-        if not hit:
-            continue
         for m in hit:
             r = r.replace(m, "")
-        s["result"] = r.rstrip() + "\n（该版本未通过校验，此产物已作废删除）"
+        # 题目标记是逗号分组的整体（〔题目ID:id1,id2,...〕），组内任一 id 被清理
+        # 就剥掉整条标记，避免模型拿已删的 id 去调 start_exam。
+        q_hit = False
+
+        def _drop_question_group(m: re.Match) -> str:
+            nonlocal q_hit
+            ids = [x.strip() for x in m.group(1).split(",")]
+            if any(i in purged_q for i in ids):
+                q_hit = True
+                return ""
+            return m.group(0)
+
+        r = q_group.sub(_drop_question_group, r)
+        if hit or q_hit:
+            s["result"] = r.rstrip() + "\n（该版本未通过校验，此产物已作废删除）"
 
 
 def _is_retrieval_tool(name: str) -> bool:
