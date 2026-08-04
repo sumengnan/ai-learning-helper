@@ -1,0 +1,17 @@
+{"run_id": "afcdfaf8", "key": "reproduce_kind", "value": "ok"}
+{"run_id": "afcdfaf8", "key": "reproduce_tokens", "value": 87798}
+{"run_id": "afcdfaf8", "key": "test_python", "value": "/home/runner/work/ai-learning-helper/ai-learning-helper/.venv/bin/python"}
+{"run_id": "afcdfaf8", "key": "baseline_failures", "value": 1}
+{"run_id": "afcdfaf8", "key": "baseline_failure_ids", "value": ["tests/app/test_placeholder_blocklist.py::test_placeholder_block_not_recorded_with_store"]}
+{"run_id": "afcdfaf8", "key": "suspect_anchor", "value": "import", "failure": "tests/app/test_placeholder_blocklist.py::test_placeholder_block_not_recorded_with_store", "attempt": 1}
+{"run_id": "afcdfaf8", "key": "suspect_in_traceback", "value": true, "failure": "tests/app/test_placeholder_blocklist.py::test_placeholder_block_not_recorded_with_store", "attempt": 1}
+{"run_id": "afcdfaf8", "key": "suspect_file", "value": "app/url_blocklist.py", "failure": "tests/app/test_placeholder_blocklist.py::test_placeholder_block_not_recorded_with_store", "attempt": 1}
+{"run_id": "afcdfaf8", "key": "diff_lines", "value": 4, "failure": "tests/app/test_placeholder_blocklist.py::test_placeholder_block_not_recorded_with_store", "attempt": 1}
+{"run_id": "afcdfaf8", "key": "touched", "value": ["app/url_blocklist.py"], "failure": "tests/app/test_placeholder_blocklist.py::test_placeholder_block_not_recorded_with_store", "attempt": 1}
+{"run_id": "afcdfaf8", "key": "verdict", "value": "better", "failure": "tests/app/test_placeholder_blocklist.py::test_placeholder_block_not_recorded_with_store", "attempt": 1}
+{"run_id": "afcdfaf8", "key": "reviewer_suspicious", "value": "补丁改变了工具装饰器的顺序，将占位符检查从最外层移到了内部，这可能影响占位符拦截的执行时机和行为", "failure": "tests/app/test_placeholder_blocklist.py::test_placeholder_block_not_recorded_with_store", "attempt": 1}
+{"run_id": "afcdfaf8", "key": "adapter", "value": "pytest+vitest"}
+{"run_id": "afcdfaf8", "key": "branch", "value": "aifix/afcdfaf8"}
+{"run_id": "afcdfaf8", "key": "fixed", "value": 1}
+{"run_id": "afcdfaf8", "key": "spent_tokens", "value": 42525}
+{"run_id": "afcdfaf8", "key": "spent_cny", "value": 0.872971070904}
