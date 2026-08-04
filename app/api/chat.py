@@ -347,13 +347,20 @@ def _drop_purged_marks(steps: list[dict], fx: dict[str, list[str]]) -> None:
     """
     marks = [f"〔下载ID:{i}〕" for i in fx["download"]]
     marks += [f"〔知识ID:{i}〕" for i in fx["knowledge"]]
+    qids = set(fx["questions"])
     for s in steps or []:
         r = s.get("result") or ""
         hit = [m for m in marks if m in r]
-        if not hit:
+        q_hit = bool(qids and _Q_ID_RE.search(r))
+        if not hit and not q_hit:
             continue
         for m in hit:
             r = r.replace(m, "")
+        if qids:
+            def _rebuild(m):
+                remaining = [i for i in m.group(1).split(",") if i not in qids]
+                return f"〔题目ID:{','.join(remaining)}〕" if remaining else ""
+            r = _Q_ID_RE.sub(_rebuild, r)
         s["result"] = r.rstrip() + "\n（该版本未通过校验，此产物已作废删除）"
 
 
