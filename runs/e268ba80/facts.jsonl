@@ -1,0 +1,38 @@
+{"run_id": "e268ba80", "key": "reproduce_kind", "value": "ok"}
+{"run_id": "e268ba80", "key": "reproduce_tokens", "value": 19239}
+{"run_id": "e268ba80", "key": "test_python", "value": "/home/runner/work/ai-learning-helper/ai-learning-helper/.venv/bin/python"}
+{"run_id": "e268ba80", "key": "baseline_failures", "value": 1}
+{"run_id": "e268ba80", "key": "baseline_failure_ids", "value": ["tests/test_chat_api.py::test_drop_purged_marks_with_questions"]}
+{"run_id": "e268ba80", "key": "suspect_anchor", "value": "import", "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 1}
+{"run_id": "e268ba80", "key": "suspect_in_traceback", "value": false, "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 1}
+{"run_id": "e268ba80", "key": "diagnosis_parse_failed", "value": true, "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 1}
+{"run_id": "e268ba80", "key": "diff_lines", "value": 6, "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 1}
+{"run_id": "e268ba80", "key": "touched", "value": ["app/api/chat.py"], "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 1}
+{"run_id": "e268ba80", "key": "guard_hit", "value": "empty_diff", "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 1}
+{"run_id": "e268ba80", "key": "verdict", "value": "same", "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 1}
+{"run_id": "e268ba80", "key": "rollback", "value": true, "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 1}
+{"run_id": "e268ba80", "key": "suspect_anchor", "value": "import", "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 2}
+{"run_id": "e268ba80", "key": "suspect_in_traceback", "value": false, "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 2}
+{"run_id": "e268ba80", "key": "diagnosis_parse_failed", "value": true, "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 2}
+{"run_id": "e268ba80", "key": "guard_giveup", "value": "empty_diff", "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 2}
+{"run_id": "e268ba80", "key": "diff_lines", "value": 0, "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 2}
+{"run_id": "e268ba80", "key": "touched", "value": [], "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 2}
+{"run_id": "e268ba80", "key": "guard_hit", "value": "empty_diff", "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 2}
+{"run_id": "e268ba80", "key": "guard_hit", "value": "empty_diff", "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 2}
+{"run_id": "e268ba80", "key": "verdict", "value": "same", "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 2}
+{"run_id": "e268ba80", "key": "rollback", "value": true, "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 2}
+{"run_id": "e268ba80", "key": "suspect_anchor", "value": "import", "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 3}
+{"run_id": "e268ba80", "key": "suspect_in_traceback", "value": false, "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 3}
+{"run_id": "e268ba80", "key": "diagnosis_parse_failed", "value": true, "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 3}
+{"run_id": "e268ba80", "key": "guard_giveup", "value": "empty_diff", "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 3}
+{"run_id": "e268ba80", "key": "diff_lines", "value": 0, "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 3}
+{"run_id": "e268ba80", "key": "touched", "value": [], "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 3}
+{"run_id": "e268ba80", "key": "guard_hit", "value": "empty_diff", "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 3}
+{"run_id": "e268ba80", "key": "guard_hit", "value": "empty_diff", "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 3}
+{"run_id": "e268ba80", "key": "verdict", "value": "same", "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 3}
+{"run_id": "e268ba80", "key": "rollback", "value": true, "failure": "tests/test_chat_api.py::test_drop_purged_marks_with_questions", "attempt": 3}
+{"run_id": "e268ba80", "key": "adapter", "value": "pytest+vitest"}
+{"run_id": "e268ba80", "key": "branch", "value": "aifix/e268ba80"}
+{"run_id": "e268ba80", "key": "fixed", "value": 0}
+{"run_id": "e268ba80", "key": "spent_tokens", "value": 210560}
+{"run_id": "e268ba80", "key": "spent_cny", "value": 0.7558290000000001}
