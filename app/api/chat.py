@@ -347,6 +347,8 @@ def _drop_purged_marks(steps: list[dict], fx: dict[str, list[str]]) -> None:
     """
     marks = [f"〔下载ID:{i}〕" for i in fx["download"]]
     marks += [f"〔知识ID:{i}〕" for i in fx["knowledge"]]
+    if fx["questions"]:
+        marks += [f"〔题目ID:{','.join(fx['questions'])}〕"]
     for s in steps or []:
         r = s.get("result") or ""
         hit = [m for m in marks if m in r]
