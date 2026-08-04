@@ -117,7 +117,7 @@ jobs:
           # 发行名是 aifix-code，装完命令叫 aifix。
           # **钉住版本**：不钉的话某天 aifix 发个新版，这条流水线的行为会在没人改过
           # 任何东西的情况下变掉 —— 而它是会花钱、会开 PR 的。
-          /tmp/aifix-venv/bin/pip install --quiet "aifix-code==0.3.2"
+          /tmp/aifix-venv/bin/pip install --quiet "aifix-code==0.4.0"
           /tmp/aifix-venv/bin/aifix --help > /dev/null && echo "aifix 就绪"
 
       - name: aifix issue handle
@@ -144,12 +144,12 @@ jobs:
           # 缺省是 flash 而不是 pro：这个默认值只在「还没配就先跑一次」时生效，那种时候
           # 要验的是链路通不通，不是修复质量 —— 拿贵的模型验管道，贵在了不产生信息的
           # 地方。
-          AIFIX_FIXER__MODEL:       ${{ vars.AIFIX_FIXER__MODEL || 'qwen3-coder-flash' }}
+          AIFIX_FIXER__MODEL:       ${{ vars.AIFIX_FIXER__MODEL || 'deepseek-v4-pro' }}
           # 端点用 variable 不用 secret：它不是机密，而 secret 在日志里会被遮成
           # ***，配错了端点你从日志里根本看不出来 —— 与价格表同一条理由。
           AIFIX_FIXER__BASE_URL:    ${{ vars.AIFIX_BASE_URL }}
           AIFIX_FIXER__API_KEY:     ${{ secrets.AIFIX_API_KEY }}
-          AIFIX_DETECTOR__MODEL:    ${{ vars.AIFIX_DETECTOR__MODEL || 'qwen-coder-plus' }}
+          AIFIX_DETECTOR__MODEL:    ${{ vars.AIFIX_DETECTOR__MODEL || 'qwen3-coder-flash' }}
           AIFIX_DETECTOR__BASE_URL: ${{ vars.AIFIX_BASE_URL }}
           AIFIX_DETECTOR__API_KEY:  ${{ secrets.AIFIX_API_KEY }}
 
@@ -160,7 +160,7 @@ jobs:
           #
           # 必须和 fixer 是**不同的模型**。写补丁的和验补丁的是同一个脑子时，
           # 两边的盲区、被 prompt 说服的方式全都一样，那等于没验。当前分工：
-          # detector=qwen-coder-plus、fixer=qwen3-coder-flash、
+          # detector=qwen3-coder-flash、fixer=deepseek-v4-pro、
           # reviewer=qwen3-coder-plus（三个各不相同，实际取值在 gh variable 里）。
           #
           # 打开了却没配这条路由的话 aifix **拒绝启动**，不会悄悄退回 fixer ——
@@ -216,6 +216,25 @@ jobs:
           # 的 before-validator 当作「不发这个参数」= 随端点默认 = 开。那与「默认关」
           # 正好相反 —— 一个纯粹由 YAML 语义造成的、和意图反着来的默认值。
           AIFIX_REPRODUCER_THINKING: ${{ vars.AIFIX_REPRODUCER_THINKING || 'false' }}
+
+          # fixer 的思考模式（aifix 0.4.0 起）：**默认关，验证不通过之后升级成开**。
+          #
+          # 关是因为修 bug 的活大多是机械的（读代码、改几行、跑测试），而推理按
+          # 输出 token 计费 —— 实测复现那一步有一轮的输出预算被推理全部吃掉、
+          # 正文一个字没吐。第 1 轮先便宜地试一次。
+          #
+          # 第 2 轮起自动开：attempt 只在 verify 判了 not-better 之后才递增，
+          # 所以 attempt≥2 精确地就是「上一轮写出来的代码没通过验证」。守卫重试
+          # （空 diff）不递增 attempt，也就不触发升级 —— 那是「没写出代码」，
+          # 要的补救是把话说清楚，不是更强的推理。
+          #
+          # fixer 现在是 deepseek-v4-pro，harness 会把 enable_thinking 翻成
+          # DeepSeek 口径的 thinking={"type": "enabled"/"disabled"}。
+          #
+          # `|| 'false'` 不能省，理由与上面那条一样：variable 未设置时 Actions
+          # 给的是空串，而空串被当作「不发这个参数」= 随端点默认 = 可能是开。
+          AIFIX_FIXER_THINKING: ${{ vars.AIFIX_FIXER_THINKING || 'false' }}
+          AIFIX_FIXER_THINKING_AFTER_ATTEMPT: ${{ vars.AIFIX_FIXER_THINKING_AFTER_ATTEMPT || '2' }}
 
           # 预算三闸。语义是「越线之后不再发起新的模型调用」，不是「绝不超过这个数」
           # —— 超支上界是一次模型调用。别设太紧：实测把上限从 $0.60 调到 $0.20 时，
