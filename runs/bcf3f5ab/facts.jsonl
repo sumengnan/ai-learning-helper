@@ -1,0 +1,18 @@
+{"run_id": "bcf3f5ab", "key": "reproduce_kind", "value": "ok"}
+{"run_id": "bcf3f5ab", "key": "reproduce_tokens", "value": 49218}
+{"run_id": "bcf3f5ab", "key": "test_python", "value": "/home/runner/work/ai-learning-helper/ai-learning-helper/.venv/bin/python"}
+{"run_id": "bcf3f5ab", "key": "baseline_failures", "value": 1}
+{"run_id": "bcf3f5ab", "key": "baseline_failure_ids", "value": ["tests/app/test_drop_purged_marks.py::test_drop_purged_marks_strips_question_markers"]}
+{"run_id": "bcf3f5ab", "key": "suspect_anchor", "value": "import", "failure": "tests/app/test_drop_purged_marks.py::test_drop_purged_marks_strips_question_markers", "attempt": 1}
+{"run_id": "bcf3f5ab", "key": "suspect_in_traceback", "value": true, "failure": "tests/app/test_drop_purged_marks.py::test_drop_purged_marks_strips_question_markers", "attempt": 1}
+{"run_id": "bcf3f5ab", "key": "suspect_file", "value": "app/api/chat.py", "failure": "tests/app/test_drop_purged_marks.py::test_drop_purged_marks_strips_question_markers", "attempt": 1}
+{"run_id": "bcf3f5ab", "key": "diff_lines", "value": 2, "failure": "tests/app/test_drop_purged_marks.py::test_drop_purged_marks_strips_question_markers", "attempt": 1}
+{"run_id": "bcf3f5ab", "key": "touched", "value": ["app/api/chat.py"], "failure": "tests/app/test_drop_purged_marks.py::test_drop_purged_marks_strips_question_markers", "attempt": 1}
+{"run_id": "bcf3f5ab", "key": "verdict", "value": "better", "failure": "tests/app/test_drop_purged_marks.py::test_drop_purged_marks_strips_question_markers", "attempt": 1}
+{"run_id": "bcf3f5ab", "key": "hardcoded_literal", "value": ["fx['questions']"], "failure": "tests/app/test_drop_purged_marks.py::test_drop_purged_marks_strips_question_markers", "attempt": 1}
+{"run_id": "bcf3f5ab", "key": "reviewer_suspicious", "value": "补丁硬编码了将所有questions拼接成单个标记的逻辑，但测试用例中的'〔题目ID:q1,q2,q3〕'是作为一个整体出现的，而补丁假设fx['questions']是['q1','q2','q3']列表形式", "failure": "tests/app/test_drop_purged_marks.py::test_drop_purged_marks_strips_question_markers", "attempt": 1}
+{"run_id": "bcf3f5ab", "key": "adapter", "value": "pytest+vitest"}
+{"run_id": "bcf3f5ab", "key": "branch", "value": "aifix/bcf3f5ab"}
+{"run_id": "bcf3f5ab", "key": "fixed", "value": 1}
+{"run_id": "bcf3f5ab", "key": "spent_tokens", "value": 61400}
+{"run_id": "bcf3f5ab", "key": "spent_cny", "value": 1.311872049504}
