@@ -117,7 +117,7 @@ jobs:
           # 发行名是 aifix-code，装完命令叫 aifix。
           # **钉住版本**：不钉的话某天 aifix 发个新版，这条流水线的行为会在没人改过
           # 任何东西的情况下变掉 —— 而它是会花钱、会开 PR 的。
-          /tmp/aifix-venv/bin/pip install --quiet "aifix-code==0.3.0"
+          /tmp/aifix-venv/bin/pip install --quiet "aifix-code==0.3.1"
           /tmp/aifix-venv/bin/aifix --help > /dev/null && echo "aifix 就绪"
 
       - name: aifix issue handle
@@ -144,12 +144,12 @@ jobs:
           # 缺省是 flash 而不是 pro：这个默认值只在「还没配就先跑一次」时生效，那种时候
           # 要验的是链路通不通，不是修复质量 —— 拿贵的模型验管道，贵在了不产生信息的
           # 地方。
-          AIFIX_FIXER__MODEL:       ${{ vars.AIFIX_FIXER__MODEL || 'deepseek-v4-flash' }}
+          AIFIX_FIXER__MODEL:       ${{ vars.AIFIX_FIXER__MODEL || 'qwen3-coder-flash' }}
           # 端点用 variable 不用 secret：它不是机密，而 secret 在日志里会被遮成
           # ***，配错了端点你从日志里根本看不出来 —— 与价格表同一条理由。
           AIFIX_FIXER__BASE_URL:    ${{ vars.AIFIX_BASE_URL }}
           AIFIX_FIXER__API_KEY:     ${{ secrets.AIFIX_API_KEY }}
-          AIFIX_DETECTOR__MODEL:    ${{ vars.AIFIX_DETECTOR__MODEL || 'deepseek-v4-flash' }}
+          AIFIX_DETECTOR__MODEL:    ${{ vars.AIFIX_DETECTOR__MODEL || 'qwen-coder-plus' }}
           AIFIX_DETECTOR__BASE_URL: ${{ vars.AIFIX_BASE_URL }}
           AIFIX_DETECTOR__API_KEY:  ${{ secrets.AIFIX_API_KEY }}
 
@@ -159,13 +159,14 @@ jobs:
           # 但恰好让测试过了」。
           #
           # 必须和 fixer 是**不同的模型**。写补丁的和验补丁的是同一个脑子时，
-          # 两边的盲区、被 prompt 说服的方式全都一样，那等于没验。这里
-          # fixer 是 qwen-coder-plus，裁判是 qwen3-coder-flash。
+          # 两边的盲区、被 prompt 说服的方式全都一样，那等于没验。当前分工：
+          # detector=qwen-coder-plus、fixer=qwen3-coder-flash、
+          # reviewer=qwen3-coder-plus（三个各不相同，实际取值在 gh variable 里）。
           #
           # 打开了却没配这条路由的话 aifix **拒绝启动**，不会悄悄退回 fixer ——
           # 所以下面三行一条都不能少。
           AIFIX_REVIEWER_CHECK:     ${{ vars.AIFIX_REVIEWER_CHECK || 'true' }}
-          AIFIX_REVIEWER__MODEL:    ${{ vars.AIFIX_REVIEWER__MODEL || 'qwen3-coder-flash' }}
+          AIFIX_REVIEWER__MODEL:    ${{ vars.AIFIX_REVIEWER__MODEL || 'qwen3-coder-plus' }}
           AIFIX_REVIEWER__BASE_URL: ${{ vars.AIFIX_BASE_URL }}
           AIFIX_REVIEWER__API_KEY:  ${{ secrets.AIFIX_API_KEY }}
 
