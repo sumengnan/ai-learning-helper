@@ -287,5 +287,5 @@ def guard_fetch_tool(tool: Tool, store: UrlBlockStore | None) -> Tool:
     """
     if tool.name not in FETCH_TOOLS:
         return tool
-    guarded = _PlaceholderGuardedTool(tool)
-    return _BlocklistGuardedTool(guarded, store) if store is not None else guarded
+    guarded = _BlocklistGuardedTool(tool, store) if store is not None else tool
+    return _PlaceholderGuardedTool(guarded)
