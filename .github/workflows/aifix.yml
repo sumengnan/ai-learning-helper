@@ -117,7 +117,7 @@ jobs:
           # 发行名是 aifix-code，装完命令叫 aifix。
           # **钉住版本**：不钉的话某天 aifix 发个新版，这条流水线的行为会在没人改过
           # 任何东西的情况下变掉 —— 而它是会花钱、会开 PR 的。
-          /tmp/aifix-venv/bin/pip install --quiet "aifix-code==0.3.1"
+          /tmp/aifix-venv/bin/pip install --quiet "aifix-code==0.3.2"
           /tmp/aifix-venv/bin/aifix --help > /dev/null && echo "aifix 就绪"
 
       - name: aifix issue handle
