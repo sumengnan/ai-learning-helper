@@ -1,0 +1,16 @@
+{"run_id": "e92e26c7", "key": "reproduce_kind", "value": "ok"}
+{"run_id": "e92e26c7", "key": "reproduce_tokens", "value": 77021}
+{"run_id": "e92e26c7", "key": "test_python", "value": "/home/runner/work/ai-learning-helper/ai-learning-helper/.venv/bin/python"}
+{"run_id": "e92e26c7", "key": "baseline_failures", "value": 1}
+{"run_id": "e92e26c7", "key": "baseline_failure_ids", "value": ["tests/test_side_effects_aifix.py::test_drop_purged_marks_strips_question_markers"]}
+{"run_id": "e92e26c7", "key": "suspect_anchor", "value": "import", "failure": "tests/test_side_effects_aifix.py::test_drop_purged_marks_strips_question_markers", "attempt": 1}
+{"run_id": "e92e26c7", "key": "suspect_in_traceback", "value": true, "failure": "tests/test_side_effects_aifix.py::test_drop_purged_marks_strips_question_markers", "attempt": 1}
+{"run_id": "e92e26c7", "key": "suspect_file", "value": "app/api/chat.py", "failure": "tests/test_side_effects_aifix.py::test_drop_purged_marks_strips_question_markers", "attempt": 1}
+{"run_id": "e92e26c7", "key": "diff_lines", "value": 2, "failure": "tests/test_side_effects_aifix.py::test_drop_purged_marks_strips_question_markers", "attempt": 1}
+{"run_id": "e92e26c7", "key": "touched", "value": ["app/api/chat.py"], "failure": "tests/test_side_effects_aifix.py::test_drop_purged_marks_strips_question_markers", "attempt": 1}
+{"run_id": "e92e26c7", "key": "verdict", "value": "better", "failure": "tests/test_side_effects_aifix.py::test_drop_purged_marks_strips_question_markers", "attempt": 1}
+{"run_id": "e92e26c7", "key": "adapter", "value": "pytest+vitest"}
+{"run_id": "e92e26c7", "key": "branch", "value": "aifix/e92e26c7"}
+{"run_id": "e92e26c7", "key": "fixed", "value": 1}
+{"run_id": "e92e26c7", "key": "spent_tokens", "value": 19536}
+{"run_id": "e92e26c7", "key": "spent_usd", "value": 0.022373999999999998}
