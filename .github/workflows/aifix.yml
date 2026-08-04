@@ -117,7 +117,7 @@ jobs:
           # 发行名是 aifix-code，装完命令叫 aifix。
           # **钉住版本**：不钉的话某天 aifix 发个新版，这条流水线的行为会在没人改过
           # 任何东西的情况下变掉 —— 而它是会花钱、会开 PR 的。
-          /tmp/aifix-venv/bin/pip install --quiet "aifix-code==0.2.1"
+          /tmp/aifix-venv/bin/pip install --quiet "aifix-code==0.3.0"
           /tmp/aifix-venv/bin/aifix --help > /dev/null && echo "aifix 就绪"
 
       - name: aifix issue handle
@@ -153,10 +153,35 @@ jobs:
           AIFIX_DETECTOR__BASE_URL: ${{ vars.AIFIX_BASE_URL }}
           AIFIX_DETECTOR__API_KEY:  ${{ secrets.AIFIX_API_KEY }}
 
+          # 第三条路由：裁判模型（aifix 0.3.0 起）。交付前让它复审一遍补丁，
+          # **只出信号，不改判定、不挡交付** —— 判 verdict 的仍然是零 LLM 的
+          # 三态比较。它补的是前面几层抓不到的那部分：语义上「改的位置不对，
+          # 但恰好让测试过了」。
+          #
+          # 必须和 fixer 是**不同的模型**。写补丁的和验补丁的是同一个脑子时，
+          # 两边的盲区、被 prompt 说服的方式全都一样，那等于没验。这里
+          # fixer 是 qwen-coder-plus，裁判是 qwen3-coder-flash。
+          #
+          # 打开了却没配这条路由的话 aifix **拒绝启动**，不会悄悄退回 fixer ——
+          # 所以下面三行一条都不能少。
+          AIFIX_REVIEWER_CHECK:     ${{ vars.AIFIX_REVIEWER_CHECK || 'true' }}
+          AIFIX_REVIEWER__MODEL:    ${{ vars.AIFIX_REVIEWER__MODEL || 'qwen3-coder-flash' }}
+          AIFIX_REVIEWER__BASE_URL: ${{ vars.AIFIX_BASE_URL }}
+          AIFIX_REVIEWER__API_KEY:  ${{ secrets.AIFIX_API_KEY }}
+
           # 价格表用 variable 不用 secret：它不是机密，而放进 secret 会在日志里被遮成
           # ***，你反而看不出它配没配对 —— 而没配价格表的后果是**美元闸永远不触发**
           # （成本恒算成 0）。格式是 {模型名: [输入价/千token, 输出价/千token]}。
           AIFIX_PRICE_MAP: ${{ vars.AIFIX_PRICE_MAP }}
+          # 价表按哪种货币填。**显式写死**：aifix 0.3.0 起结算一律人民币，价表
+          # 仍可按美元填（这是默认），由它按 AIFIX_USD_TO_CNY（默认 7.2）折算。
+          #
+          # 写出来是因为这个假设现在是承重的：同一张表按两种货币读差 7.2 倍，
+          # 而两个数看起来都很正常。这里写 USD 是**沿用改动前的实际行为**
+          # （此前没设这一项，走的就是默认的 USD）—— 不是核对过价目表得出的
+          # 结论。表里那四个既有条目到底按哪种货币填的，只有填它的人知道；
+          # 若其实是人民币，那么它们从一开始就在被乘 7.2，与本次改动无关。
+          AIFIX_PRICE_CURRENCY: USD
 
           # 额外获准触发 aifix 的登录名，逗号分隔（可选）。
           #   gh variable set AIFIX_ALLOWED_USERS --body "alice,bob"
@@ -195,7 +220,10 @@ jobs:
           # —— 超支上界是一次模型调用。别设太紧：实测把上限从 $0.60 调到 $0.20 时，
           # 某个任务 1 轮就被掐断判成「没修好」，放回去之后同一个任务修好了。
           # 预算设太紧会把「模型不行」和「额度不够」混成同一个数字。
-          AIFIX_BUDGET_USD: ${{ vars.AIFIX_BUDGET_USD || '2.0' }}
+          # aifix 0.3.0 起上限按**人民币**。默认值 14.4 = 旧的 $2.0 × 7.2，
+          # 也就是与改名之前**等价**的额度 —— 直接把 2.0 抄过来会是一次静默的
+          # 7 倍缩水，表现是「模型最近怎么老是没修完就说预算耗尽」。
+          AIFIX_BUDGET_CNY: ${{ vars.AIFIX_BUDGET_CNY || '14.4' }}
           AIFIX_BUDGET_WALL_SECONDS: "3600"
 
       # 崩了才最需要它。`if: always()` 不是可选的 —— job 失败时不上传，等于恰好在最需要
