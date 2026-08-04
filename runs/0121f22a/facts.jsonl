@@ -1,0 +1,23 @@
+{"run_id": "0121f22a", "key": "reproduce_kind", "value": "ok"}
+{"run_id": "0121f22a", "key": "reproduce_tokens", "value": 57765}
+{"run_id": "0121f22a", "key": "test_python", "value": "/home/runner/work/ai-learning-helper/ai-learning-helper/.venv/bin/python"}
+{"run_id": "0121f22a", "key": "baseline_failures", "value": 1}
+{"run_id": "0121f22a", "key": "baseline_failure_ids", "value": ["tests/app/test_chat_purge_marks.py::test_drop_purged_marks_strips_question_ids"]}
+{"run_id": "0121f22a", "key": "suspect_anchor", "value": "import", "failure": "tests/app/test_chat_purge_marks.py::test_drop_purged_marks_strips_question_ids", "attempt": 1}
+{"run_id": "0121f22a", "key": "suspect_in_traceback", "value": true, "failure": "tests/app/test_chat_purge_marks.py::test_drop_purged_marks_strips_question_ids", "attempt": 1}
+{"run_id": "0121f22a", "key": "suspect_file", "value": "app/api/chat.py", "failure": "tests/app/test_chat_purge_marks.py::test_drop_purged_marks_strips_question_ids", "attempt": 1}
+{"run_id": "0121f22a", "key": "diff_lines", "value": 2, "failure": "tests/app/test_chat_purge_marks.py::test_drop_purged_marks_strips_question_ids", "attempt": 1}
+{"run_id": "0121f22a", "key": "touched", "value": ["app/api/chat.py"], "failure": "tests/app/test_chat_purge_marks.py::test_drop_purged_marks_strips_question_ids", "attempt": 1}
+{"run_id": "0121f22a", "key": "verdict", "value": "better", "failure": "tests/app/test_chat_purge_marks.py::test_drop_purged_marks_strips_question_ids", "attempt": 1}
+{"run_id": "0121f22a", "key": "rejected_test_fitting", "value": ["fx['questions']"], "failure": "tests/app/test_chat_purge_marks.py::test_drop_purged_marks_strips_question_ids", "attempt": 1}
+{"run_id": "0121f22a", "key": "suspect_anchor", "value": "import", "failure": "tests/app/test_chat_purge_marks.py::test_drop_purged_marks_strips_question_ids", "attempt": 2}
+{"run_id": "0121f22a", "key": "suspect_in_traceback", "value": true, "failure": "tests/app/test_chat_purge_marks.py::test_drop_purged_marks_strips_question_ids", "attempt": 2}
+{"run_id": "0121f22a", "key": "suspect_file", "value": "app/api/chat.py", "failure": "tests/app/test_chat_purge_marks.py::test_drop_purged_marks_strips_question_ids", "attempt": 2}
+{"run_id": "0121f22a", "key": "diff_lines", "value": 9, "failure": "tests/app/test_chat_purge_marks.py::test_drop_purged_marks_strips_question_ids", "attempt": 2}
+{"run_id": "0121f22a", "key": "touched", "value": ["app/api/chat.py"], "failure": "tests/app/test_chat_purge_marks.py::test_drop_purged_marks_strips_question_ids", "attempt": 2}
+{"run_id": "0121f22a", "key": "verdict", "value": "better", "failure": "tests/app/test_chat_purge_marks.py::test_drop_purged_marks_strips_question_ids", "attempt": 2}
+{"run_id": "0121f22a", "key": "adapter", "value": "pytest+vitest"}
+{"run_id": "0121f22a", "key": "branch", "value": "aifix/0121f22a"}
+{"run_id": "0121f22a", "key": "fixed", "value": 1}
+{"run_id": "0121f22a", "key": "spent_tokens", "value": 302729}
+{"run_id": "0121f22a", "key": "spent_cny", "value": 7.212364866864001}
