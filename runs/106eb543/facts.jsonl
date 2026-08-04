@@ -1,0 +1,16 @@
+{"run_id": "106eb543", "key": "reproduce_kind", "value": "ok"}
+{"run_id": "106eb543", "key": "reproduce_tokens", "value": 23368}
+{"run_id": "106eb543", "key": "test_python", "value": "/home/runner/work/ai-learning-helper/ai-learning-helper/.venv/bin/python"}
+{"run_id": "106eb543", "key": "baseline_failures", "value": 1}
+{"run_id": "106eb543", "key": "baseline_failure_ids", "value": ["tests/app/test_quiz_grade_aifix.py::test_grade_multiple_dedup_and_none_safe"]}
+{"run_id": "106eb543", "key": "suspect_anchor", "value": "import", "failure": "tests/app/test_quiz_grade_aifix.py::test_grade_multiple_dedup_and_none_safe", "attempt": 1}
+{"run_id": "106eb543", "key": "suspect_in_traceback", "value": true, "failure": "tests/app/test_quiz_grade_aifix.py::test_grade_multiple_dedup_and_none_safe", "attempt": 1}
+{"run_id": "106eb543", "key": "suspect_file", "value": "app/quiz_service.py", "failure": "tests/app/test_quiz_grade_aifix.py::test_grade_multiple_dedup_and_none_safe", "attempt": 1}
+{"run_id": "106eb543", "key": "diff_lines", "value": 7, "failure": "tests/app/test_quiz_grade_aifix.py::test_grade_multiple_dedup_and_none_safe", "attempt": 1}
+{"run_id": "106eb543", "key": "touched", "value": ["app/quiz_service.py"], "failure": "tests/app/test_quiz_grade_aifix.py::test_grade_multiple_dedup_and_none_safe", "attempt": 1}
+{"run_id": "106eb543", "key": "verdict", "value": "better", "failure": "tests/app/test_quiz_grade_aifix.py::test_grade_multiple_dedup_and_none_safe", "attempt": 1}
+{"run_id": "106eb543", "key": "adapter", "value": "pytest+vitest"}
+{"run_id": "106eb543", "key": "branch", "value": "aifix/106eb543"}
+{"run_id": "106eb543", "key": "fixed", "value": 1}
+{"run_id": "106eb543", "key": "spent_tokens", "value": 15579}
+{"run_id": "106eb543", "key": "spent_cny", "value": 0.31768963415999996}
