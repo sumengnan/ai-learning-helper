@@ -117,7 +117,7 @@ jobs:
           # 发行名是 aifix-code，装完命令叫 aifix。
           # **钉住版本**：不钉的话某天 aifix 发个新版，这条流水线的行为会在没人改过
           # 任何东西的情况下变掉 —— 而它是会花钱、会开 PR 的。
-          /tmp/aifix-venv/bin/pip install --quiet "aifix-code==0.4.1"
+          /tmp/aifix-venv/bin/pip install --quiet "aifix-code==0.4.2"
           /tmp/aifix-venv/bin/aifix --help > /dev/null && echo "aifix 就绪"
 
       - name: aifix issue handle
@@ -165,6 +165,14 @@ jobs:
           #
           # 打开了却没配这条路由的话 aifix **拒绝启动**，不会悄悄退回 fixer ——
           # 所以下面三行一条都不能少。
+          # 变形复跑：机械扰动复现测试里的字面量再跑一遍，看补丁是只对那一个
+          # 例子成立还是真修好了。带对照组，报出来的每一条都可证伪。
+          #
+          # 打开是因为这个仓库亲自撞过那个坑（#84：补丁把一串 id 拼成一整条做
+          # 全等匹配，测试绿了，换个调用顺序缺陷原样还在）。代价是最多多两次
+          # scoped 重跑。
+          AIFIX_METAMORPHIC_CHECK:  ${{ vars.AIFIX_METAMORPHIC_CHECK || 'true' }}
+
           AIFIX_REVIEWER_CHECK:     ${{ vars.AIFIX_REVIEWER_CHECK || 'true' }}
           AIFIX_REVIEWER__MODEL:    ${{ vars.AIFIX_REVIEWER__MODEL || 'qwen3-coder-plus' }}
           AIFIX_REVIEWER__BASE_URL: ${{ vars.AIFIX_BASE_URL }}
