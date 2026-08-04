@@ -117,7 +117,16 @@ jobs:
           # 发行名是 aifix-code，装完命令叫 aifix。
           # **钉住版本**：不钉的话某天 aifix 发个新版，这条流水线的行为会在没人改过
           # 任何东西的情况下变掉 —— 而它是会花钱、会开 PR 的。
-          /tmp/aifix-venv/bin/pip install --quiet "aifix-code==0.4.0"
+          #
+          # ⚠️ **临时**：暂时钉在未发布的修复分支上，验证 #89 那个坑修没修好。
+          # 上游 fix/reproduction-self-contained：复现测试的 test_code 必须自包含
+          # （#89 那轮模型指着已有测试文件写了个片段，撞名改名后名字全失效，
+          # 红检判 no_repro，48k tokens 白烧）。
+          # 钉的是 **commit SHA 不是分支名** —— 钉分支名保不住上面那条理由，
+          # 分支一动这条流水线的行为就跟着变。
+          # 验证通过后发 0.4.1，这里改回 "aifix-code==0.4.1"。
+          /tmp/aifix-venv/bin/pip install --quiet \
+            "aifix-code @ git+https://github.com/sumengnan/aifix-code@7b63ff4a4c3914ea935495fbbc36e364279e1c30"
           /tmp/aifix-venv/bin/aifix --help > /dev/null && echo "aifix 就绪"
 
       - name: aifix issue handle
