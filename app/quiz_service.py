@@ -105,7 +105,12 @@ class QuizService:
             correct = isinstance(user_answer, bool) and user_answer == question["answer"]
             return {"correct": correct, "feedback": None}
         if t == "multiple":
-            correct = sorted(user_answer or []) == sorted(question["answer"])
+            ua = user_answer
+            ca = question.get("answer")
+            if ua is None or ca is None:
+                correct = False
+            else:
+                correct = set(ua) == set(ca)
             return {"correct": correct, "feedback": None}
         if t == "short":
             with json_output():
