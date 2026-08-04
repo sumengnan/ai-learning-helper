@@ -82,6 +82,21 @@ jobs:
       - name: 安装依赖（按 uv.lock 复现）
         run: uv sync --frozen
 
+      # ┌─────────────────────────────────────────────────────────────┐
+      # │ 前端的测试环境。aifix 0.2.0 起一次 run 可以两套测试都跑，而      │
+      # │ vitest 那套要有 web/node_modules —— worktree 只含被 git 跟踪的  │
+      # │ 文件，aifix 会从**源仓库**这一份借过去（逐个子项软链）。         │
+      # │ 不装的话 baseline 会去跑一个不存在的二进制，而报错读起来像       │
+      # │ 「测试进程没能正常跑完」，指不到点子上。                         │
+      # └─────────────────────────────────────────────────────────────┘
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: 安装前端依赖（按 lock 复现）
+        run: npm ci --prefix web
+
       # 装依赖有时仍会改动被跟踪的文件。真发生了就还原，别让 preflight 在后面才拒绝。
       - name: 确认工作区干净
         run: |
@@ -102,7 +117,7 @@ jobs:
           # 发行名是 aifix-code，装完命令叫 aifix。
           # **钉住版本**：不钉的话某天 aifix 发个新版，这条流水线的行为会在没人改过
           # 任何东西的情况下变掉 —— 而它是会花钱、会开 PR 的。
-          /tmp/aifix-venv/bin/pip install --quiet "aifix-code==0.1.2"
+          /tmp/aifix-venv/bin/pip install --quiet "aifix-code==0.2.0"
           /tmp/aifix-venv/bin/aifix --help > /dev/null && echo "aifix 就绪"
 
       - name: aifix issue handle
@@ -153,6 +168,18 @@ jobs:
           #   「模型没修好」，一个成绩，其实是一次故障。
           #   uv sync 就把 venv 建在这里。
           AIFIX_TEST_PYTHON: ${{ github.workspace }}/.venv/bin/python
+
+          # 两套测试都跑：后端 pytest + 前端 vitest（前端在 web/ 下，aifix 自己探）。
+          #
+          # **顺序有意义**，不只是列个清单：复现那一步只能挑一套（一条复现测试
+          # 只能是一种语言），而 aifix 按这里的顺序挑第一个 —— 写在前面的是
+          # pytest，因为本仓库的缺陷报告绝大多数是后端的。反过来写的话，每一条
+          # 后端 issue 都会拿到一条 .ts 复现测试，而红检只会说「这条测试没红」。
+          #
+          # 不设这一项的话只跑探测到的第一个，另一套的用例**一条都不执行** ——
+          # 那不是「通过」，是不存在：baseline 看不见它们，三态判定也就永远不会
+          # 因为它们变红而判 WORSE。改后端悄悄弄坏前端，报告里看不出来。
+          AIFIX_ADAPTERS: pytest,vitest
 
           # 复现那一步的思考模式，默认关（与 aifix config 的默认一致）。
           #   gh variable set AIFIX_REPRODUCER_THINKING --body true   # 开回去
