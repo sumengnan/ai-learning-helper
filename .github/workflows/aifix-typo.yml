@@ -1,0 +1,87 @@
+# 打错 `/aifix` 时回一句。零模型调用，十几秒 runner。
+#
+# 起因是 issue #95：正文第一行写的是 `/affix`（少一个 i），aifix.yml 的 job 级
+# `if:` 判假 —— job 根本没起，1 秒 skipped、**零回帖**。开 issue 的人只看到
+# Actions 页面上一条灰色的 skipped，无从知道是自己打错了字。
+#
+# aifix.yml 里已经讲过同一条道理（它刻意不在 `if:` 里判权限，理由是「静默丢弃
+# 会让他以为已经在跑了」）。拼写打错属于同一类，只是当时漏掉了。
+#
+# ⚠️ 与 aifix.yml **严格互斥**：那边跑 `startsWith(body, '/aifix')`，这里跑它的
+# 补集。两个都回帖的话，一次正常触发会收到一条「你是不是打错了」—— 比不提示更糟。
+# 互斥关系由 `.github/scripts/aifix_typo.py` 与 tests/test_aifix_typo_guard.py
+# 一起钉住，改任何一边都要看另一边。
+#
+# ⚠️ 与 aifix.yml 同一条约束：**必须待在默认分支（`dev`）上**，GitHub 只从默认
+# 分支加载 issues / issue_comment 的 workflow。
+name: aifix typo
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+# 不跟 aifix.yml 抢并发组：那边一个 issue 只跑一个（怕两个 run 抢同一个
+# worktree），这边只是回帖，多跑一次也不咬手。共用组名反而会让一次正常的
+# aifix run 把这个轻量 job 堵在队列里。
+concurrency:
+  group: aifix-typo-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  hint:
+    # 便宜的前置过滤，精确判定在脚本里（GitHub 表达式没有正则、没有 trim，
+    # 编辑距离更不可能）。这里只负责把绝大多数事件挡在 runner 之外。
+    #
+    # 三个 `startsWith` 覆盖的是：`/xxx` 命令、` /aifix`（多打一个前导空格，
+    # 拼写全对但 aifix.yml 匹配不上）、全角空格（中文输入法下很常见）。
+    #
+    # `!startsWith(..., '/aifix')` 是**互斥的那一半**，不能省。
+    if: >
+      (github.event_name == 'issues' &&
+       !startsWith(github.event.issue.body, '/aifix') &&
+       (startsWith(github.event.issue.body, '/') ||
+        startsWith(github.event.issue.body, ' /') ||
+        startsWith(github.event.issue.body, '　/'))) ||
+      (github.event_name == 'issue_comment' &&
+       !startsWith(github.event.comment.body, '/aifix') &&
+       (startsWith(github.event.comment.body, '/') ||
+        startsWith(github.event.comment.body, ' /') ||
+        startsWith(github.event.comment.body, '　/')))
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # 只写评论。**不给 contents: write** —— 这个 job 永远不该碰代码，而最小
+    # 权限是这里唯一的防线：它跑在任何人都能触发的事件上。
+    permissions:
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 脚本只把该说的话打到 stdout，自己不调 API —— 鉴权和重试归 gh。
+      # 判据不成立时它什么都不打印，下一步据此跳过。
+      - name: 判断是不是打错了
+        id: check
+        run: |
+          set -euo pipefail
+          body="$(python3 .github/scripts/aifix_typo.py)"
+          if [ -z "$body" ]; then
+            echo "不像打错 /aifix，什么都不做"
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "hit=true" >> "$GITHUB_OUTPUT"
+          # 多行内容走文件，不走 output：GITHUB_OUTPUT 的多行语法要配对的
+          # 定界符，而正文里出现同名定界符就会把它截断。
+          printf '%s\n' "$body" > /tmp/aifix-typo-comment.md
+
+      - name: 回帖
+        if: steps.check.outputs.hit == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh issue comment "${{ github.event.issue.number }}"
+             --repo "${{ github.repository }}"
+             --body-file /tmp/aifix-typo-comment.md
