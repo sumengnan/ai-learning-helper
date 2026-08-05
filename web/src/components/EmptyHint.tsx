@@ -26,6 +26,7 @@ export const SUGGESTIONS: Suggestion[] = [
   { text: "从题库抽取 5 道 AI 题，考考我", icon: <SchoolIcon />, color: "#d97706" },
   { text: "随机生成一段 Python 代码展示，沙箱执行", icon: <TerminalIcon />, color: "#475569" },
   { text: "根据我的错题，再出 5 道相似的题考考我", icon: <AutorenewIcon />, color: "#4f46e5" },
+  { text: "生成5道ai题", icon: <LightbulbIcon />, color: "#e11d48" },
 ];
 
 // 空对话引导：新建但未聊天、或尚未选中对话时展示；点击卡片即以该问题发问
