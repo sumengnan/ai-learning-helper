@@ -1,0 +1,133 @@
+# 定时扫描：找「两处实现同一件事」的候选，跑一遍看它们到底一不一致。
+#
+# 与 aifix.yml 的分工：那条等信号（一条 issue），这条**不等信号，自己造判据**
+# —— 两处代码对同一输入给不同答案时，那是一个不需要任何人说出期望值的缺陷。
+#
+# ⚠️ **这个文件必须待在默认分支（本仓库是 `dev`）上**：GitHub 只从默认分支
+# 加载 schedule 的 workflow。放在特性分支上是调不通的 —— 而且不报错，只是
+# 永远不触发。
+name: aifix-scan
+
+on:
+  # cron **一律 UTC**，没有时区配置项。这里是周日 18:00 UTC = 北京时间周一 02:00。
+  #
+  # 三个已知限制，写出来是因为它们全都是静默的：
+  #   - 高峰期会延迟几十分钟，繁忙时**直接丢弃**这一次触发
+  #   - 仓库连续 60 天没有 push，GitHub 会停掉定时任务并发邮件
+  #   - 只从默认分支加载（见文件头）
+  schedule:
+    - cron: '0 18 * * 0'
+
+  workflow_dispatch:
+    inputs:
+      probe:
+        description: '花模型调用确认候选到底一不一致（不改任何代码）'
+        type: boolean
+        default: false
+      fix:
+        description: '⚠️ 确认不一致的进修复循环 —— 会改代码、会开 PR'
+        type: boolean
+        default: false
+      max_probes:
+        description: '最多探几个候选（每个一次模型调用）'
+        default: '5'
+
+concurrency:
+  group: aifix-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    permissions:
+      contents: write          # --fix 要推交付分支
+      issues: write            # 开一条汇总 issue
+      pull-requests: write     # --fix 要开 PR
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: 安装依赖（按 uv.lock 复现）
+        run: uv sync --frozen
+
+      - name: 装 aifix
+        run: |
+          python3 -m venv /tmp/aifix-venv
+          /tmp/aifix-venv/bin/pip install --quiet "aifix-code==0.7.0"
+          /tmp/aifix-venv/bin/aifix --help > /dev/null && echo "aifix 就绪"
+
+      # ── 第一层：纯 AST，零模型调用，几秒跑完 ───────────────────────────
+      #
+      # **定时那条默认只跑到这里。** 候选是启发式算出来的（分支在同一组字面量上
+      # + 名字有共同词根），它给的是「值得跑一遍比一比的两处」，不是「这里有
+      # bug」。定时任务无人值守，把一份没确认过的清单直接送进修复循环，等于对着
+      # 一堆猜测花钱改代码。
+      - name: 扫描（不花钱）
+        id: scan
+        run: |
+          /tmp/aifix-venv/bin/aifix scan --repo . | tee /tmp/scan.txt
+
+      # ── 第二、三层：花模型调用确认，仍不改代码 ─────────────────────────
+      - name: 确认候选（--probe）
+        if: ${{ inputs.probe || inputs.fix }}
+        env:
+          AIFIX_FIXER__MODEL:       ${{ vars.AIFIX_FIXER__MODEL || 'deepseek-v4-pro' }}
+          AIFIX_FIXER__BASE_URL:    ${{ vars.AIFIX_FIXER_BASE_URL || vars.AIFIX_BASE_URL }}
+          AIFIX_FIXER__API_KEY:     ${{ secrets.AIFIX_FIXER_API_KEY || secrets.AIFIX_API_KEY }}
+          AIFIX_DETECTOR__MODEL:    ${{ vars.AIFIX_DETECTOR__MODEL || 'qwen3-coder-flash' }}
+          AIFIX_DETECTOR__BASE_URL: ${{ vars.AIFIX_BASE_URL }}
+          AIFIX_DETECTOR__API_KEY:  ${{ secrets.AIFIX_API_KEY }}
+          AIFIX_PRICE_MAP:          ${{ vars.AIFIX_PRICE_MAP }}
+          # **无人值守时这一条不是可选的**：有人盯着时预算超了还能中断，
+          # 定时任务跑飞了只能等账单。
+          AIFIX_BUDGET_CNY:         ${{ vars.AIFIX_SCAN_BUDGET_CNY || '5' }}
+          AIFIX_TEST_PYTHON:        ${{ github.workspace }}/.venv/bin/python
+          HARNESS_API_KEY: ""
+        run: |
+          /tmp/aifix-venv/bin/aifix scan --repo . \
+            --probe ${{ inputs.fix && '--fix' || '' }} \
+            --max-probes "${{ inputs.max_probes || 5 }}" | tee /tmp/scan.txt
+
+      # ── 结果落成一条 issue ─────────────────────────────────────────────
+      #
+      # 只在**真有东西**时开：一条「本周没发现问题」的 issue 每周来一次，
+      # 两次之后人就学会无视这个标题了，而它存在的全部意义是在少数几次里被看见。
+      - name: 有候选就开一条 issue
+        if: ${{ !inputs.fix }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if grep -qE '^[1-9][0-9]* 对候选' /tmp/scan.txt; then
+            {
+              echo "定时扫描找到了「两处实现同一件事」的候选。"
+              echo
+              echo '```'
+              cat /tmp/scan.txt
+              echo '```'
+              echo
+              echo "**这些是候选，不是结论。** 判据是启发式的（分支在同一组"
+              echo "字面量上 + 名字有共同词根），配错是常态。"
+              echo
+              echo "下一步：手动触发 aifix-scan 并勾上 \`probe\`，让它给同一份"
+              echo "输入各跑一遍、比结果 —— 不一致才是缺陷。"
+            } > /tmp/body.md
+            gh issue create \
+              --title "定时扫描：$(grep -oE '^[0-9]+ 对候选' /tmp/scan.txt) 待确认" \
+              --body-file /tmp/body.md
+          else
+            echo "没有候选，不开 issue。"
+          fi
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: aifix-scan-${{ github.run_id }}
+          path: /tmp/scan.txt
+          if-no-files-found: warn
