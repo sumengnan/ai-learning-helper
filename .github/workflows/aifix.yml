@@ -147,8 +147,17 @@ jobs:
           AIFIX_FIXER__MODEL:       ${{ vars.AIFIX_FIXER__MODEL || 'deepseek-v4-pro' }}
           # 端点用 variable 不用 secret：它不是机密，而 secret 在日志里会被遮成
           # ***，配错了端点你从日志里根本看不出来 —— 与价格表同一条理由。
-          AIFIX_FIXER__BASE_URL:    ${{ vars.AIFIX_BASE_URL }}
-          AIFIX_FIXER__API_KEY:     ${{ secrets.AIFIX_API_KEY }}
+          #
+          # **fixer 可以走与 detector / reviewer 不同的服务商**：后两条是通义
+          # （百炼），fixer 用 deepseek 时端点在 DeepSeek 自己那边。三样东西必须
+          # 一起换，缺一样都是静默失效：
+          #   端点  AIFIX_FIXER_BASE_URL      不换 → 404 或模型名不认
+          #   密钥  AIFIX_FIXER_API_KEY       不换 → 401（另一家的 key 认不了）
+          #   价表  AIFIX_PRICE_MAP 里那一项  不换 → 成本闸按错的单价算，而它
+          #                                        看起来一直在正常工作
+          # 两条都缺省退回共用的那份，所以不配也能跑（就是同一家）。
+          AIFIX_FIXER__BASE_URL:    ${{ vars.AIFIX_FIXER_BASE_URL || vars.AIFIX_BASE_URL }}
+          AIFIX_FIXER__API_KEY:     ${{ secrets.AIFIX_FIXER_API_KEY || secrets.AIFIX_API_KEY }}
           AIFIX_DETECTOR__MODEL:    ${{ vars.AIFIX_DETECTOR__MODEL || 'qwen3-coder-flash' }}
           AIFIX_DETECTOR__BASE_URL: ${{ vars.AIFIX_BASE_URL }}
           AIFIX_DETECTOR__API_KEY:  ${{ secrets.AIFIX_API_KEY }}
