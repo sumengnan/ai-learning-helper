@@ -1,0 +1,16 @@
+{"run_id": "d806edfe", "key": "reproduce_kind", "value": "ok"}
+{"run_id": "d806edfe", "key": "reproduce_tokens", "value": 16150}
+{"run_id": "d806edfe", "key": "test_python", "value": "/home/runner/work/ai-learning-helper/ai-learning-helper/.venv/bin/python"}
+{"run_id": "d806edfe", "key": "baseline_failures", "value": 1}
+{"run_id": "d806edfe", "key": "baseline_failure_ids", "value": ["web/src/components/citations.test.ts::linkifyCitations > 不改写代码块和行内代码里的 [n]"]}
+{"run_id": "d806edfe", "key": "suspect_unanchored", "value": true, "failure": "web/src/components/citations.test.ts::linkifyCitations > 不改写代码块和行内代码里的 [n]", "attempt": 1}
+{"run_id": "d806edfe", "key": "suspect_in_traceback", "value": true, "failure": "web/src/components/citations.test.ts::linkifyCitations > 不改写代码块和行内代码里的 [n]", "attempt": 1}
+{"run_id": "d806edfe", "key": "suspect_file", "value": "web/src/components/citations.test.ts", "failure": "web/src/components/citations.test.ts::linkifyCitations > 不改写代码块和行内代码里的 [n]", "attempt": 1}
+{"run_id": "d806edfe", "key": "diff_lines", "value": 19, "failure": "web/src/components/citations.test.ts::linkifyCitations > 不改写代码块和行内代码里的 [n]", "attempt": 1}
+{"run_id": "d806edfe", "key": "touched", "value": ["web/src/components/citations.ts"], "failure": "web/src/components/citations.test.ts::linkifyCitations > 不改写代码块和行内代码里的 [n]", "attempt": 1}
+{"run_id": "d806edfe", "key": "verdict", "value": "better", "failure": "web/src/components/citations.test.ts::linkifyCitations > 不改写代码块和行内代码里的 [n]", "attempt": 1}
+{"run_id": "d806edfe", "key": "adapter", "value": "pytest+vitest"}
+{"run_id": "d806edfe", "key": "branch", "value": "aifix/d806edfe"}
+{"run_id": "d806edfe", "key": "fixed", "value": 1}
+{"run_id": "d806edfe", "key": "spent_tokens", "value": 30278}
+{"run_id": "d806edfe", "key": "spent_cny", "value": 0.643910643864}
