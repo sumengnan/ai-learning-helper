@@ -8,7 +8,8 @@ dependencies = [
     # 已抽成独立可发布包（https://github.com/sumengnan/ai-harness-framework），import 名仍是 harness。
     # [all] 拉齐全部 extras（docker/sqlite-vec/mcp/tree-sitter/tiktoken/trafilatura 等），
     # 覆盖本应用用到的每一路能力——完整消费者本就该装全，见框架 pyproject 注释。
-    "ai-harness-framework[all]>=0.0.1",
+    # >=0.0.5：检索精排的多查询均分（rerank_multi_query）自该版起有，见 app/assembly.py 接线。
+    "ai-harness-framework[all]>=0.0.5",
     # ↓ app 层独有依赖（不属于内核）：Web 服务 + 文档解析 + 表单/文件上传
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
