@@ -263,3 +263,19 @@ def _closure_values(fn, depth=6) -> set:
             else:
                 out.add(getattr(v, "model", None) or getattr(v, "_model", None) or "")
     return out
+
+
+def test_rerank_multi_query_flag_reaches_the_retriever():
+    """配置里的精排均分开关必须真的传到 Retriever。
+
+    RetrievalConfig 的字段是一条条手抄过去的，漏抄一个不会报错、只会静默失效——
+    开关拨了没反应，排查起来先怀疑的是模型而不是接线。
+    """
+    h = build_harness(_cfg(retrieval_rerank_multi_query=True))
+    assert h.memory._retriever._config.rerank_multi_query is True
+
+
+def test_rerank_multi_query_defaults_off():
+    """默认关：每条改写多一次精排调用，得显式开。"""
+    h = build_harness(_cfg())
+    assert h.memory._retriever._config.rerank_multi_query is False
