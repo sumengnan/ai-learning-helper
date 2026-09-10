@@ -4,9 +4,9 @@ from __future__ import annotations
 from typing import Awaitable, Callable
 
 from harness.types import Message, Role
-from harness.usage import count_message_tokens
 
 from .summaries import SummaryStore
+from .token_usage import count_message_tokens_safe
 
 # 一次性补全器：async (system_prompt, user_prompt) -> str，由 completion.build_completer 提供。
 Completer = Callable[[str, str], Awaitable[str]]
@@ -54,7 +54,8 @@ class RollingSummarizer:
         self._max_tokens = max_summary_tokens
 
     def _tokens(self, text: str) -> int:
-        return count_message_tokens([Message(role=Role.SYSTEM, content=text)], self._model)
+        return count_message_tokens_safe(
+            [Message(role=Role.SYSTEM, content=text)], self._model)
 
     async def ensure(self, conv_id: str, evicted_prefix: list[Message]) -> str | None:
         """确保摘要覆盖到 evicted_prefix。返回当前摘要（无内容时 None）。

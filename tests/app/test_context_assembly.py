@@ -79,6 +79,41 @@ async def test_window_strategy_drops_old_turns_no_summary():
     assert "轮1" not in contents and "轮3" in contents      # 丢老留新
 
 
+async def test_window_strategy_counts_special_token_text_without_rewriting_history():
+    cfg = _Cfg()
+    cfg.context_strategy = "window"
+    marker = "<|endoftext|>"
+    hist = _turn(f"用户输入 {marker}", f"助手原样保留 {marker}")
+    asm = ContextAssembler(cfg, "gpt-4o-mini")
+
+    mgr = await asm.build_manager("系统", hist, "q", "c1")
+    built = mgr.build(_state())
+
+    assert any(marker in (m.content or "") for m in built)
+
+
+async def test_window_strategy_counts_special_tokens_in_tool_arguments():
+    from harness.types import ToolCall
+
+    cfg = _Cfg()
+    cfg.context_strategy = "window"
+    hist = [
+        Message(role=Role.USER, content="调用工具"),
+        Message(role=Role.ASSISTANT, content=None, tool_calls=[
+            ToolCall(id="c1", name="run_python",
+                     arguments={"code": "print('<|endoftext|>')"})
+        ]),
+        Message(role=Role.TOOL, content="完成", tool_call_id="c1"),
+        Message(role=Role.ASSISTANT, content="结果"),
+    ]
+    asm = ContextAssembler(cfg, "gpt-4o-mini")
+
+    mgr = await asm.build_manager("系统", hist, "q", "c1")
+    built = mgr.build(_state())
+
+    assert built[2].tool_calls[0].arguments["code"] == "print('<|endoftext|>')"
+
+
 class _FakeSummarizer:
     async def ensure(self, conv_id, evicted):
         return "这是更早对话的摘要"

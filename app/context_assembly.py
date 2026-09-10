@@ -6,9 +6,9 @@ import logging
 from harness.context.budget import ContextBudget
 from harness.context.windowing import WindowStrategy
 from harness.types import Message, Role
-from harness.usage import count_message_tokens
 
 from .context import ConversationContextManager, LayeredContextManager
+from .token_usage import count_message_tokens_safe, message_for_token_count
 
 log = logging.getLogger("app.context")
 
@@ -51,10 +51,18 @@ class ContextAssembler:
             response_reserve=self._config.context_response_reserve_tokens,
             working_ratio=self._config.context_working_ratio,
             max_prompt_tokens=getattr(self._config, "context_max_prompt_tokens", 0))
-        sys_tokens = count_message_tokens(
+        sys_tokens = count_message_tokens_safe(
             [Message(role=Role.SYSTEM, content=system_prompt)], self._model)
-        window = WindowStrategy(self._model).select(
-            history, budget.working_tokens(sys_tokens))
+        # WindowStrategy counts messages internally. Feed it safe copies, then
+        # map its result back so the model still receives the original text.
+        safe_history = [message_for_token_count(message) for message in history]
+        safe_window = WindowStrategy(self._model).select(
+            safe_history, budget.working_tokens(sys_tokens))
+        originals = {id(safe): original
+                     for safe, original in zip(safe_history, history)}
+        window = type(safe_window)(
+            kept=[originals[id(message)] for message in safe_window.kept],
+            evicted=[originals[id(message)] for message in safe_window.evicted])
 
         if trace is not None:
             # evicted 是本轮「已经不在上下文里」的历史条数 —— 它同时是 L2 失败的危害度：
